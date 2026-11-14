@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.17",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.17/VAULTED-Launcher-1.0.17-Setup.exe",
-  "notes": "Downloads show an accurate estimated time remaining in minutes, calculated after the first second of transfer."
+  "version": "1.0.18",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.18/VAULTED-Launcher-1.0.18-Setup.exe",
+  "notes": "Large archives now download through up to eight parallel byte-range connections, with a single-stream fallback for hosts that do not support ranges."
 }

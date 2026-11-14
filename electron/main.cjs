@@ -288,9 +288,157 @@ function extractZip(zipPath, destination, controller, id) {
   })
 }
 
+const MAX_DOWNLOAD_CONNECTIONS = 8
+const MIN_PARALLEL_BYTES = 4 * 1024 * 1024
+const PROGRESS_INTERVAL_MS = 100
+const DOWNLOAD_HEADERS = {
+  'User-Agent': 'VAULTED-Launcher/1.1',
+  // byte ranges must refer to the archive itself, not a compressed response
+  'Accept-Encoding': 'identity',
+}
+
+class RangeUnsupportedError extends Error {}
+
+function archiveName(parsed) {
+  let name = ''
+  try {
+    name = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '')
+  } catch {
+    name = parsed.pathname.split('/').filter(Boolean).pop() || ''
+  }
+  name = name
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/^\.+/, '')
+    .trim()
+  return name ? name.slice(-180) : 'build.zip'
+}
+
+function downloadConnectionCount(total) {
+  if (total < MIN_PARALLEL_BYTES) return 1
+  return Math.min(MAX_DOWNLOAD_CONNECTIONS, Math.max(2, Math.ceil(total / (4 * 1024 * 1024))))
+}
+
+/** Ask for one byte so the host tells us both the archive size and range support. */
+async function probeRangeSupport(parsed, signal) {
+  const response = await fetch(parsed, {
+    signal,
+    redirect: 'follow',
+    headers: { ...DOWNLOAD_HEADERS, Range: 'bytes=0-0' },
+  })
+
+  if (!response.ok) throw new Error(`Download failed: HTTP ${response.status} ${response.statusText}`)
+
+  const contentRange = (response.headers.get('content-range') || '').trim()
+  const match = /^bytes\s+0-0\/(\d+)$/i.exec(contentRange)
+  const total = match ? Number(match[1]) : 0
+  const supported = response.status === 206 && total > 0
+
+  try {
+    await response.body?.cancel()
+  } catch {
+    /* the probe is disposable */
+  }
+
+  return { supported, total }
+}
+
+async function writeAt(handle, buffer, position) {
+  let offset = 0
+  while (offset < buffer.length) {
+    const { bytesWritten } = await handle.write(buffer, offset, buffer.length - offset, position + offset)
+    if (!bytesWritten) throw new Error('Could not write the download to disk.')
+    offset += bytesWritten
+  }
+}
+
+async function downloadSingleStream(parsed, partPath, signal, onTotal, onChunk) {
+  const response = await fetch(parsed, { signal, redirect: 'follow', headers: DOWNLOAD_HEADERS })
+  if (!response.ok) throw new Error(`Download failed: HTTP ${response.status} ${response.statusText}`)
+  if (!response.body) throw new Error('The server returned an empty response.')
+
+  onTotal(Number(response.headers.get('content-length') ?? 0))
+
+  const handle = await fs.promises.open(partPath, 'w')
+  try {
+    for await (const chunk of response.body) {
+      await handle.write(chunk)
+      onChunk(chunk.length)
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+async function downloadParallel(parsed, partPath, total, signal, onChunk) {
+  const connections = downloadConnectionCount(total)
+  if (connections <= 1) throw new RangeUnsupportedError('The archive is too small to split.')
+
+  const segmentSize = Math.ceil(total / connections)
+  const ranges = []
+  for (let index = 0; index < connections; index += 1) {
+    const start = index * segmentSize
+    if (start >= total) break
+    ranges.push({ start, end: Math.min(total - 1, start + segmentSize - 1) })
+  }
+
+  const handle = await fs.promises.open(partPath, 'w')
+  await handle.truncate(total)
+
+  const workers = new AbortController()
+  const abortWorkers = () => workers.abort()
+  signal.addEventListener('abort', abortWorkers, { once: true })
+
+  const tasks = ranges.map(async ({ start, end }) => {
+    const response = await fetch(parsed, {
+      signal: workers.signal,
+      redirect: 'follow',
+      headers: { ...DOWNLOAD_HEADERS, Range: `bytes=${start}-${end}` },
+    })
+
+    if (response.status !== 206) {
+      try {
+        await response.body?.cancel()
+      } catch {
+        /* ignore */
+      }
+      throw new RangeUnsupportedError('The server did not honor byte ranges.')
+    }
+    if (!response.body) throw new Error('The server returned an empty range response.')
+
+    const reader = response.body.getReader()
+    let position = start
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        await writeAt(handle, value, position)
+        position += value.length
+        onChunk(value.length)
+      }
+    } finally {
+      reader.releaseLock()
+    }
+
+    if (position !== end + 1) throw new Error('The server returned an incomplete byte range.')
+  })
+
+  try {
+    await Promise.all(tasks)
+  } catch (error) {
+    workers.abort()
+    await Promise.allSettled(tasks)
+    throw error
+  } finally {
+    signal.removeEventListener('abort', abortWorkers)
+    await handle.close()
+  }
+}
+
 /**
  * Streams an archive to disk, reports progress, unpacks .zip files and locates
- * the client executable. Used by the IPC handler and by the smoke test.
+ * the client executable. Large archives use parallel byte ranges so several
+ * connections can fill the pipe at once; hosts without range support fall back
+ * to a normal stream. Used by the IPC handler and by the smoke test.
  */
 async function downloadBuild(payload) {
   const { id, key, url } = payload ?? {}
@@ -313,67 +461,113 @@ async function downloadBuild(payload) {
   const targetExisted = fs.existsSync(targetDir)
   await fs.promises.mkdir(targetDir, { recursive: true })
 
+  const name = archiveName(parsed)
+  const filePath = path.join(targetDir, name)
+  const partPath = `${filePath}.part`
+  await fs.promises.rm(partPath, { force: true }).catch(() => {})
+
   const controller = new AbortController()
   downloads.set(id, controller)
   let lastLogged = -20
+  let lastSent = 0
+  let startedAt = Date.now()
+  let received = 0
+  let total = 0
 
-  try {
-    const response = await fetch(parsed, {
-      signal: controller.signal,
-      redirect: 'follow',
-      headers: { 'User-Agent': 'VAULTED-Launcher/1.0' },
-    })
+  const report = (force = false) => {
+    const now = Date.now()
+    if (!force && now - lastSent < PROGRESS_INTERVAL_MS) return
+    lastSent = now
 
-    if (!response.ok) throw new Error(`Download failed: HTTP ${response.status} ${response.statusText}`)
-    if (!response.body) throw new Error('The server returned an empty response.')
+    const percent = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : null
+    const elapsedSeconds = (now - startedAt) / 1000
+    const bytesPerSecond = elapsedSeconds > 0 ? received / elapsedSeconds : 0
+    const etaSeconds =
+      total > 0 && bytesPerSecond > 0 && elapsedSeconds >= 1
+        ? Math.max(0, Math.round((total - received) / bytesPerSecond))
+        : null
 
-    const total = Number(response.headers.get('content-length') ?? 0)
-    const name = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || 'build.zip')
-    const filePath = path.join(targetDir, name)
-
-    const handle = await fs.promises.open(filePath, 'w')
-    const startedAt = Date.now()
-    let received = 0
     send('arc:download-progress', {
       id,
       received,
       total,
-      percent: total ? 0 : null,
-      etaSeconds: null,
+      percent,
+      etaSeconds,
       phase: 'downloading',
     })
 
+    if (SMOKE_URL && (percent === null || percent - lastLogged >= 20 || percent === 100)) {
+      lastLogged = percent ?? lastLogged
+      smokeLog(`download progress ${percent ?? '?'}% (${received}/${total} bytes)`)
+    }
+  }
+
+  try {
+    let probe = { supported: false, total: 0 }
     try {
-      for await (const chunk of response.body) {
-        await handle.write(chunk)
-        received += chunk.length
-        const percent = total ? Math.min(100, Math.round((received / total) * 100)) : null
-        const elapsedSeconds = (Date.now() - startedAt) / 1000
-        const bytesPerSecond = elapsedSeconds > 0 ? received / elapsedSeconds : 0
-        const etaSeconds =
-          total > 0 && bytesPerSecond > 0 && elapsedSeconds >= 1
-            ? Math.max(0, Math.round((total - received) / bytesPerSecond))
-            : null
+      probe = await probeRangeSupport(parsed, controller.signal)
+    } catch (error) {
+      if (controller.signal.aborted) throw abortError()
+      // A normal GET may still work when the probe cannot be completed.
+    }
 
-        send('arc:download-progress', {
-          id,
-          received,
-          total,
-          percent,
-          etaSeconds,
-          phase: 'downloading',
+    startedAt = Date.now()
+    total = probe.total
+    report(true)
+
+    if (probe.supported && downloadConnectionCount(probe.total) > 1) {
+      try {
+        await downloadParallel(parsed, partPath, probe.total, controller.signal, (bytes) => {
+          received += bytes
+          report()
         })
+        if (received !== probe.total) throw new Error('The download did not receive every byte.')
+      } catch (error) {
+        if (controller.signal.aborted) throw abortError()
 
-        if (SMOKE_URL && (percent === null || percent - lastLogged >= 20 || percent === 100)) {
-          lastLogged = percent ?? lastLogged
-          smokeLog(`download progress ${percent ?? '?'}% (${received}/${total} bytes)`)
-        }
+        // Range support can be advertised and still fail behind a CDN. Restart
+        // once as a single stream rather than leaving a broken archive.
+        await fs.promises.rm(partPath, { force: true }).catch(() => {})
+        received = 0
+        total = 0
+        startedAt = Date.now()
+        report(true)
+        await downloadSingleStream(
+          parsed,
+          partPath,
+          controller.signal,
+          (nextTotal) => {
+            total = nextTotal
+            report(true)
+          },
+          (bytes) => {
+            received += bytes
+            report()
+          },
+        )
       }
-    } finally {
-      await handle.close()
+    } else {
+      await downloadSingleStream(
+        parsed,
+        partPath,
+        controller.signal,
+        (nextTotal) => {
+          total = nextTotal
+          report(true)
+        },
+        (bytes) => {
+          received += bytes
+          report()
+        },
+      )
     }
 
     if (controller.signal.aborted) throw abortError()
+    report(true)
+
+    await fs.promises.rm(filePath, { force: true })
+    await fs.promises.rename(partPath, filePath)
+
     send('arc:download-progress', {
       id,
       received,
@@ -401,6 +595,7 @@ async function downloadBuild(payload) {
     }
     throw error
   } finally {
+    await fs.promises.rm(partPath, { force: true }).catch(() => {})
     extractions.delete(id)
     downloads.delete(id)
   }
