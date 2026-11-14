@@ -40,7 +40,7 @@ export function BuildList({ builds, activeId, installed, activeCounts, sourceKey
       {builds.map((build, index) => {
         const active = build.id === activeId
         const art = artFor(build.season)
-        const online = activeCounts?.[artKeyFor(build.season) ?? ''] ?? 0
+        const online = Math.max(0, (activeCounts?.[artKeyFor(build.season) ?? ''] ?? 0) - (active ? 1 : 0))
         const chapterChanged = index === 0 || builds[index - 1].season.chapter !== build.season.chapter
 
         return (
