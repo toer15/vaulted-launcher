@@ -27,6 +27,7 @@ interface ActiveBuildCardProps {
   account: Account
   sourceKeys?: Set<string>
   servers?: Array<{ name: string; url: string }>
+  installed?: Record<string, boolean>
   onLogout: () => void
   onPrimary: () => void
   onCancelDownload: () => void
@@ -51,6 +52,7 @@ export function ActiveBuildCard({
   account,
   sourceKeys,
   servers,
+  installed,
   onLogout,
   onPrimary,
   onCancelDownload,
@@ -89,7 +91,7 @@ export function ActiveBuildCard({
   const primary = {
     missing: hasDownloadSource
       ? {
-          label: `Download ${season.label}`,
+          label: `Start ${season.label}`,
           icon: Download,
           background: 'linear-gradient(120deg, #34d399, #059669)',
           glow: 'rgba(16,185,129,0.55)',
@@ -284,7 +286,7 @@ export function ActiveBuildCard({
                     <ArrowLeftRight className="h-3.5 w-3.5" /> Change build
                   </button>
 
-                  {servers && servers.length > 0 && (
+                  {servers && servers.length > 0 && installed?.[build.id] && (
                     <button
                       type="button"
                       onClick={(event) => {

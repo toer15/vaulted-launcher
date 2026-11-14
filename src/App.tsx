@@ -40,7 +40,7 @@ import { loadState, saveState, uid } from './lib/storage'
 import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.6'
+const APP_VERSION = '1.0.7'
 const TOAST_TTL = 4200
 
 export default function App() {
@@ -711,6 +711,7 @@ export default function App() {
                 account={account}
                 sourceKeys={sourceKeys}
                 servers={activeBuild ? (manifest?.seasons[artKeyFor(activeBuild.season) ?? '']?.servers ?? []) : []}
+                installed={installed}
                 onLogout={() => void handleLogout()}
                 onPrimary={handlePrimary}
                 onCancelDownload={handleCancelDownload}
