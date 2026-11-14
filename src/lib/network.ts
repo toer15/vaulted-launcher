@@ -268,6 +268,25 @@ export async function fetchLatest(): Promise<LatestRelease> {
   }
 }
 
+export async function fetchGitHubLatest(): Promise<LatestRelease | null> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT)
+    const response = await fetch('https://api.github.com/repos/toer15/vaulted-launcher/releases/latest', {
+      signal: controller.signal,
+      headers: { accept: 'application/vnd.github+json' },
+    })
+    clearTimeout(timer)
+    if (!response.ok) return null
+    const data = (await response.json()) as { tag_name?: string; assets?: Array<{ browser_download_url?: string; name?: string }> }
+    const version = String(data?.tag_name ?? '').replace(/^v/i, '')
+    if (!version) return null
+    const asset = data.assets?.find((item) => /\.exe$/i.test(item.name ?? '')) ?? data.assets?.[0]
+    return { version, url: asset?.browser_download_url }
+  } catch {
+    return null
+  }
+}
 export function compareVersions(a: string, b: string): number {
   const left = a.replace(/^v/i, '').split('.').map((part) => Number.parseInt(part, 10) || 0)
   const right = b.replace(/^v/i, '').split('.').map((part) => Number.parseInt(part, 10) || 0)

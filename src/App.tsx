@@ -26,6 +26,7 @@ import {
   compareVersions,
   fetchActive,
   fetchLatest,
+  fetchGitHubLatest,
   fetchManifest,
   fetchMe,
   loadSession,
@@ -585,7 +586,21 @@ export default function App() {
   const checkForUpdates = useCallback(async () => {
     setUpdateState({ state: 'checking' })
     try {
-      const latest = await fetchLatest()
+      const [worker, github] = await Promise.allSettled([fetchLatest(), fetchGitHubLatest()])
+      const workerRelease = worker.status === 'fulfilled' ? worker.value : null
+      const githubRelease = github.status === 'fulfilled' ? github.value : null
+
+      // pick the newest version across both feeds
+      let latest = workerRelease
+      if (githubRelease && (!latest || compareVersions(githubRelease.version, latest.version) > 0)) {
+        latest = githubRelease
+      }
+
+      if (!latest) {
+        setUpdateState({ state: 'error', message: 'Could not reach the update feed.' })
+        return
+      }
+
       if (compareVersions(latest.version, APP_VERSION) > 0) {
         setUpdateState({
           state: 'available',
