@@ -43,7 +43,7 @@ function formatEta(seconds: number | null | undefined): string | null {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return null
   if (seconds <= 45) return 'Less than a minute left'
 
-  const totalMinutes = Math.max(1, Math.round(seconds / 60))
+  const totalMinutes = Math.max(1, Math.ceil(seconds / 60))
   if (totalMinutes < 60) return `About ${totalMinutes} min left`
 
   const hours = Math.floor(totalMinutes / 60)

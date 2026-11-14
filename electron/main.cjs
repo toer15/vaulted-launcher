@@ -351,7 +351,7 @@ async function downloadBuild(payload) {
         const elapsedSeconds = (Date.now() - startedAt) / 1000
         const bytesPerSecond = elapsedSeconds > 0 ? received / elapsedSeconds : 0
         const etaSeconds =
-          total > 0 && bytesPerSecond > 0
+          total > 0 && bytesPerSecond > 0 && elapsedSeconds >= 1
             ? Math.max(0, Math.round((total - received) / bytesPerSecond))
             : null
 

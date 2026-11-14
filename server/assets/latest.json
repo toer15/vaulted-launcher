@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.16",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.16/VAULTED-Launcher-1.0.16-Setup.exe",
-  "notes": "Downloads now show an estimated time remaining in minutes while the archive is downloading."
+  "version": "1.0.17",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.17/VAULTED-Launcher-1.0.17-Setup.exe",
+  "notes": "Downloads show an accurate estimated time remaining in minutes, calculated after the first second of transfer."
 }
