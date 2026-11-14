@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.9",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.9/VAULTED-Launcher-1.0.9-Setup.exe",
-  "notes": "Updates are fully silent: checks in the background, downloads, installs and relaunches automatically. No browser or download page."
+  "version": "1.0.10",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.10/VAULTED-Launcher-1.0.10-Setup.exe",
+  "notes": "Play online now covers Chapter 4 Season 4, Chapter 5 Season 2, Chapter 5 Remix, Chapter 7 Season 4 and Chapter 7 Mini 1. Those seasons stay download-locked until a real archive exists."
 }
