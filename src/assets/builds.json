@@ -1,6 +1,6 @@
 {
   "_format": "Map a season key (chapter-season, e.g. ch1-s3) to that season's archive. Keys: url (required, direct zip/http link), version (e.g. 3.6), sha256 (optional), and for seasons newer than the app: chapter, season, label, short, era.",
-  "updatedAt": "2026-11-14T20:59:27.736Z",
+  "updatedAt": "2026-11-14T21:01:01.889Z",
   "seasons": {
     "ch2-s2": {
       "url": "https://archive.org/compress/noctra-fortnite-12-41-build",
@@ -149,6 +149,10 @@
     "ch5-s3": {
       "url": "https://cold-eu-agl-1.gofile.io/download/web/ffa037a2-b070-4941-875b-6158b5b131fa/%2B%2BFortnite%2BRelease-30.00-CL-33962396.rar",
       "version": "30.00"
+    },
+    "ch5-s4": {
+      "url": "https://cold-na-phx-10.gofile.io/download/web/32cce581-05c7-4f1f-aad3-a21ab207b418/%2B%2BFortnite%2BRelease-31.41-CL-37324991-Windows.rar",
+      "version": "31.41"
     }
   }
 }
