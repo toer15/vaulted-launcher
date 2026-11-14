@@ -227,7 +227,8 @@ export function SettingsView({
           <CloudDownload className="mt-0.5 h-4 w-4 shrink-0 text-fog" />
           <div className="min-w-0">
             <p className="text-[12px] leading-relaxed text-mist/85">
-              VAULTED checks its release feed for a newer version and points you at the download.
+              VAULTED updates itself in the background — it checks, downloads and restarts into the new version
+              automatically. No browser, no download page, nothing to click.
             </p>
             {updateState.message && (
               <p
@@ -263,7 +264,7 @@ export function SettingsView({
                   onClick={() => onRestartToUpdate?.()}
                   className="inline-flex items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/[0.08] px-3.5 py-2 text-[12px] font-semibold text-amber-200 transition-colors duration-200 hover:bg-amber-400/15 hover:text-white"
                 >
-                  <RefreshCw className="h-3.5 w-3.5" /> Restart to install update
+                  <RefreshCw className="h-3.5 w-3.5" /> Restart now
                 </button>
               )}
             </div>

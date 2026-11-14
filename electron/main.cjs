@@ -20,6 +20,9 @@ const running = new Map()
 /** buildId -> AbortController */
 const downloads = new Map()
 
+/** pending automatic update install */
+let autoInstallTimer = null
+
 app.setName('VAULTED Launcher')
 app.setAppUserModelId('com.vaulted.launcher')
 
@@ -482,10 +485,34 @@ ipcMain.handle('shell:open-external', async (_event, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) await shell.openExternal(url)
 })
 
+/**
+ * Applies a downloaded update without any browser or download page. Waits for
+ * an active build download or running game to finish so it never interrupts
+ * one, then installs silently and reopens the launcher on the new version.
+ */
+function scheduleSilentInstall() {
+  if (DEV || SMOKE || autoInstallTimer) return
+
+  const attempt = () => {
+    if (downloads.size > 0 || running.size > 0) {
+      autoInstallTimer = setTimeout(attempt, 30_000)
+      return
+    }
+    autoInstallTimer = null
+    try {
+      autoUpdater.quitAndInstall(true, true)
+    } catch {
+      /* autoInstallOnAppQuit is the fallback */
+    }
+  }
+
+  autoInstallTimer = setTimeout(attempt, 10_000)
+}
+
 ipcMain.handle('arc:check-updates', async () => {
   try {
-    await autoUpdater.checkForUpdates()
-    return { ok: true }
+    const result = await autoUpdater.checkForUpdates()
+    return { ok: true, version: result?.updateInfo?.version ?? null }
   } catch (error) {
     return { ok: false, error: String(error && error.message ? error.message : error) }
   }
@@ -506,14 +533,16 @@ app.whenReady().then(() => {
     app.on('render-process-gone', (_event, _contents, details) => smokeLog('render gone: ' + JSON.stringify(details)))
   }
 
-  // silent auto-update via GitHub releases
+  // silent auto-update via GitHub releases: no browser, no prompts
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoRunAppAfterInstall = true
   autoUpdater.on('update-available', (info) => {
     send('arc:update-available', { version: info.version })
   })
   autoUpdater.on('update-downloaded', (info) => {
     send('arc:update-downloaded', { version: info.version })
+    scheduleSilentInstall()
   })
   autoUpdater.on('error', (err) => {
     if (SMOKE) smokeLog('updater error: ' + String(err && err.message ? err.message : err))
@@ -522,9 +551,11 @@ app.whenReady().then(() => {
   registerIpc()
   createWindow()
 
-  // check for updates after window is ready (skip in dev/smoke)
+  // check on launch and every 30 minutes; downloads install themselves
   if (!DEV && !SMOKE) {
-    setTimeout(() => { autoUpdater.checkForUpdates().catch(() => {}) }, 5000)
+    const check = () => autoUpdater.checkForUpdates().catch(() => {})
+    setTimeout(check, 5000)
+    setInterval(check, 30 * 60 * 1000)
   }
 
   app.on('activate', () => {

@@ -23,6 +23,7 @@ import {
 } from './lib/launch'
 import {
   clearSession,
+  compareVersions,
   fetchActive,
   fetchManifest,
   fetchMe,
@@ -40,7 +41,7 @@ import { loadState, saveState, uid } from './lib/storage'
 import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.8'
+const APP_VERSION = '1.0.9'
 const TOAST_TTL = 4200
 
 export default function App() {
@@ -81,7 +82,7 @@ export default function App() {
       setUpdateState({ state: 'available', message: `v${info.version} downloading…` })
     })
     const offDone = window.arc.onUpdateDownloaded?.((info) => {
-      setUpdateState({ state: 'available', message: `v${info.version} ready — restarts to install.` })
+      setUpdateState({ state: 'available', message: `v${info.version} downloaded — installing automatically…` })
       setUpdateReady(true)
     })
     return () => { offAvail(); offDone?.() }
@@ -598,24 +599,18 @@ export default function App() {
     if (!window.arc?.checkUpdates) return
     setUpdateState({ state: 'checking' })
     try {
-      await window.arc.checkUpdates()
-      // electron-updater handles download + install silently; status comes via events
-      setUpdateState({ state: 'current', message: `You're on the newest version (v${APP_VERSION}).` })
+      const result = await window.arc.checkUpdates()
+      if (result?.version && compareVersions(result.version, APP_VERSION) > 0) {
+        setUpdateState({ state: 'available', message: `v${result.version} downloading in the background…` })
+      } else {
+        setUpdateState({ state: 'current', message: `You're on the newest version (v${APP_VERSION}).` })
+      }
     } catch {
       setUpdateState({ state: 'error', message: 'Could not reach the update feed.' })
     }
   }, [])
 
-  // auto-check for updates once per session
-  const autoCheckedUpdates = useRef(false)
-  useEffect(() => {
-    if (autoCheckedUpdates.current) return
-    autoCheckedUpdates.current = true
-    const timer = window.setTimeout(() => {
-      void checkForUpdates()
-    }, 4000)
-    return () => window.clearTimeout(timer)
-  }, [checkForUpdates])
+  // the main process checks on launch and every 30 minutes, then installs
 
   const activeState: BuildState = !activeBuild
     ? 'missing'
