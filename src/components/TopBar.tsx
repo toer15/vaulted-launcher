@@ -1,0 +1,112 @@
+import { LayoutGrid, Radio, Settings2, Sparkles } from 'lucide-react'
+import brandIcon from '../assets/brand-icon.png'
+import { AccountChip } from './AccountChip'
+import { WindowControls } from './WindowControls'
+import { Wordmark } from './Wordmark'
+import { cx } from '../lib/cx'
+import { hasWindowControls } from '../lib/launch'
+import type { Account, SeasonInfo } from '../types'
+
+interface TopBarProps {
+  account: Account
+  season: SeasonInfo | null
+  version: string | null
+  buildCount: number
+  native: boolean
+  settingsActive: boolean
+  onOpenLibrary: () => void
+  onOpenSettings: () => void
+  onLogout: () => void
+}
+
+export function TopBar({
+  account,
+  season,
+  version,
+  buildCount,
+  native,
+  settingsActive,
+  onOpenLibrary,
+  onOpenSettings,
+  onLogout,
+}: TopBarProps) {
+  return (
+    <header className="app-drag flex items-center justify-between gap-3">
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-2xl bg-panel shadow-lg shadow-arc/30">
+          <img src={brandIcon} alt="VAULTED" draggable={false} className="h-full w-full object-cover" />
+          <span className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/25" />
+        </span>
+
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2">
+            <Wordmark className="text-[18px]" accent={false} />
+            <span className="hidden text-[11px] font-medium tracking-wide text-fog sm:inline">
+              Fortnite Build Launcher
+            </span>
+          </div>
+          <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-fog">
+            <Sparkles className="h-3 w-3 text-amber-300/80" />
+            {season ? season.label : 'No build selected'}
+            {version && (
+              <>
+                <span className="text-fog/40">·</span>
+                <span className="font-mono text-[10.5px]">v{version}</span>
+              </>
+            )}
+          </p>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <span
+          className={cx(
+            'hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-medium md:inline-flex',
+            native
+              ? 'border-emerald-400/30 bg-emerald-400/[0.07] text-emerald-300'
+              : 'border-line bg-white/[0.03] text-fog',
+          )}
+          title={native ? 'Launch calls are forwarded to the desktop bridge' : 'No desktop bridge detected — launching is simulated'}
+        >
+          <Radio className="h-3 w-3" />
+          {native ? 'Bridge connected' : 'Local mode'}
+        </span>
+
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          aria-pressed={settingsActive}
+          title="Settings"
+          className={cx(
+            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300',
+            settingsActive
+              ? 'border-arc/50 bg-arc/15 text-white'
+              : 'border-line bg-panel/70 text-fog hover:border-arc/45 hover:bg-panel-hi hover:text-mist',
+          )}
+        >
+          <Settings2 className="h-4 w-4" />
+          <span className="hidden sm:inline">Settings</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenLibrary}
+          className="app-no-drag group inline-flex items-center gap-2 rounded-xl border border-line bg-panel/70 px-2.5 py-2 text-[12px] font-medium text-fog transition-all duration-300 hover:border-arc/45 hover:bg-panel-hi hover:text-mist"
+          aria-label={`Open build library, ${buildCount} builds`}
+        >
+          <LayoutGrid className="h-4 w-4" />
+          <span className="hidden sm:inline">Library</span>
+          <span className="rounded-md bg-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-mist">
+            {buildCount}
+          </span>
+        </button>
+
+        <div className="app-no-drag">
+          <AccountChip account={account} onLogout={onLogout} />
+        </div>
+
+        {hasWindowControls() && <WindowControls />}
+      </div>
+    </header>
+  )
+}

@@ -1,0 +1,66 @@
+export interface Accent {
+  /** gradient start */
+  from: string
+  /** gradient end */
+  to: string
+  /** glow colour used for bloom + borders */
+  glow: string
+}
+
+export interface SeasonInfo {
+  chapter: number
+  season: number
+  /** "Chapter 1 Season 3" */
+  label: string
+  /** "CH1 · S3" */
+  short: string
+  /** flavour text for the hero card */
+  era: string
+  accent: Accent
+  /** false when the version could not be mapped */
+  known: boolean
+  /** bundled artwork key override (mini seasons, Fortnite OG) */
+  artKey?: string
+}
+
+export interface Build {
+  id: string
+  /** parsed version, e.g. "3.6" */
+  version: string
+  /** original folder name, kept for display + debugging */
+  folderName: string
+  /** folder the user added */
+  path: string
+  /** resolved client executable inside the build */
+  executable: string
+  season: SeasonInfo
+  addedAt: number
+  /** true until a real build folder is linked or downloaded */
+  placeholder?: boolean
+}
+
+export interface Account {
+  username: string
+  initials: string
+  outfit: string
+  level: number
+  cosmetics: number
+}
+
+export type LaunchPhase = 'idle' | 'launching' | 'running' | 'error'
+
+/** What the active card's primary button should do right now. */
+export type BuildState = 'missing' | 'downloading' | 'ready' | 'launching' | 'running' | 'error'
+
+export interface DownloadState {
+  /** null while the server hasn't reported a content-length */
+  percent: number | null
+  phase: 'downloading' | 'extracting'
+}
+
+export interface ToastMessage {
+  id: string
+  title: string
+  description?: string
+  tone: 'success' | 'info' | 'error'
+}
