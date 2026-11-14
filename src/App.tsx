@@ -609,6 +609,11 @@ export default function App() {
             : `v${latest.version} is out, but the release has no download link yet.`,
           url: latest.url,
         })
+        pushToast({
+          tone: 'info',
+          title: `Update available: v${latest.version}`,
+          description: latest.url ? 'Open Settings to download it.' : 'Check back later for a download link.',
+        })
       } else {
         setUpdateState({ state: 'current', message: `You're on the newest version (v${APP_VERSION}).` })
       }
@@ -616,6 +621,17 @@ export default function App() {
       setUpdateState({ state: 'error', message: 'Could not reach the update feed.' })
     }
   }, [])
+
+  // auto-check for updates once per session
+  const autoCheckedUpdates = useRef(false)
+  useEffect(() => {
+    if (autoCheckedUpdates.current) return
+    autoCheckedUpdates.current = true
+    const timer = window.setTimeout(() => {
+      void checkForUpdates()
+    }, 4000)
+    return () => window.clearTimeout(timer)
+  }, [checkForUpdates])
 
   const activeState: BuildState = !activeBuild
     ? 'missing'
