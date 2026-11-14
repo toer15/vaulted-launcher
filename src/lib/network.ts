@@ -7,6 +7,8 @@
  * or pull a download URL.
  */
 
+import defaultBuilds from '../assets/builds.json'
+
 export const API_BASE =
   'https://site-c377de5341934c84b54b325555448242.freebuff.page'
 
@@ -241,8 +243,8 @@ export async function fetchManifest(): Promise<BuildManifest> {
     }
     return data
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') throw apiError('Build sources timed out.')
-    throw error instanceof Error ? error : apiError('Could not read build sources.')
+    // fall back to the manifest bundled with the app
+    return defaultBuilds as BuildManifest
   } finally {
     clearTimeout(timer)
   }

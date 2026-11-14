@@ -38,6 +38,7 @@ import {
   type RiftSession,
 } from './lib/network'
 import { accentForChapter, buildFromPath } from './lib/seasons'
+import defaultBuilds from './assets/builds.json'
 import { buildForSeason, ensureAllSeasons, seedBuilds, sortBuilds } from './lib/sampleBuilds'
 import { loadState, saveState, uid } from './lib/storage'
 import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
@@ -62,7 +63,7 @@ export default function App() {
   const [view, setView] = useState<'home' | 'settings'>('home')
 
   const [session, setSession] = useState<RiftSession | null>(() => loadSession())
-  const [manifest, setManifest] = useState<BuildManifest | null>(null)
+  const [manifest, setManifest] = useState<BuildManifest | null>(() => defaultBuilds as BuildManifest)
   const [sourcesStatus, setSourcesStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [sourcesError, setSourcesError] = useState<string | null>(null)
   const [activeCounts, setActiveCounts] = useState<Record<string, number>>({})
