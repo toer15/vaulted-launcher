@@ -241,7 +241,12 @@ export async function fetchManifest(): Promise<BuildManifest> {
     if (!data || typeof data !== 'object' || typeof data.seasons !== 'object' || data.seasons === null) {
       throw apiError('Build sources are in an unexpected format.')
     }
-    return data
+    // merge with the bundled default so sources are never lost
+    const merged: BuildManifest = {
+      ...data,
+      seasons: { ...(defaultBuilds as BuildManifest).seasons, ...data.seasons },
+    }
+    return merged
   } catch (error) {
     // fall back to the manifest bundled with the app
     return defaultBuilds as BuildManifest
