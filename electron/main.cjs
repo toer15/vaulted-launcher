@@ -482,6 +482,15 @@ ipcMain.handle('shell:open-external', async (_event, url) => {
   if (typeof url === 'string' && /^https?:\/\//i.test(url)) await shell.openExternal(url)
 })
 
+ipcMain.handle('arc:check-updates', async () => {
+  try {
+    await autoUpdater.checkForUpdates()
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: String(error && error.message ? error.message : error) }
+  }
+})
+
 app.whenReady().then(() => {
   if (SMOKE) {
     smokeLog('app ready; argv=' + JSON.stringify(process.argv))
@@ -496,15 +505,6 @@ app.whenReady().then(() => {
   })
   autoUpdater.on('update-downloaded', (info) => {
     send('arc:update-downloaded', { version: info.version })
-    // install on next quit; also offer immediate
-    dialog.showMessageBox(mainWindow, {
-      type: 'info',
-      title: 'Update ready',
-      message: `VAULTED ${info.version} downloaded. Restart to install?`,
-      buttons: ['Restart now', 'Later'],
-    }).then((res) => {
-      if (res.response === 0) autoUpdater.quitAndInstall()
-    })
   })
   autoUpdater.on('error', (err) => {
     if (SMOKE) smokeLog('updater error: ' + String(err && err.message ? err.message : err))

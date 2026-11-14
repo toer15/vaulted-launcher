@@ -23,10 +23,7 @@ import {
 } from './lib/launch'
 import {
   clearSession,
-  compareVersions,
   fetchActive,
-  fetchLatest,
-  fetchGitHubLatest,
   fetchManifest,
   fetchMe,
   loadSession,
@@ -76,6 +73,18 @@ export default function App() {
   }>({ state: 'idle' })
 
   const native = useMemo(() => hasNativeBridge(), [])
+
+  // silent auto-update events from main process
+  useEffect(() => {
+    if (!window.arc?.onUpdateAvailable) return
+    const offAvail = window.arc.onUpdateAvailable((info) => {
+      setUpdateState({ state: 'available', message: `v${info.version} downloading…` })
+    })
+    const offDone = window.arc.onUpdateDownloaded?.((info) => {
+      setUpdateState({ state: 'available', message: `v${info.version} ready — restarts to install.` })
+    })
+    return () => { offAvail(); offDone?.() }
+  }, [])
 
   const sourceKeys = useMemo(() => new Set(Object.keys(manifest?.seasons ?? {})), [manifest])
 
@@ -585,39 +594,12 @@ export default function App() {
   }, [session])
 
   const checkForUpdates = useCallback(async () => {
+    if (!window.arc?.checkUpdates) return
     setUpdateState({ state: 'checking' })
     try {
-      const [worker, github] = await Promise.allSettled([fetchLatest(), fetchGitHubLatest()])
-      const workerRelease = worker.status === 'fulfilled' ? worker.value : null
-      const githubRelease = github.status === 'fulfilled' ? github.value : null
-
-      // pick the newest version across both feeds
-      let latest = workerRelease
-      if (githubRelease && (!latest || compareVersions(githubRelease.version, latest.version) > 0)) {
-        latest = githubRelease
-      }
-
-      if (!latest) {
-        setUpdateState({ state: 'error', message: 'Could not reach the update feed.' })
-        return
-      }
-
-      if (compareVersions(latest.version, APP_VERSION) > 0) {
-        setUpdateState({
-          state: 'available',
-          message: latest.url
-            ? `v${latest.version} is available — download it to update.`
-            : `v${latest.version} is out, but the release has no download link yet.`,
-          url: latest.url,
-        })
-        pushToast({
-          tone: 'info',
-          title: `Update available: v${latest.version}`,
-          description: latest.url ? 'Open Settings to download it.' : 'Check back later for a download link.',
-        })
-      } else {
-        setUpdateState({ state: 'current', message: `You're on the newest version (v${APP_VERSION}).` })
-      }
+      await window.arc.checkUpdates()
+      // electron-updater handles download + install silently; status comes via events
+      setUpdateState({ state: 'current', message: `You're on the newest version (v${APP_VERSION}).` })
     } catch {
       setUpdateState({ state: 'error', message: 'Could not reach the update feed.' })
     }

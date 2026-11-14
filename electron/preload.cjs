@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('arc', {
   onBuildExited: (callback) => subscribe('arc:build-exited', callback),
   pickFolder: () => ipcRenderer.invoke('arc:pick-folder'),
   scanBuilds: () => ipcRenderer.invoke('arc:scan-builds'),
+  checkUpdates: () => ipcRenderer.invoke('arc:check-updates'),
+  onUpdateAvailable: (callback) => subscribe('arc:update-available', callback),
+  onUpdateDownloaded: (callback) => subscribe('arc:update-downloaded', callback),
   session: {
     readSync: () => ipcRenderer.sendSync('arc:read-session-sync'),
     save: (value) => ipcRenderer.invoke('arc:save-session', value),

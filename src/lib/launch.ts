@@ -43,6 +43,9 @@ export interface LauncherBridge {
   onBuildExited?(callback: (payload: { id: string }) => void): () => void
   pickFolder?(): Promise<string | null>
   scanBuilds?(): Promise<string[]>
+  checkUpdates?(): Promise<{ ok: boolean; error?: string }>
+  onUpdateAvailable?(callback: (info: { version: string }) => void): () => void
+  onUpdateDownloaded?(callback: (info: { version: string }) => void): () => void
   session?: {
     /** synchronous, so the first render already knows the user */
     readSync(): string | null
