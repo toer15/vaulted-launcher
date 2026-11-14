@@ -1,11 +1,14 @@
+import { useEffect, useState } from 'react'
 import {
   ArrowLeftRight,
   Ban,
   Check,
+  ChevronDown,
   Download,
   FolderPlus,
   Globe,
   Loader2,
+  Lock,
   Play,
   ShieldCheck,
   Sparkles,
@@ -16,6 +19,7 @@ import { AccountChip } from './AccountChip'
 import { BuildArt } from './BuildArt'
 import { artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
+import { openExternal } from '../lib/network'
 import type { Account, Build, BuildState, DownloadState } from '../types'
 
 interface ActiveBuildCardProps {
@@ -59,6 +63,21 @@ export function ActiveBuildCard({
   onChangeBuild,
   onAddBuild,
 }: ActiveBuildCardProps) {
+  const [onlineOpen, setOnlineOpen] = useState(false)
+
+  useEffect(() => {
+    setOnlineOpen(false)
+  }, [build?.id])
+
+  useEffect(() => {
+    if (!onlineOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOnlineOpen(false)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [onlineOpen])
+
   if (!build) {
     return (
       <section className="relative flex min-h-[460px] flex-col items-center justify-center overflow-hidden rounded-3xl border border-dashed border-line bg-panel/50 px-8 py-16 text-center">
@@ -269,7 +288,7 @@ export function ActiveBuildCard({
                         event.stopPropagation()
                         onCancelDownload()
                       }}
-                      className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-[12.5px] font-medium text-fog transition-colors duration-200 hover:border-rose-400/40 hover:bg-rose-500/10 hover:text-rose-200"
+                      className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 px-3.5 py-3 text-[12.5px] font-semibold text-white shadow-[0_12px_28px_-14px_rgba(244,63,94,0.85)] transition-all duration-200 hover:from-rose-500 hover:to-red-500 hover:brightness-110 active:scale-[0.99]"
                     >
                       <Ban className="h-3.5 w-3.5" /> Cancel
                     </button>
@@ -286,19 +305,81 @@ export function ActiveBuildCard({
                     <ArrowLeftRight className="h-3.5 w-3.5" /> Change build
                   </button>
 
-                  {servers && servers.length > 0 && installed?.[build.id] && (
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        const url = servers[0].url
-                        if (window.arc?.openExternal) window.arc.openExternal(url)
-                        else window.open(url, '_blank')
-                      }}
-                      className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.08] px-3.5 py-3 text-[12.5px] font-medium text-emerald-200 transition-colors duration-200 hover:bg-emerald-400/15 hover:text-white"
-                    >
-                      <Globe className="h-3.5 w-3.5" /> Play online
-                    </button>
+                  {servers && servers.length > 0 && (
+                    <div className="relative">
+                      <button
+                        type="button"
+                        disabled={!installed?.[build.id]}
+                        title={
+                          installed?.[build.id]
+                            ? `Open ${servers.map((server) => server.name).join(' or ')} for ${season.label}`
+                            : 'Download this season first — Play online unlocks once the build is on this PC.'
+                        }
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          if (!installed?.[build.id]) return
+                          if (servers.length === 1) {
+                            void openExternal(servers[0].url)
+                            return
+                          }
+                          setOnlineOpen((current) => !current)
+                        }}
+                        className={cx(
+                          'inline-flex items-center gap-2 rounded-xl border px-3.5 py-3 text-[12.5px] font-medium transition-colors duration-200',
+                          installed?.[build.id]
+                            ? 'border-emerald-400/30 bg-emerald-400/[0.08] text-emerald-200 hover:bg-emerald-400/15 hover:text-white'
+                            : 'cursor-not-allowed border-white/10 bg-white/[0.03] text-fog/60',
+                        )}
+                      >
+                        {installed?.[build.id] ? (
+                          <Globe className="h-3.5 w-3.5" />
+                        ) : (
+                          <Lock className="h-3.5 w-3.5" />
+                        )}
+                        {installed?.[build.id] ? 'Play online' : 'Online after download'}
+                        {installed?.[build.id] && servers.length > 1 && (
+                          <ChevronDown className={cx('h-3.5 w-3.5 transition-transform', onlineOpen && 'rotate-180')} />
+                        )}
+                      </button>
+
+                      {onlineOpen && installed?.[build.id] && (
+                        <>
+                          <button
+                            type="button"
+                            aria-label="Close online servers"
+                            tabIndex={-1}
+                            onClick={() => setOnlineOpen(false)}
+                            className="fixed inset-0 z-40 cursor-default"
+                          />
+                          <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-white/10 bg-ink/95 p-1.5 shadow-[0_24px_60px_-18px_rgba(0,0,0,0.95)] backdrop-blur-xl">
+                            <p className="px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-fog">
+                              {season.short} · community servers
+                            </p>
+                            {servers.map((server) => (
+                              <button
+                                key={`${server.name}-${server.url}`}
+                                type="button"
+                                onClick={() => {
+                                  setOnlineOpen(false)
+                                  void openExternal(server.url)
+                                }}
+                                className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors duration-150 hover:bg-white/[0.07]"
+                              >
+                                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">
+                                  <Globe className="h-3.5 w-3.5" />
+                                </span>
+                                <span className="min-w-0">
+                                  <span className="block text-[12.5px] font-semibold text-mist">{server.name}</span>
+                                  <span className="block truncate font-mono text-[10.5px] text-fog">
+                                    {server.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                                  </span>
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
                   )}
 
                   <span className="ml-auto hidden items-center gap-1 pr-2 text-[10.5px] text-fog/70 sm:flex">

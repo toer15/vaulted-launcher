@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.7",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.7/VAULTED-Launcher-1.0.7-Setup.exe",
-  "notes": "Play online button only after download. Cancel button red."
+  "version": "1.0.8",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.8/VAULTED-Launcher-1.0.8-Setup.exe",
+  "notes": "Play online lists every community server for the season and stays locked until the build is downloaded. Red Cancel button."
 }

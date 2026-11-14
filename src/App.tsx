@@ -40,7 +40,7 @@ import { loadState, saveState, uid } from './lib/storage'
 import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.7'
+const APP_VERSION = '1.0.8'
 const TOAST_TTL = 4200
 
 export default function App() {
@@ -736,7 +736,7 @@ export default function App() {
         </main>
 
         <footer className="mt-6 flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-4 text-[11px] text-fog/80">
-          <p>VAULTED 1.0 — every season since 2017 · key art © Epic Games</p>
+          <p>VAULTED v{APP_VERSION} — every season since 2017 · key art © Epic Games</p>
           <p className="font-mono">
             {builds.length} build{builds.length === 1 ? '' : 's'} indexed
           </p>
