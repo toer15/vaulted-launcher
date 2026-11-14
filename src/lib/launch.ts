@@ -44,6 +44,7 @@ export interface LauncherBridge {
   pickFolder?(): Promise<string | null>
   scanBuilds?(): Promise<string[]>
   checkUpdates?(): Promise<{ ok: boolean; error?: string }>
+  installUpdate?(): Promise<{ ok: boolean; error?: string }>
   onUpdateAvailable?(callback: (info: { version: string }) => void): () => void
   onUpdateDownloaded?(callback: (info: { version: string }) => void): () => void
   session?: {

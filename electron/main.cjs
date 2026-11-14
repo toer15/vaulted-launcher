@@ -491,6 +491,15 @@ ipcMain.handle('arc:check-updates', async () => {
   }
 })
 
+ipcMain.handle('arc:install-update', async () => {
+  try {
+    autoUpdater.quitAndInstall()
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: String(error && error.message ? error.message : error) }
+  }
+})
+
 app.whenReady().then(() => {
   if (SMOKE) {
     smokeLog('app ready; argv=' + JSON.stringify(process.argv))

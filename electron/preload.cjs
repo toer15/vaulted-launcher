@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('arc', {
   pickFolder: () => ipcRenderer.invoke('arc:pick-folder'),
   scanBuilds: () => ipcRenderer.invoke('arc:scan-builds'),
   checkUpdates: () => ipcRenderer.invoke('arc:check-updates'),
+  installUpdate: () => ipcRenderer.invoke('arc:install-update'),
   onUpdateAvailable: (callback) => subscribe('arc:update-available', callback),
   onUpdateDownloaded: (callback) => subscribe('arc:update-downloaded', callback),
   session: {

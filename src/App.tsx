@@ -27,7 +27,6 @@ import {
   fetchManifest,
   fetchMe,
   loadSession,
-  openExternal,
   saveSession,
   sendHeartbeat,
   signOut,
@@ -71,6 +70,7 @@ export default function App() {
     message?: string
     url?: string
   }>({ state: 'idle' })
+  const [updateReady, setUpdateReady] = useState(false)
 
   const native = useMemo(() => hasNativeBridge(), [])
 
@@ -82,6 +82,7 @@ export default function App() {
     })
     const offDone = window.arc.onUpdateDownloaded?.((info) => {
       setUpdateState({ state: 'available', message: `v${info.version} ready — restarts to install.` })
+      setUpdateReady(true)
     })
     return () => { offAvail(); offDone?.() }
   }, [])
@@ -695,8 +696,9 @@ export default function App() {
               onRefreshSources={() => void refreshSources()}
               appVersion={APP_VERSION}
               updateState={updateState}
+              updateReady={updateReady}
               onCheckUpdates={() => void checkForUpdates()}
-              onOpenUpdate={(url) => void openExternal(url)}
+              onRestartToUpdate={() => void window.arc?.installUpdate?.()}
             />
           ) : (
           <div className="grid min-h-0 flex-1 items-stretch gap-4 overflow-hidden lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-1 xl:gap-6 2xl:grid-cols-[minmax(0,1fr)_420px]">

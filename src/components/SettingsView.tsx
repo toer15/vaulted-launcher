@@ -30,8 +30,9 @@ interface SettingsViewProps {
   onRefreshSources: () => void
   appVersion: string
   updateState: { state: 'idle' | 'checking' | 'current' | 'available' | 'error'; message?: string; url?: string }
+  updateReady?: boolean
   onCheckUpdates: () => void
-  onOpenUpdate: (url: string) => void
+  onRestartToUpdate?: () => void
 }
 
 export function SettingsView({
@@ -49,8 +50,9 @@ export function SettingsView({
   onRefreshSources,
   appVersion,
   updateState,
+  updateReady,
   onCheckUpdates,
-  onOpenUpdate,
+  onRestartToUpdate,
 }: SettingsViewProps) {
   const art = build ? artFor(build.season) : null
 
@@ -255,13 +257,13 @@ export function SettingsView({
                 )}
                 Check for updates
               </button>
-              {updateState.state === 'available' && updateState.url && (
+              {updateReady && (
                 <button
                   type="button"
-                  onClick={() => onOpenUpdate(updateState.url as string)}
-                  className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.08] px-3.5 py-2 text-[12px] font-semibold text-emerald-200 transition-colors duration-200 hover:bg-emerald-400/15 hover:text-white"
+                  onClick={() => onRestartToUpdate?.()}
+                  className="inline-flex items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/[0.08] px-3.5 py-2 text-[12px] font-semibold text-amber-200 transition-colors duration-200 hover:bg-amber-400/15 hover:text-white"
                 >
-                  <CloudDownload className="h-3.5 w-3.5" /> Get v{updateState.message?.match(/v([\d.]+)/)?.[1] ?? 'update'}
+                  <RefreshCw className="h-3.5 w-3.5" /> Restart to install update
                 </button>
               )}
             </div>
