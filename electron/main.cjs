@@ -3,6 +3,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const { spawn, execFile } = require('node:child_process')
+const { autoUpdater } = require('electron-updater')
 
 const DEV = process.argv.includes('--dev')
 const SMOKE = process.argv.includes('--smoke')
@@ -487,8 +488,35 @@ app.whenReady().then(() => {
     app.on('render-process-gone', (_event, _contents, details) => smokeLog('render gone: ' + JSON.stringify(details)))
   }
 
+  // silent auto-update via GitHub releases
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.on('update-available', (info) => {
+    send('arc:update-available', { version: info.version })
+  })
+  autoUpdater.on('update-downloaded', (info) => {
+    send('arc:update-downloaded', { version: info.version })
+    // install on next quit; also offer immediate
+    dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Update ready',
+      message: `VAULTED ${info.version} downloaded. Restart to install?`,
+      buttons: ['Restart now', 'Later'],
+    }).then((res) => {
+      if (res.response === 0) autoUpdater.quitAndInstall()
+    })
+  })
+  autoUpdater.on('error', (err) => {
+    if (SMOKE) smokeLog('updater error: ' + String(err && err.message ? err.message : err))
+  })
+
   registerIpc()
   createWindow()
+
+  // check for updates after window is ready (skip in dev/smoke)
+  if (!DEV && !SMOKE) {
+    setTimeout(() => { autoUpdater.checkForUpdates().catch(() => {}) }, 5000)
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

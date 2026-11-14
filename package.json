@@ -17,6 +17,7 @@
     "dist": "npm run build && electron-builder --win portable --publish never"
   },
   "dependencies": {
+    "electron-updater": "^6.8.11",
     "lucide-react": "^0.469.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -49,11 +50,19 @@
     "win": {
       "icon": "build/icon.ico",
       "target": [
-        "portable"
+        "nsis"
       ]
     },
-    "portable": {
-      "artifactName": "VAULTED-Launcher-${version}.exe"
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false,
+      "artifactName": "VAULTED-Launcher-${version}-Setup.exe"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "toer15",
+      "repo": "vaulted-launcher"
     }
   },
   "allowScripts": {
