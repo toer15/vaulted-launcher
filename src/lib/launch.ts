@@ -19,6 +19,8 @@ export interface DownloadProgress {
   total: number
   /** null when the server sends no content-length */
   percent: number | null
+  /** estimated seconds left, or null while the rate is unknown */
+  etaSeconds: number | null
   phase: 'downloading' | 'extracting'
 }
 

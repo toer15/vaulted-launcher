@@ -55,6 +55,8 @@ export type BuildState = 'missing' | 'downloading' | 'ready' | 'launching' | 'ru
 export interface DownloadState {
   /** null while the server hasn't reported a content-length */
   percent: number | null
+  /** estimated seconds left, or null while the rate is unknown */
+  etaSeconds: number | null
   phase: 'downloading' | 'extracting'
 }
 

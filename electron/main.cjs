@@ -332,16 +332,37 @@ async function downloadBuild(payload) {
     const filePath = path.join(targetDir, name)
 
     const handle = await fs.promises.open(filePath, 'w')
+    const startedAt = Date.now()
     let received = 0
-    send('arc:download-progress', { id, received, total, percent: total ? 0 : null, phase: 'downloading' })
+    send('arc:download-progress', {
+      id,
+      received,
+      total,
+      percent: total ? 0 : null,
+      etaSeconds: null,
+      phase: 'downloading',
+    })
 
     try {
       for await (const chunk of response.body) {
         await handle.write(chunk)
         received += chunk.length
         const percent = total ? Math.min(100, Math.round((received / total) * 100)) : null
+        const elapsedSeconds = (Date.now() - startedAt) / 1000
+        const bytesPerSecond = elapsedSeconds > 0 ? received / elapsedSeconds : 0
+        const etaSeconds =
+          total > 0 && bytesPerSecond > 0
+            ? Math.max(0, Math.round((total - received) / bytesPerSecond))
+            : null
 
-        send('arc:download-progress', { id, received, total, percent, phase: 'downloading' })
+        send('arc:download-progress', {
+          id,
+          received,
+          total,
+          percent,
+          etaSeconds,
+          phase: 'downloading',
+        })
 
         if (SMOKE_URL && (percent === null || percent - lastLogged >= 20 || percent === 100)) {
           lastLogged = percent ?? lastLogged
@@ -353,7 +374,14 @@ async function downloadBuild(payload) {
     }
 
     if (controller.signal.aborted) throw abortError()
-    send('arc:download-progress', { id, received, total, percent: 100, phase: 'extracting' })
+    send('arc:download-progress', {
+      id,
+      received,
+      total,
+      percent: 100,
+      etaSeconds: null,
+      phase: 'extracting',
+    })
     if (SMOKE_URL) smokeLog('download complete, extracting')
 
     if (/\.zip$/i.test(name)) {

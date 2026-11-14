@@ -41,7 +41,7 @@ import { loadState, saveState, uid } from './lib/storage'
 import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.15'
+const APP_VERSION = '1.0.16'
 const TOAST_TTL = 4200
 
 export default function App() {
@@ -243,7 +243,11 @@ export default function App() {
     const offProgress = subscribeDownloadProgress((progress) => {
       setDownloads((prev) => ({
         ...prev,
-        [progress.id]: { percent: progress.percent, phase: progress.phase },
+        [progress.id]: {
+          percent: progress.percent,
+          etaSeconds: progress.etaSeconds ?? null,
+          phase: progress.phase,
+        },
       }))
     })
 
@@ -343,7 +347,10 @@ export default function App() {
   const beginDownload = useCallback(
     async (build: Build, url: string) => {
       const key = artKeyFor(build.season) ?? build.id
-      setDownloads((prev) => ({ ...prev, [build.id]: { percent: 0, phase: 'downloading' } }))
+      setDownloads((prev) => ({
+        ...prev,
+        [build.id]: { percent: 0, phase: 'downloading', etaSeconds: null },
+      }))
       setPhase('idle')
 
       try {

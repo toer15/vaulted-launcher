@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.15",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.15/VAULTED-Launcher-1.0.15-Setup.exe",
-  "notes": "The Online segment now stays on the main split button for every season, locked until that build is installed, then unlocks with the server menu."
+  "version": "1.0.16",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.16/VAULTED-Launcher-1.0.16-Setup.exe",
+  "notes": "Downloads now show an estimated time remaining in minutes while the archive is downloading."
 }

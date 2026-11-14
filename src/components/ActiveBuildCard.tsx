@@ -39,6 +39,18 @@ interface ActiveBuildCardProps {
   onAddBuild: () => void
 }
 
+function formatEta(seconds: number | null | undefined): string | null {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return null
+  if (seconds <= 45) return 'Less than a minute left'
+
+  const totalMinutes = Math.max(1, Math.round(seconds / 60))
+  if (totalMinutes < 60) return `About ${totalMinutes} min left`
+
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  return minutes === 0 ? `About ${hours} hr left` : `About ${hours} hr ${minutes} min left`
+}
+
 const STATE_PILL: Record<BuildState, { label: string; dot: string; text: string }> = {
   missing: { label: 'Not installed', dot: 'bg-amber-400', text: 'text-amber-300' },
   downloading: { label: 'Downloading', dot: 'bg-emerald-400', text: 'text-emerald-300' },
@@ -107,6 +119,7 @@ export function ActiveBuildCard({
   const isInstalled = Boolean(installed?.[build.id])
 
   const hasDownloadSource = Boolean(artKeyFor(season) && sourceKeys?.has(artKeyFor(season)!))
+  const etaLabel = download?.phase === 'downloading' ? formatEta(download.etaSeconds) : null
 
   const primary = {
     missing: hasDownloadSource
@@ -127,7 +140,9 @@ export function ActiveBuildCard({
         download?.phase === 'extracting'
           ? 'Unpacking…'
           : download?.percent != null
-            ? `Downloading… ${download.percent}%`
+            ? etaLabel
+              ? `Downloading… ${download.percent}% · ${etaLabel}`
+              : `Downloading… ${download.percent}%`
             : 'Downloading…',
       icon: Loader2,
       background: 'linear-gradient(120deg, #10b981, #047857)',
@@ -236,7 +251,11 @@ export function ActiveBuildCard({
               </div>
               <div className="mt-1.5 flex items-center justify-between text-[11px]">
                 <span className="text-fog">
-                  {download.phase === 'extracting' ? 'Unpacking archive…' : 'Downloading build…'}
+                  {download.phase === 'extracting'
+                    ? 'Unpacking archive…'
+                    : etaLabel
+                      ? `Downloading build… · ${etaLabel}`
+                      : 'Downloading build…'}
                 </span>
                 <span className="font-mono font-semibold text-emerald-300">
                   {download.percent != null ? `${download.percent}%` : '…'}
