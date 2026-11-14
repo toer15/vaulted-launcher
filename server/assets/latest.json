@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.19",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.19/VAULTED-Launcher-1.0.19-Setup.exe",
-  "notes": "Parallel downloads now use a separate file handle for each byte range, and the assembled archive is verified byte-for-byte."
+  "version": "1.0.20",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.20/VAULTED-Launcher-1.0.20-Setup.exe",
+  "notes": "7z and RAR archives now extract automatically with the bundled full 7-Zip engine, so downloads finish ready to play instead of stopping after the archive lands."
 }

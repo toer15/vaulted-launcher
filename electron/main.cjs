@@ -2,7 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('ele
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
-const { spawn, execFile } = require('node:child_process')
+const { spawn } = require('node:child_process')
 const { autoUpdater } = require('electron-updater')
 
 const DEV = process.argv.includes('--dev')
@@ -19,7 +19,7 @@ let mainWindow = null
 const running = new Map()
 /** buildId -> AbortController */
 const downloads = new Map()
-/** buildId -> running PowerShell extraction process */
+/** buildId -> running archive extraction process */
 const extractions = new Map()
 
 /** pending automatic update install */
@@ -245,46 +245,79 @@ function abortError() {
   return error
 }
 
-function extractZip(zipPath, destination, controller, id) {
-  if (process.platform !== 'win32') {
-    return Promise.reject(new Error('Automatic .zip extraction is currently Windows-only. Unpack it and point VAULTED at the folder.'))
+let cachedSevenZip = null
+
+/** Full 7-Zip (not the cut-down 7za) so RAR and RAR5 archives work too. */
+function sevenZipBinary() {
+  if (cachedSevenZip) return cachedSevenZip
+
+  const candidates = []
+  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, '7zip', '7z.exe'))
+  candidates.push(path.join(__dirname, '..', 'node_modules', '7zip-bin-full', 'win', 'x64', '7z.exe'))
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      cachedSevenZip = candidate
+      return candidate
+    }
   }
 
-  const quote = (value) => value.replace(/'/g, "''")
-  const script = `Expand-Archive -LiteralPath '${quote(zipPath)}' -DestinationPath '${quote(destination)}' -Force`
+  throw new Error('The archive extractor is missing from this installation. Reinstall VAULTED.')
+}
+
+function extractArchive(archivePath, destination, controller, id) {
+  let binary
+  try {
+    binary = sevenZipBinary()
+  } catch (error) {
+    return Promise.reject(error)
+  }
 
   return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      const child = extractions.get(id)
-      if (child) {
-        try {
-          child.kill()
-        } catch {
-          /* already gone */
-        }
-      }
-    }
-
-    const child = execFile(
-      'powershell',
-      ['-NoProfile', '-NonInteractive', '-Command', script],
+    let stderr = ''
+    let finished = false
+    const child = spawn(
+      binary,
+      ['x', '-y', '-bso0', '-bse1', `-o${destination}`, archivePath],
       { windowsHide: true },
-      (error) => {
-        extractions.delete(id)
-        controller.signal.removeEventListener('abort', onAbort)
-        if (controller.signal.aborted) {
-          reject(abortError())
-        } else if (error) {
-          reject(new Error(`Could not extract the archive: ${error.message}`))
-        } else {
-          resolve()
-        }
-      },
     )
 
     extractions.set(id, child)
+
+    const onAbort = () => {
+      try {
+        child.kill()
+      } catch {
+        /* already gone */
+      }
+    }
+
+    const finish = (error) => {
+      if (finished) return
+      finished = true
+      extractions.delete(id)
+      controller.signal.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve()
+    }
+
+    controller.signal.addEventListener('abort', onAbort, { once: true })
+    child.stderr?.on('data', (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-8000)
+    })
+    child.on('error', (error) => {
+      finish(new Error(`Could not start the archive extractor: ${error.message}`))
+    })
+    child.on('close', (code) => {
+      if (controller.signal.aborted) finish(abortError())
+      else if (code === 0 || code === 1) finish()
+      else {
+        const detail = stderr.trim()
+        finish(new Error(`Could not extract the archive (7-Zip exited ${code}).${detail ? `\n${detail}` : ''}`))
+      }
+    })
+
     if (controller.signal.aborted) onAbort()
-    else controller.signal.addEventListener('abort', onAbort, { once: true })
   })
 }
 
@@ -588,8 +621,9 @@ async function downloadBuild(payload) {
     })
     if (SMOKE_URL) smokeLog('download complete, extracting')
 
-    if (/\.zip$/i.test(name)) {
-      await extractZip(filePath, targetDir, controller, id)
+    const extension = path.extname(name).toLowerCase()
+    if (extension === '.zip' || extension === '.7z' || extension === '.rar') {
+      await extractArchive(filePath, targetDir, controller, id)
     }
 
     if (controller.signal.aborted) throw abortError()
