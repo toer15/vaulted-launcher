@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.0",
-  "url": "",
-  "notes": ""
+  "version": "1.0.1",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.1/VAULTED-Launcher-1.0.1.exe",
+  "notes": "35 downloadable seasons across all chapters, plus per-build download availability badges."
 }
