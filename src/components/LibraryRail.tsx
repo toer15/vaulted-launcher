@@ -7,11 +7,12 @@ interface LibraryRailProps {
   activeId: string | null
   installed: Record<string, boolean>
   activeCounts: Record<string, number>
+  sourceKeys?: Set<string>
   onSelect: (id: string) => void
   onAdd: () => void
 }
 
-export function LibraryRail({ builds, activeId, installed, activeCounts, onSelect, onAdd }: LibraryRailProps) {
+export function LibraryRail({ builds, activeId, installed, activeCounts, sourceKeys, onSelect, onAdd }: LibraryRailProps) {
   return (
     <aside className="flex h-full flex-col rounded-3xl border border-line bg-panel/60 p-4 backdrop-blur-sm">
       <header className="flex items-center justify-between gap-2 px-1">
@@ -37,6 +38,7 @@ export function LibraryRail({ builds, activeId, installed, activeCounts, onSelec
           activeId={activeId}
           installed={installed}
           activeCounts={activeCounts}
+          sourceKeys={sourceKeys}
           onSelect={onSelect}
           onAdd={onAdd}
         />

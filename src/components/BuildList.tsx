@@ -11,11 +11,13 @@ interface BuildListProps {
   installed?: Record<string, boolean>
   /** season key -> players online right now */
   activeCounts?: Record<string, number>
+  /** season keys that have a download source in the manifest */
+  sourceKeys?: Set<string>
   onSelect: (id: string) => void
   onAdd: () => void
 }
 
-export function BuildList({ builds, activeId, installed, activeCounts, onSelect, onAdd }: BuildListProps) {
+export function BuildList({ builds, activeId, installed, activeCounts, sourceKeys, onSelect, onAdd }: BuildListProps) {
   if (builds.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-line px-4 py-10 text-center">
@@ -97,6 +99,26 @@ export function BuildList({ builds, activeId, installed, activeCounts, onSelect,
                         missing
                       </span>
                     )}
+                    {(() => {
+                      const key = artKeyFor(build.season)
+                      const hasSource = Boolean(key && sourceKeys?.has(key))
+                      if (installed?.[build.id]) return null
+                      return hasSource ? (
+                        <span
+                          title="Download available for this season"
+                          className="shrink-0 rounded bg-emerald-400/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-emerald-300"
+                        >
+                          downloadable
+                        </span>
+                      ) : (
+                        <span
+                          title="No download source for this season"
+                          className="shrink-0 rounded bg-white/5 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-fog/70"
+                        >
+                          no download
+                        </span>
+                      )
+                    })()}
                     {online > 0 && (
                       <span
                         title="Players in this season right now"

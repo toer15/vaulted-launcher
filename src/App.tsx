@@ -75,6 +75,8 @@ export default function App() {
 
   const native = useMemo(() => hasNativeBridge(), [])
 
+  const sourceKeys = useMemo(() => new Set(Object.keys(manifest?.seasons ?? {})), [manifest])
+
   const activeBuild = useMemo(
     () => builds.find((build) => build.id === activeId) ?? builds[0] ?? null,
     [builds, activeId],
@@ -691,6 +693,7 @@ export default function App() {
                 download={activeBuild ? downloads[activeBuild.id] ?? null : null}
                 activeNow={activeKey ? activeCounts[activeKey] ?? 0 : null}
                 account={account}
+                sourceKeys={sourceKeys}
                 onLogout={() => void handleLogout()}
                 onPrimary={handlePrimary}
                 onCancelDownload={handleCancelDownload}
@@ -705,6 +708,7 @@ export default function App() {
                 activeId={activeBuild?.id ?? null}
                 installed={installed}
                 activeCounts={activeCounts}
+                sourceKeys={sourceKeys}
                 onSelect={handleSelect}
                 onAdd={() => setDialogOpen(true)}
               />
@@ -726,6 +730,7 @@ export default function App() {
         builds={builds}
         activeId={activeBuild?.id ?? null}
         installed={installed}
+        sourceKeys={sourceKeys}
         onClose={() => setDrawerOpen(false)}
         activeCounts={activeCounts}
         onSelect={handleSelect}

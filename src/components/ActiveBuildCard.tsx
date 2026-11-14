@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import { AccountChip } from './AccountChip'
 import { BuildArt } from './BuildArt'
+import { artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import type { Account, Build, BuildState, DownloadState } from '../types'
 
@@ -23,6 +24,7 @@ interface ActiveBuildCardProps {
   /** players with this season open right now (null while unknown) */
   activeNow?: number | null
   account: Account
+  sourceKeys?: Set<string>
   onLogout: () => void
   onPrimary: () => void
   onCancelDownload: () => void
@@ -45,6 +47,7 @@ export function ActiveBuildCard({
   download,
   activeNow,
   account,
+  sourceKeys,
   onLogout,
   onPrimary,
   onCancelDownload,
@@ -78,13 +81,22 @@ export function ActiveBuildCard({
   const pill = STATE_PILL[state]
   const busy = state === 'launching' || state === 'downloading'
 
+  const hasDownloadSource = Boolean(artKeyFor(season) && sourceKeys?.has(artKeyFor(season)!))
+
   const primary = {
-    missing: {
-      label: `Download ${season.label}`,
-      icon: Download,
-      background: 'linear-gradient(120deg, #34d399, #059669)',
-      glow: 'rgba(16,185,129,0.55)',
-    },
+    missing: hasDownloadSource
+      ? {
+          label: `Download ${season.label}`,
+          icon: Download,
+          background: 'linear-gradient(120deg, #34d399, #059669)',
+          glow: 'rgba(16,185,129,0.55)',
+        }
+      : {
+          label: 'No download available',
+          icon: Ban,
+          background: 'linear-gradient(120deg, #64748b, #334155)',
+          glow: 'rgba(100,116,139,0.45)',
+        },
     downloading: {
       label: download?.percent != null ? `Downloading… ${download.percent}%` : 'Downloading…',
       icon: Loader2,
@@ -120,7 +132,9 @@ export function ActiveBuildCard({
   const PrimaryIcon = primary.icon
 
   const statusText: Record<BuildState, string> = {
-    missing: 'Not on this PC yet — download it to play.',
+    missing: hasDownloadSource
+      ? 'Not on this PC yet — download it to play.'
+      : 'Not on this PC, and no download source for this season.',
     downloading: download?.phase === 'extracting' ? 'Unpacking the build…' : 'Downloading the build…',
     ready: 'Ready when you are — client installed.',
     launching: 'Fortnite is starting. Have fun.',
@@ -224,9 +238,9 @@ export function ActiveBuildCard({
                     type="button"
                     onClick={(event) => {
                       event.stopPropagation()
-                      if (!busy) onPrimary()
+                      if (!busy && !(state === 'missing' && !hasDownloadSource)) onPrimary()
                     }}
-                    disabled={busy}
+                    disabled={busy || (state === 'missing' && !hasDownloadSource)}
                     className={cx(
                       'group relative inline-flex items-center gap-2.5 overflow-hidden rounded-xl px-5 py-3 text-[13.5px] font-semibold text-white transition-all duration-300',
                       busy
