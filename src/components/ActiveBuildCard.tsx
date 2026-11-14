@@ -109,7 +109,7 @@ export function ActiveBuildCard({
   const primary = {
     missing: hasDownloadSource
       ? {
-          label: `Start ${season.label}`,
+          label: `Download ${season.label}`,
           icon: Download,
           background: 'linear-gradient(120deg, #34d399, #059669)',
           glow: 'rgba(16,185,129,0.55)',
@@ -132,7 +132,7 @@ export function ActiveBuildCard({
       glow: 'rgba(16,185,129,0.45)',
     },
     ready: {
-      label: 'Play',
+      label: 'Start',
       icon: Play,
       background: 'linear-gradient(120deg, #7c8cff, #a855f7)',
       glow: 'rgba(124,140,255,0.6)',
