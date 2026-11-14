@@ -48,7 +48,9 @@
     "asar": true,
     "win": {
       "icon": "build/icon.ico",
-      "target": ["portable"]
+      "target": [
+        "portable"
+      ]
     },
     "portable": {
       "artifactName": "VAULTED-Launcher-${version}.exe"

@@ -1,5 +1,10 @@
 {
   "_format": "Map a season key (chapter-season, e.g. ch1-s3) to that season's archive. Keys: url (required, direct zip/http link), version (e.g. 3.6), sha256 (optional), and for seasons newer than the app: chapter, season, label, short, era.",
   "updatedAt": "2026-11-14T00:00:00.000Z",
-  "seasons": {}
+  "seasons": {
+    "ch2-s2": {
+      "url": "https://archive.org/compress/noctra-fortnite-12-41-build",
+      "version": "12.41"
+    }
+  }
 }

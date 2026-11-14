@@ -184,6 +184,13 @@ function scanForBuilds() {
     path.join(home, 'Documents'),
     'C:\\Fortnite Builds',
     'D:\\Fortnite Builds',
+    'E:\\Fortnite Builds',
+    'F:\\Fortnite Builds',
+    'C:\\Fortnite',
+    'D:\\Fortnite',
+    'E:\\Fortnite',
+    'D:\\',
+    'E:\\',
     path.join(app.getPath('userData'), 'builds'),
   ]
 
