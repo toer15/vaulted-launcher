@@ -51,31 +51,25 @@ export function sortBuilds(builds: Build[]): Build[] {
 }
 
 /**
- * Saved libraries from older versions only held a few builds. Add whichever
- * seasons are missing while keeping the user's own order and real paths.
+ * The library is the 43-season catalogue. Keep one build per season, prefer a
+ * real build over a placeholder, add any missing seasons, and drop duplicate
+ * or unmapped folders that older scans left behind.
  */
 export function ensureAllSeasons(builds: Build[]): Build[] {
-  const present = new Set(builds.filter((build) => build.season.known).map((build) => seasonKey(build.season)))
-  const missing = SEASON_CATALOGUE.filter((entry) => !present.has(seasonKey(entry.season)))
-  if (missing.length === 0) return builds
-
-  // first time the catalogue grows: lay the seasons out in release order,
-  // keeping the paths of builds that are already linked
   const bySeason = new Map<string, Build>()
+
   for (const build of builds) {
-    if (!build.season.known) continue
+    if (!build.season?.known) continue
     const key = seasonKey(build.season)
-    if (!bySeason.has(key)) bySeason.set(key, build)
+    if (!CATALOGUE_ORDER.has(key)) continue
+
+    const existing = bySeason.get(key)
+    if (!existing || (existing.placeholder && !build.placeholder)) {
+      bySeason.set(key, build)
+    }
   }
 
-  const ordered: Build[] = []
-  const placed = new Set<string>()
-  for (const entry of SEASON_CATALOGUE) {
-    const existing = bySeason.get(seasonKey(entry.season))
-    ordered.push(existing ?? catalogueBuild(entry))
-    if (existing) placed.add(existing.id)
-  }
-
-  // extra copies and unmapped builds keep their place, just at the end
-  return [...ordered, ...builds.filter((build) => !placed.has(build.id))]
+  return SEASON_CATALOGUE.map(
+    (entry) => bySeason.get(seasonKey(entry.season)) ?? catalogueBuild(entry),
+  )
 }

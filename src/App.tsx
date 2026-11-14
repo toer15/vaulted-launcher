@@ -41,7 +41,7 @@ import { loadState, saveState, uid } from './lib/storage'
 import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.13'
+const APP_VERSION = '1.0.14'
 const TOAST_TTL = 4200
 
 export default function App() {
@@ -290,6 +290,15 @@ export default function App() {
 
       const build = buildFromPath(path, uid())
 
+      if (!build.season.known) {
+        pushToast({
+          tone: 'error',
+          title: 'Could not identify that build',
+          description: 'The folder name does not contain a Fortnite version VAULTED recognises.',
+        })
+        return
+      }
+
       // a season already listed in the library: link the folder to that slot
       const slot = build.season.known
         ? builds.find(
@@ -518,6 +527,8 @@ export default function App() {
 
       for (const folder of folders) {
         const incoming = buildFromPath(folder, uid())
+        if (!incoming.season.known) continue
+
         const alreadyLinked = next.some(
           (build) => !build.placeholder && build.path.toLowerCase() === incoming.path.toLowerCase(),
         )

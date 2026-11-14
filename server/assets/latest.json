@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.13",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.13/VAULTED-Launcher-1.0.13-Setup.exe",
-  "notes": "The main action now reads Download [season] while the build is missing and Start once it is installed."
+  "version": "1.0.14",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.14/VAULTED-Launcher-1.0.14-Setup.exe",
+  "notes": "The library is normalized to the 43-season catalogue. Duplicate or unmapped folders are removed, and scans no longer add unrecognised builds."
 }
