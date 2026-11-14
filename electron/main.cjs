@@ -381,45 +381,56 @@ async function downloadParallel(parsed, partPath, total, signal, onChunk) {
     ranges.push({ start, end: Math.min(total - 1, start + segmentSize - 1) })
   }
 
-  const handle = await fs.promises.open(partPath, 'w')
-  await handle.truncate(total)
+  const prep = await fs.promises.open(partPath, 'w')
+  try {
+    await prep.truncate(total)
+  } finally {
+    await prep.close()
+  }
 
   const workers = new AbortController()
   const abortWorkers = () => workers.abort()
   signal.addEventListener('abort', abortWorkers, { once: true })
 
   const tasks = ranges.map(async ({ start, end }) => {
-    const response = await fetch(parsed, {
-      signal: workers.signal,
-      redirect: 'follow',
-      headers: { ...DOWNLOAD_HEADERS, Range: `bytes=${start}-${end}` },
-    })
-
-    if (response.status !== 206) {
-      try {
-        await response.body?.cancel()
-      } catch {
-        /* ignore */
-      }
-      throw new RangeUnsupportedError('The server did not honor byte ranges.')
-    }
-    if (!response.body) throw new Error('The server returned an empty range response.')
-
-    const reader = response.body.getReader()
-    let position = start
+    // A separate handle per range avoids concurrent writes racing through one
+    // file descriptor. Positional writes still target this range's exact slice.
+    const handle = await fs.promises.open(partPath, 'r+')
     try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        await writeAt(handle, value, position)
-        position += value.length
-        onChunk(value.length)
-      }
-    } finally {
-      reader.releaseLock()
-    }
+      const response = await fetch(parsed, {
+        signal: workers.signal,
+        redirect: 'follow',
+        headers: { ...DOWNLOAD_HEADERS, Range: `bytes=${start}-${end}` },
+      })
 
-    if (position !== end + 1) throw new Error('The server returned an incomplete byte range.')
+      if (response.status !== 206) {
+        try {
+          await response.body?.cancel()
+        } catch {
+          /* ignore */
+        }
+        throw new RangeUnsupportedError('The server did not honor byte ranges.')
+      }
+      if (!response.body) throw new Error('The server returned an empty range response.')
+
+      const reader = response.body.getReader()
+      let position = start
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          await writeAt(handle, value, position)
+          position += value.length
+          onChunk(value.length)
+        }
+      } finally {
+        reader.releaseLock()
+      }
+
+      if (position !== end + 1) throw new Error('The server returned an incomplete byte range.')
+    } finally {
+      await handle.close()
+    }
   })
 
   try {
@@ -430,7 +441,6 @@ async function downloadParallel(parsed, partPath, total, signal, onChunk) {
     throw error
   } finally {
     signal.removeEventListener('abort', abortWorkers)
-    await handle.close()
   }
 }
 
