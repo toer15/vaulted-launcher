@@ -8,7 +8,6 @@ import {
   FolderPlus,
   Globe,
   Loader2,
-  Lock,
   Play,
   ShieldCheck,
   Sparkles,
@@ -262,18 +261,12 @@ export function ActiveBuildCard({
           {/* actions are always on screen — no click-to-reveal */}
           <div className="mt-4">
             <div className="rounded-2xl border border-white/10 bg-ink/90 p-2 shadow-[0_36px_70px_-22px_rgba(0,0,0,0.95),0_10px_26px_-12px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      if (!busy && !(state === 'missing' && !hasDownloadSource)) onPrimary()
-                    }}
-                    disabled={busy || (state === 'missing' && !hasDownloadSource)}
+                <div className="relative flex flex-wrap items-center gap-2">
+                  <div
                     className={cx(
-                      'group relative inline-flex items-center gap-2.5 overflow-hidden rounded-xl px-5 py-3 text-[13.5px] font-semibold text-white transition-all duration-300',
+                      'inline-flex overflow-hidden rounded-xl transition-all duration-300',
                       busy
-                        ? 'cursor-progress opacity-85'
+                        ? 'opacity-85'
                         : 'hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]',
                     )}
                     style={{
@@ -281,10 +274,45 @@ export function ActiveBuildCard({
                       boxShadow: busy ? undefined : `0 14px 34px -16px ${primary.glow}`,
                     }}
                   >
-                    <span className="absolute inset-0 -translate-x-[120%] bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-[120%]" />
-                    <PrimaryIcon className={cx('h-4 w-4', busy && 'animate-spin')} />
-                    <span className="relative">{primary.label}</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setOnlineOpen(false)
+                        if (!busy && !(state === 'missing' && !hasDownloadSource)) onPrimary()
+                      }}
+                      disabled={busy || (state === 'missing' && !hasDownloadSource)}
+                      className={cx(
+                        'group relative inline-flex items-center gap-2.5 overflow-hidden px-5 py-3 text-[13.5px] font-semibold text-white',
+                        busy ? 'cursor-progress' : '',
+                      )}
+                    >
+                      <span className="absolute inset-0 -translate-x-[120%] bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-[120%]" />
+                      <PrimaryIcon className={cx('h-4 w-4', busy && 'animate-spin')} />
+                      <span className="relative">{primary.label}</span>
+                    </button>
+
+                    {servers && servers.length > 0 && installed?.[build.id] && (
+                      <>
+                        <span className="w-px self-stretch bg-white/20" aria-hidden />
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setOnlineOpen((current) => !current)
+                          }}
+                          disabled={busy}
+                          aria-expanded={onlineOpen}
+                          aria-label={`Community servers for ${season.label}`}
+                          className="inline-flex items-center gap-1.5 px-3 text-[10.5px] font-bold uppercase tracking-[0.14em] text-white/90 transition-colors duration-200 hover:bg-white/10 disabled:cursor-progress disabled:opacity-70"
+                        >
+                          <Globe className="h-3.5 w-3.5" />
+                          Online
+                          <ChevronDown className={cx('h-3.5 w-3.5 transition-transform', onlineOpen && 'rotate-180')} />
+                        </button>
+                      </>
+                    )}
+                  </div>
 
                   {state === 'downloading' && (
                     <button
@@ -311,81 +339,42 @@ export function ActiveBuildCard({
                     <ArrowLeftRight className="h-3.5 w-3.5" /> Change build
                   </button>
 
-                  {servers && servers.length > 0 && (
-                    <div className="relative">
+                  {servers && servers.length > 0 && onlineOpen && installed?.[build.id] && (
+                    <>
                       <button
                         type="button"
-                        disabled={!installed?.[build.id]}
-                        title={
-                          installed?.[build.id]
-                            ? `Open ${servers.map((server) => server.name).join(' or ')} for ${season.label}`
-                            : 'Download this season first — Play online unlocks once the build is on this PC.'
-                        }
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (!installed?.[build.id]) return
-                          if (servers.length === 1) {
-                            void openExternal(servers[0].url)
-                            return
-                          }
-                          setOnlineOpen((current) => !current)
-                        }}
-                        className={cx(
-                          'inline-flex items-center gap-2 rounded-xl border px-3.5 py-3 text-[12.5px] font-medium transition-colors duration-200',
-                          installed?.[build.id]
-                            ? 'border-emerald-400/30 bg-emerald-400/[0.08] text-emerald-200 hover:bg-emerald-400/15 hover:text-white'
-                            : 'cursor-not-allowed border-white/10 bg-white/[0.03] text-fog/60',
-                        )}
-                      >
-                        {installed?.[build.id] ? (
-                          <Globe className="h-3.5 w-3.5" />
-                        ) : (
-                          <Lock className="h-3.5 w-3.5" />
-                        )}
-                        {installed?.[build.id] ? 'Play online' : 'Online after download'}
-                        {installed?.[build.id] && servers.length > 1 && (
-                          <ChevronDown className={cx('h-3.5 w-3.5 transition-transform', onlineOpen && 'rotate-180')} />
-                        )}
-                      </button>
-
-                      {onlineOpen && installed?.[build.id] && (
-                        <>
+                        aria-label="Close online servers"
+                        tabIndex={-1}
+                        onClick={() => setOnlineOpen(false)}
+                        className="fixed inset-0 z-40 cursor-default"
+                      />
+                      <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-white/10 bg-ink/95 p-1.5 shadow-[0_24px_60px_-18px_rgba(0,0,0,0.95)] backdrop-blur-xl">
+                        <p className="px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-fog">
+                          {season.short} · community servers
+                        </p>
+                        {servers.map((server) => (
                           <button
+                            key={`${server.name}-${server.url}`}
                             type="button"
-                            aria-label="Close online servers"
-                            tabIndex={-1}
-                            onClick={() => setOnlineOpen(false)}
-                            className="fixed inset-0 z-40 cursor-default"
-                          />
-                          <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-white/10 bg-ink/95 p-1.5 shadow-[0_24px_60px_-18px_rgba(0,0,0,0.95)] backdrop-blur-xl">
-                            <p className="px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-fog">
-                              {season.short} · community servers
-                            </p>
-                            {servers.map((server) => (
-                              <button
-                                key={`${server.name}-${server.url}`}
-                                type="button"
-                                onClick={() => {
-                                  setOnlineOpen(false)
-                                  void openExternal(server.url)
-                                }}
-                                className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors duration-150 hover:bg-white/[0.07]"
-                              >
-                                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">
-                                  <Globe className="h-3.5 w-3.5" />
-                                </span>
-                                <span className="min-w-0">
-                                  <span className="block text-[12.5px] font-semibold text-mist">{server.name}</span>
-                                  <span className="block truncate font-mono text-[10.5px] text-fog">
-                                    {server.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
-                                  </span>
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        </>
-                      )}
-                    </div>
+                            onClick={() => {
+                              setOnlineOpen(false)
+                              void openExternal(server.url)
+                            }}
+                            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors duration-150 hover:bg-white/[0.07]"
+                          >
+                            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">
+                              <Globe className="h-3.5 w-3.5" />
+                            </span>
+                            <span className="min-w-0">
+                              <span className="block text-[12.5px] font-semibold text-mist">{server.name}</span>
+                              <span className="block truncate font-mono text-[10.5px] text-fog">
+                                {server.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                              </span>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
                   )}
 
                   <span className="ml-auto hidden items-center gap-1 pr-2 text-[10.5px] text-fog/70 sm:flex">

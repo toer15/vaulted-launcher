@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.11",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.11/VAULTED-Launcher-1.0.11-Setup.exe",
-  "notes": "Cancel now genuinely stops unpacking: the extraction process is terminated, the partial build folder is removed, and the button clearly says Cancel unpacking while the archive is being unpacked."
+  "version": "1.0.12",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.12/VAULTED-Launcher-1.0.12-Setup.exe",
+  "notes": "The separate Play online button is gone. Its Reboot/Carbon server picker now lives inside the main Start/Play button, so downloading, launching and going online are one control."
 }
