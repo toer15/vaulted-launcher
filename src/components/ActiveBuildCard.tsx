@@ -8,6 +8,7 @@ import {
   FolderPlus,
   Globe,
   Loader2,
+  Lock,
   Play,
   ShieldCheck,
   Sparkles,
@@ -103,6 +104,7 @@ export function ActiveBuildCard({
   const { season } = build
   const pill = STATE_PILL[state]
   const busy = state === 'launching' || state === 'downloading'
+  const isInstalled = Boolean(installed?.[build.id])
 
   const hasDownloadSource = Boolean(artKeyFor(season) && sourceKeys?.has(artKeyFor(season)!))
 
@@ -292,23 +294,37 @@ export function ActiveBuildCard({
                       <span className="relative">{primary.label}</span>
                     </button>
 
-                    {servers && servers.length > 0 && installed?.[build.id] && (
+                    {servers && servers.length > 0 && (
                       <>
                         <span className="w-px self-stretch bg-white/20" aria-hidden />
                         <button
                           type="button"
                           onClick={(event) => {
                             event.stopPropagation()
+                            if (!isInstalled) return
                             setOnlineOpen((current) => !current)
                           }}
-                          disabled={busy}
-                          aria-expanded={onlineOpen}
-                          aria-label={`Community servers for ${season.label}`}
-                          className="inline-flex items-center gap-1.5 px-3 text-[10.5px] font-bold uppercase tracking-[0.14em] text-white/90 transition-colors duration-200 hover:bg-white/10 disabled:cursor-progress disabled:opacity-70"
+                          disabled={busy || !isInstalled}
+                          aria-expanded={isInstalled && onlineOpen}
+                          aria-label={
+                            isInstalled
+                              ? `Community servers for ${season.label}`
+                              : `Community servers for ${season.label} (locked until this build is installed)`
+                          }
+                          title={isInstalled ? undefined : 'Install this build to use online servers'}
+                          className={cx(
+                            'inline-flex items-center gap-1.5 px-3 text-[10.5px] font-bold uppercase tracking-[0.14em] transition-colors duration-200',
+                            !isInstalled
+                              ? 'cursor-not-allowed bg-black/10 text-white/55'
+                              : 'text-white/90 hover:bg-white/10',
+                            busy && 'cursor-progress opacity-70',
+                          )}
                         >
-                          <Globe className="h-3.5 w-3.5" />
+                          {isInstalled ? <Globe className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
                           Online
-                          <ChevronDown className={cx('h-3.5 w-3.5 transition-transform', onlineOpen && 'rotate-180')} />
+                          {isInstalled && (
+                            <ChevronDown className={cx('h-3.5 w-3.5 transition-transform', onlineOpen && 'rotate-180')} />
+                          )}
                         </button>
                       </>
                     )}
@@ -339,7 +355,7 @@ export function ActiveBuildCard({
                     <ArrowLeftRight className="h-3.5 w-3.5" /> Change build
                   </button>
 
-                  {servers && servers.length > 0 && onlineOpen && installed?.[build.id] && (
+                  {servers && servers.length > 0 && onlineOpen && isInstalled && (
                     <>
                       <button
                         type="button"
