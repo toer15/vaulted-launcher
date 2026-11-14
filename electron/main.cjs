@@ -19,6 +19,8 @@ let mainWindow = null
 const running = new Map()
 /** buildId -> AbortController */
 const downloads = new Map()
+/** buildId -> running PowerShell extraction process */
+const extractions = new Map()
 
 /** pending automatic update install */
 let autoInstallTimer = null
@@ -237,7 +239,13 @@ function scanForBuilds() {
   return found
 }
 
-function extractZip(zipPath, destination) {
+function abortError() {
+  const error = new Error('The operation was aborted.')
+  error.name = 'AbortError'
+  return error
+}
+
+function extractZip(zipPath, destination, controller, id) {
   if (process.platform !== 'win32') {
     return Promise.reject(new Error('Automatic .zip extraction is currently Windows-only. Unpack it and point VAULTED at the folder.'))
   }
@@ -246,12 +254,37 @@ function extractZip(zipPath, destination) {
   const script = `Expand-Archive -LiteralPath '${quote(zipPath)}' -DestinationPath '${quote(destination)}' -Force`
 
   return new Promise((resolve, reject) => {
-    execFile(
+    const onAbort = () => {
+      const child = extractions.get(id)
+      if (child) {
+        try {
+          child.kill()
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+
+    const child = execFile(
       'powershell',
       ['-NoProfile', '-NonInteractive', '-Command', script],
       { windowsHide: true },
-      (error) => (error ? reject(new Error(`Could not extract the archive: ${error.message}`)) : resolve()),
+      (error) => {
+        extractions.delete(id)
+        controller.signal.removeEventListener('abort', onAbort)
+        if (controller.signal.aborted) {
+          reject(abortError())
+        } else if (error) {
+          reject(new Error(`Could not extract the archive: ${error.message}`))
+        } else {
+          resolve()
+        }
+      },
     )
+
+    extractions.set(id, child)
+    if (controller.signal.aborted) onAbort()
+    else controller.signal.addEventListener('abort', onAbort, { once: true })
   })
 }
 
@@ -277,6 +310,7 @@ async function downloadBuild(payload) {
   if (downloads.has(id)) throw new Error('This build is already downloading.')
 
   const targetDir = path.join(buildsRoot(), safeKey)
+  const targetExisted = fs.existsSync(targetDir)
   await fs.promises.mkdir(targetDir, { recursive: true })
 
   const controller = new AbortController()
@@ -318,20 +352,28 @@ async function downloadBuild(payload) {
       await handle.close()
     }
 
+    if (controller.signal.aborted) throw abortError()
     send('arc:download-progress', { id, received, total, percent: 100, phase: 'extracting' })
     if (SMOKE_URL) smokeLog('download complete, extracting')
 
     if (/\.zip$/i.test(name)) {
-      await extractZip(filePath, targetDir)
+      await extractZip(filePath, targetDir, controller, id)
     }
 
+    if (controller.signal.aborted) throw abortError()
     const executable = findExecutable(targetDir)
     return {
       filePath,
       executable,
       folder: executable ? folderForExecutable(executable) : targetDir,
     }
+  } catch (error) {
+    if (controller.signal.aborted && !targetExisted) {
+      await fs.promises.rm(targetDir, { recursive: true, force: true }).catch(() => {})
+    }
+    throw error
   } finally {
+    extractions.delete(id)
     downloads.delete(id)
   }
 }
@@ -362,10 +404,21 @@ function registerIpc() {
   })
 
   ipcMain.handle('arc:cancel-download', (_event, payload) => {
-    const controller = downloads.get(String(payload?.id))
-    if (!controller) return { cancelled: false }
-    controller.abort()
-    downloads.delete(String(payload?.id))
+    const id = String(payload?.id)
+    const controller = downloads.get(id)
+    const extractor = extractions.get(id)
+    if (!controller && !extractor) return { cancelled: false }
+
+    controller?.abort()
+    if (extractor) {
+      try {
+        extractor.kill()
+      } catch {
+        /* already gone */
+      }
+      extractions.delete(id)
+    }
+    downloads.delete(id)
     return { cancelled: true }
   })
 

@@ -122,7 +122,12 @@ export function ActiveBuildCard({
           glow: 'rgba(100,116,139,0.45)',
         },
     downloading: {
-      label: download?.percent != null ? `Downloading… ${download.percent}%` : 'Downloading…',
+      label:
+        download?.phase === 'extracting'
+          ? 'Unpacking…'
+          : download?.percent != null
+            ? `Downloading… ${download.percent}%`
+            : 'Downloading…',
       icon: Loader2,
       background: 'linear-gradient(120deg, #10b981, #047857)',
       glow: 'rgba(16,185,129,0.45)',
@@ -290,7 +295,8 @@ export function ActiveBuildCard({
                       }}
                       className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 px-3.5 py-3 text-[12.5px] font-semibold text-white shadow-[0_12px_28px_-14px_rgba(244,63,94,0.85)] transition-all duration-200 hover:from-rose-500 hover:to-red-500 hover:brightness-110 active:scale-[0.99]"
                     >
-                      <Ban className="h-3.5 w-3.5" /> Cancel
+                      <Ban className="h-3.5 w-3.5" />
+                      {download?.phase === 'extracting' ? 'Cancel unpacking' : 'Cancel'}
                     </button>
                   )}
 
