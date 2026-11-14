@@ -4,6 +4,7 @@ import {
   Check,
   Download,
   FolderPlus,
+  Globe,
   Loader2,
   Play,
   ShieldCheck,
@@ -25,6 +26,7 @@ interface ActiveBuildCardProps {
   activeNow?: number | null
   account: Account
   sourceKeys?: Set<string>
+  servers?: Array<{ name: string; url: string }>
   onLogout: () => void
   onPrimary: () => void
   onCancelDownload: () => void
@@ -48,6 +50,7 @@ export function ActiveBuildCard({
   activeNow,
   account,
   sourceKeys,
+  servers,
   onLogout,
   onPrimary,
   onCancelDownload,
@@ -280,6 +283,21 @@ export function ActiveBuildCard({
                   >
                     <ArrowLeftRight className="h-3.5 w-3.5" /> Change build
                   </button>
+
+                  {servers && servers.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        const url = servers[0].url
+                        if (window.arc?.openExternal) window.arc.openExternal(url)
+                        else window.open(url, '_blank')
+                      }}
+                      className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.08] px-3.5 py-3 text-[12.5px] font-medium text-emerald-200 transition-colors duration-200 hover:bg-emerald-400/15 hover:text-white"
+                    >
+                      <Globe className="h-3.5 w-3.5" /> Play online
+                    </button>
+                  )}
 
                   <span className="ml-auto hidden items-center gap-1 pr-2 text-[10.5px] text-fog/70 sm:flex">
                     <Sparkles className="h-3 w-3 text-amber-300/70" />

@@ -196,6 +196,7 @@ export interface BuildSource {
   url: string
   version?: string
   sha256?: string
+  servers?: Array<{ name: string; url: string }>
   /** extra seasons can declare their own chapter/season metadata */
   chapter?: number
   season?: number

@@ -4,155 +4,687 @@
   "seasons": {
     "ch2-s2": {
       "url": "https://archive.org/compress/noctra-fortnite-12-41-build",
-      "version": "12.41"
+      "version": "12.41",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch1-s1": {
       "url": "https://archive.org/download/fn-v1-archive/builds%2F1.10-Cert-CL-3790078.7z",
-      "version": "1.10"
+      "version": "1.10",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch1-s2": {
       "url": "https://archive.org/download/fn-v2-archive/builds%2F1.11-Cert-CL-3807424.7z",
-      "version": "1.11"
+      "version": "1.11",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch1-s3": {
       "url": "https://archive.org/download/fn-v3-archive/builds%2F3.0.0-CL-3901517.7z",
-      "version": "3.00"
+      "version": "3.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch1-s4": {
       "url": "https://archive.org/download/Fortnite-4.10-CL-4053532.zip/4.10-CL-4053532.zip",
-      "version": "4.10"
+      "version": "4.10",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch1-s5": {
       "url": "https://archive.org/download/Fortnite-5.41-CL-4363240.zip/5.41-CL-4363240.zip",
-      "version": "5.41"
+      "version": "5.41",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch1-s6": {
       "url": "https://archive.org/download/Fortnite-6.31-CL-4573279.rar/6.31-CL-4573279.rar",
-      "version": "6.31"
+      "version": "6.31",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch1-s7": {
       "url": "https://archive.org/download/fortnite-release-7.40-cl/Fortnite%20Release%207.40%20CL.rar",
-      "version": "7.40"
+      "version": "7.40",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch1-s8": {
       "url": "https://archive.org/download/Fortnite-8.40-CL-6005771.zip/8.40-CL-6005771.zip",
-      "version": "8.40"
+      "version": "8.40",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch1-s9": {
       "url": "https://archive.org/download/fn-v9-archive/builds%2F9.00-CL-6337466.7z",
-      "version": "9.00"
+      "version": "9.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch1-s10": {
       "url": "https://archive.org/download/Fortnite-10.40-CL-9380822.rar/10.40-CL-9380822.rar",
-      "version": "10.40"
+      "version": "10.40",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch2-s1": {
       "url": "https://archive.org/download/Fortnite-11.00-CL-9562734.7z/11.00-CL-9562734.7z",
-      "version": "11.00"
+      "version": "11.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch2-s3": {
       "url": "https://archive.org/download/fortnite-cl-13715544/Fortnite-cl-13715544.7z",
-      "version": "13.00"
+      "version": "13.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch2-s4": {
       "url": "https://archive.org/download/fortnite-release-14.50-cl-14643651.7z/%2B%2BFortnite%2BRelease-14.50-CL-14643651.7z",
-      "version": "14.50"
+      "version": "14.50",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch2-s5": {
       "url": "https://archive.org/download/fn-v15-archive/builds%2F15.00-CL-14835335.7z",
-      "version": "15.00"
+      "version": "15.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch2-s6": {
       "url": "https://archive.org/download/fn-v16-archive/builds%2F16.00-CL-15685441.7z",
-      "version": "16.00"
+      "version": "16.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch2-s7": {
       "url": "https://archive.org/download/fn-v17-archive/17.21-CL-16967001.7z",
-      "version": "17.21"
+      "version": "17.21",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch2-s8": {
       "url": "https://archive.org/download/fn-v18-archive/builds%2F18.00-CL-17468642.7z",
-      "version": "18.00"
+      "version": "18.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch3-s1": {
       "url": "https://archive.org/download/Fortnite-19.01-CL-18489740.zip/19.01-CL-18489740.zip",
-      "version": "19.01"
+      "version": "19.01",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch3-s2": {
       "url": "https://archive.org/download/fn-v20-archive/builds%2F20.00-CL-19458861.7z",
-      "version": "20.00"
+      "version": "20.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch3-s3": {
       "url": "https://archive.org/download/fn-v21-archive/builds%2F21.00-CL-20463113.7z",
-      "version": "21.00"
+      "version": "21.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch3-s4": {
       "url": "https://archive.org/download/fn-v22-archive/builds%2F22.00-CL-22149829.7z",
-      "version": "22.00"
+      "version": "22.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch4-s2": {
       "url": "https://archive.org/download/24.20-cl-25156858/24.20-CL-25156858.zip",
-      "version": "24.20"
+      "version": "24.20",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch4-s3": {
       "url": "https://archive.org/download/fn-v25-archive/builds%2F25.00-CL-25784668.7z",
-      "version": "25.00"
+      "version": "25.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch6-s2": {
       "url": "https://archive.org/download/fn-v34-archive/34.00-CL-40446427.zip",
-      "version": "34.00"
+      "version": "34.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch6-mini1": {
       "url": "https://archive.org/download/fortnite-cert-cl-3532353-1.-7z/%2B%2BFortnite%2BCert-CL-3532353%20%281%29.7z",
-      "version": "35.30"
+      "version": "35.30",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch6-s3": {
       "url": "https://archive.org/download/fn-v36-archive/36.00-CL-43214806.zip",
-      "version": "36.00"
+      "version": "36.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch6-s4": {
       "url": "https://archive.org/download/fn-v37-archive/37.00-CL-44501951.zip",
-      "version": "37.00"
+      "version": "37.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch6-mini2": {
       "url": "https://archive.org/download/fn-v38-archive/38.00-CL-47291259.zip",
-      "version": "38.00"
+      "version": "38.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch7-s1": {
       "url": "https://archive.org/download/fn-v39-archive/39.00-CL-48444883.zip",
-      "version": "39.00"
+      "version": "39.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch7-s3": {
       "url": "https://archive.org/download/41.20-cl-55550516/41.20-CL-55550516.zip",
-      "version": "41.20"
+      "version": "41.20",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch6-s1": {
       "url": "https://archive.org/download/fortniteBuild33.20/Fortnite.7z",
-      "version": "33.20"
+      "version": "33.20",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch7-s2": {
       "url": "https://archive.org/download/fortnite_202603/Fortnite.rar",
-      "version": "40.00"
+      "version": "40.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch4-s1": {
       "url": "https://archive.org/download/23.20-cl-23783097/23.20-CL-23783097.zip",
-      "version": "23.20"
+      "version": "23.20",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch5-s1": {
       "url": "https://archive.org/download/28.30-cl-31511038.7z/28.30-CL-31511038.7z",
-      "version": "28.30"
+      "version": "28.30",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch4-s5": {
       "url": "https://cdn.cbn.lol/27.00",
-      "version": "27.00"
+      "version": "27.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch5-s3": {
       "url": "https://cold-eu-agl-1.gofile.io/download/web/ffa037a2-b070-4941-875b-6158b5b131fa/%2B%2BFortnite%2BRelease-30.00-CL-33962396.rar",
-      "version": "30.00"
+      "version": "30.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     },
     "ch5-s4": {
       "url": "https://cold-na-phx-10.gofile.io/download/web/32cce581-05c7-4f1f-aad3-a21ab207b418/%2B%2BFortnite%2BRelease-31.41-CL-37324991-Windows.rar",
-      "version": "31.41"
+      "version": "31.41",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        },
+        {
+          "name": "FN-Builds",
+          "url": "https://fn-builds.net"
+        }
+      ]
     }
   }
 }
