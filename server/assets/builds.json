@@ -1,10 +1,22 @@
 {
   "_format": "Map a season key (chapter-season, e.g. ch1-s3) to that season's archive. Keys: url (required, direct zip/http link), version (e.g. 3.6), sha256 (optional), and for seasons newer than the app: chapter, season, label, short, era.",
-  "updatedAt": "2026-11-14T00:00:00.000Z",
+  "updatedAt": "2026-11-14T20:15:32.461Z",
   "seasons": {
+    "ch2-s2": {
+      "url": "https://archive.org/compress/noctra-fortnite-12-41-build",
+      "version": "12.41"
+    },
     "ch1-s1": {
-      "url": "https://archive.org/download/fortnite-release-1.9-cl-3757339/%2B%2BFortnite%2BRelease-1.9-CL-3757339.zip",
-      "version": "1.9"
+      "url": "https://archive.org/download/fn-v1-archive/builds%2F1.10-Cert-CL-3790078.7z",
+      "version": "1.10"
+    },
+    "ch1-s2": {
+      "url": "https://archive.org/download/fn-v2-archive/builds%2F1.11-Cert-CL-3807424.7z",
+      "version": "1.11"
+    },
+    "ch1-s3": {
+      "url": "https://archive.org/download/fn-v3-archive/builds%2F3.0.0-CL-3901517.7z",
+      "version": "3.00"
     },
     "ch1-s4": {
       "url": "https://archive.org/download/Fortnite-4.10-CL-4053532.zip/4.10-CL-4053532.zip",
@@ -26,6 +38,10 @@
       "url": "https://archive.org/download/Fortnite-8.40-CL-6005771.zip/8.40-CL-6005771.zip",
       "version": "8.40"
     },
+    "ch1-s9": {
+      "url": "https://archive.org/download/fn-v9-archive/builds%2F9.00-CL-6337466.7z",
+      "version": "9.00"
+    },
     "ch1-s10": {
       "url": "https://archive.org/download/Fortnite-10.40-CL-9380822.rar/10.40-CL-9380822.rar",
       "version": "10.40"
@@ -33,10 +49,6 @@
     "ch2-s1": {
       "url": "https://archive.org/download/Fortnite-11.00-CL-9562734.7z/11.00-CL-9562734.7z",
       "version": "11.00"
-    },
-    "ch2-s2": {
-      "url": "https://archive.org/compress/noctra-fortnite-12-41-build",
-      "version": "12.41"
     },
     "ch2-s3": {
       "url": "https://archive.org/download/fortnite-cl-13715544/Fortnite-cl-13715544.7z",
@@ -46,25 +58,81 @@
       "url": "https://archive.org/download/fortnite-release-14.50-cl-14643651.7z/%2B%2BFortnite%2BRelease-14.50-CL-14643651.7z",
       "version": "14.50"
     },
+    "ch2-s5": {
+      "url": "https://archive.org/download/fn-v15-archive/builds%2F15.00-CL-14835335.7z",
+      "version": "15.00"
+    },
+    "ch2-s6": {
+      "url": "https://archive.org/download/fn-v16-archive/builds%2F16.00-CL-15685441.7z",
+      "version": "16.00"
+    },
+    "ch2-s7": {
+      "url": "https://archive.org/download/fn-v17-archive/17.21-CL-16967001.7z",
+      "version": "17.21"
+    },
+    "ch2-s8": {
+      "url": "https://archive.org/download/fn-v18-archive/builds%2F18.00-CL-17468642.7z",
+      "version": "18.00"
+    },
     "ch3-s1": {
       "url": "https://archive.org/download/Fortnite-19.01-CL-18489740.zip/19.01-CL-18489740.zip",
       "version": "19.01"
     },
-    "ch6-s1": {
-      "url": "https://archive.org/download/fortniteBuild33.20/Fortnite.7z",
-      "version": "33.20"
+    "ch3-s2": {
+      "url": "https://archive.org/download/fn-v20-archive/builds%2F20.00-CL-19458861.7z",
+      "version": "20.00"
+    },
+    "ch3-s3": {
+      "url": "https://archive.org/download/fn-v21-archive/builds%2F21.00-CL-20463113.7z",
+      "version": "21.00"
+    },
+    "ch3-s4": {
+      "url": "https://archive.org/download/fn-v22-archive/builds%2F22.00-CL-22149829.7z",
+      "version": "22.00"
+    },
+    "ch4-s2": {
+      "url": "https://archive.org/download/fn-v24-archive/builds%2F24.00-CL-24554913.7z",
+      "version": "24.00"
+    },
+    "ch4-s3": {
+      "url": "https://archive.org/download/fn-v25-archive/builds%2F25.00-CL-25784668.7z",
+      "version": "25.00"
+    },
+    "ch6-s2": {
+      "url": "https://archive.org/download/fn-v34-archive/34.00-CL-40446427.zip",
+      "version": "34.00"
     },
     "ch6-mini1": {
       "url": "https://archive.org/download/fortnite-cert-cl-3532353-1.-7z/%2B%2BFortnite%2BCert-CL-3532353%20%281%29.7z",
       "version": "35.30"
     },
-    "ch7-s2": {
-      "url": "https://archive.org/download/fortnite_202603/Fortnite.rar",
-      "version": "40.00"
+    "ch6-s3": {
+      "url": "https://archive.org/download/fn-v36-archive/36.00-CL-43214806.zip",
+      "version": "36.00"
+    },
+    "ch6-s4": {
+      "url": "https://archive.org/download/fn-v37-archive/37.00-CL-44501951.zip",
+      "version": "37.00"
+    },
+    "ch6-mini2": {
+      "url": "https://archive.org/download/fn-v38-archive/38.00-CL-47291259.zip",
+      "version": "38.00"
+    },
+    "ch7-s1": {
+      "url": "https://archive.org/download/fn-v39-archive/39.00-CL-48444883.zip",
+      "version": "39.00"
     },
     "ch7-s3": {
       "url": "https://archive.org/download/41.20-cl-55550516/41.20-CL-55550516.zip",
       "version": "41.20"
+    },
+    "ch6-s1": {
+      "url": "https://archive.org/download/fortniteBuild33.20/Fortnite.7z",
+      "version": "33.20"
+    },
+    "ch7-s2": {
+      "url": "https://archive.org/download/fortnite_202603/Fortnite.rar",
+      "version": "40.00"
     }
   }
 }
