@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.3",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.3/VAULTED-Launcher-1.0.3-Setup.exe",
-  "notes": "35 downloadable seasons across all chapters, plus per-build download availability badges."
+  "version": "1.0.4",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.4/VAULTED-Launcher-1.0.4-Setup.exe",
+  "notes": "Test release for silent auto-update."
 }
