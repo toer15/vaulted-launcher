@@ -41,7 +41,7 @@ import { loadState, saveState, uid } from './lib/storage'
 import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.20'
+const APP_VERSION = '1.0.21'
 const TOAST_TTL = 4200
 
 export default function App() {
@@ -345,7 +345,7 @@ export default function App() {
   )
 
   const beginDownload = useCallback(
-    async (build: Build, url: string) => {
+    async (build: Build, url: string, sha256?: string) => {
       const key = artKeyFor(build.season) ?? build.id
       setDownloads((prev) => ({
         ...prev,
@@ -354,7 +354,7 @@ export default function App() {
       setPhase('idle')
 
       try {
-        const result = await startDownload(build.id, key, url)
+        const result = await startDownload(build.id, key, url, sha256)
         setInstalled((prev) => ({ ...prev, [build.id]: Boolean(result.executable) }))
 
         if (result.executable) {
@@ -433,7 +433,7 @@ export default function App() {
         return
       }
 
-      void beginDownload(build, source.url)
+      void beginDownload(build, source.url, source.sha256)
     },
     [beginDownload, manifest, pushToast],
   )

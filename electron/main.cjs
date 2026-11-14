@@ -2,6 +2,7 @@ const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('ele
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
+const crypto = require('node:crypto')
 const { spawn } = require('node:child_process')
 const { autoUpdater } = require('electron-updater')
 
@@ -9,6 +10,8 @@ const DEV = process.argv.includes('--dev')
 const SMOKE = process.argv.includes('--smoke')
 /** set to a direct archive URL to exercise the downloader in smoke mode */
 const SMOKE_URL = process.env.RIFT_SMOKE_URL ?? ''
+/** optional expected hash for a smoke download */
+const SMOKE_SHA256 = process.env.RIFT_SMOKE_SHA256 ?? ''
 /** e.g. RIFT_SMOKE_SIZE=1600x900 — lets the smoke capture use a larger window */
 const SMOKE_SIZE = process.env.RIFT_SMOKE_SIZE ?? ''
 
@@ -243,6 +246,43 @@ function abortError() {
   const error = new Error('The operation was aborted.')
   error.name = 'AbortError'
   return error
+}
+
+/** Normalize a manifest checksum, rejecting anything that is not real SHA-256. */
+function normalizeSha256(value) {
+  if (typeof value !== 'string' || !value.trim()) return null
+  const normalized = value.trim().toLowerCase()
+  if (!/^[a-f0-9]{64}$/.test(normalized)) {
+    throw new Error('The archive checksum in the build manifest is not a valid SHA-256 hash.')
+  }
+  return normalized
+}
+
+/** Hash the bytes that actually reached disk, not the network stream. */
+function sha256File(filePath, signal) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha256')
+    const stream = fs.createReadStream(filePath)
+    let finished = false
+
+    const finish = (error, digest) => {
+      if (finished) return
+      finished = true
+      signal.removeEventListener('abort', onAbort)
+      stream.destroy()
+      if (error) reject(error)
+      else resolve(digest)
+    }
+
+    const onAbort = () => finish(abortError())
+
+    signal.addEventListener('abort', onAbort, { once: true })
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.on('end', () => finish(null, hash.digest('hex')))
+    stream.on('error', (error) => finish(error))
+
+    if (signal.aborted) onAbort()
+  })
 }
 
 let cachedSevenZip = null
@@ -486,6 +526,7 @@ async function downloadParallel(parsed, partPath, total, signal, onChunk) {
 async function downloadBuild(payload) {
   const { id, key, url } = payload ?? {}
   if (typeof id !== 'string' || !id) throw new Error('Invalid download request.')
+  const expectedSha256 = normalizeSha256(payload?.sha256)
 
   let parsed
   try {
@@ -608,6 +649,25 @@ async function downloadBuild(payload) {
     if (controller.signal.aborted) throw abortError()
     report(true)
 
+    if (expectedSha256) {
+      send('arc:download-progress', {
+        id,
+        received,
+        total,
+        percent: 100,
+        etaSeconds: null,
+        phase: 'verifying',
+      })
+      if (SMOKE_URL) smokeLog('download complete, verifying checksum')
+
+      const actualSha256 = await sha256File(partPath, controller.signal)
+      if (actualSha256 !== expectedSha256) {
+        throw new Error(
+          `Download checksum mismatch for ${name}. The archive is corrupted and was not installed. Expected ${expectedSha256}, got ${actualSha256}.`,
+        )
+      }
+    }
+
     await fs.promises.rm(filePath, { force: true })
     await fs.promises.rename(partPath, filePath)
 
@@ -628,13 +688,30 @@ async function downloadBuild(payload) {
 
     if (controller.signal.aborted) throw abortError()
     const executable = findExecutable(targetDir)
+    const archiveWasExtracted = extension === '.zip' || extension === '.7z' || extension === '.rar'
+
+    // Only a confirmed install is allowed to discard the archive. A missing
+    // executable, an extraction error, or a cancellation keeps it for manual
+    // recovery.
+    if (executable && archiveWasExtracted) {
+      try {
+        await fs.promises.rm(filePath, { force: true })
+        if (SMOKE_URL) smokeLog('archive deleted after successful install')
+      } catch {
+        // The installed build is still usable if antivirus or a file lock
+        // prevents cleanup; leave the archive in place.
+      }
+    }
+
     return {
       filePath,
       executable,
       folder: executable ? folderForExecutable(executable) : targetDir,
     }
   } catch (error) {
-    if (controller.signal.aborted && !targetExisted) {
+    // Never wipe a completed archive because extraction failed or the user
+    // cancelled. Only remove an empty target created by a failed download.
+    if (!fs.existsSync(filePath) && !targetExisted) {
       await fs.promises.rm(targetDir, { recursive: true, force: true }).catch(() => {})
     }
     throw error
@@ -776,7 +853,12 @@ function runSmokeTest() {
   if (SMOKE_URL) {
     void (async () => {
       try {
-        const result = await downloadBuild({ id: 'smoke-build', key: 'smoke-build', url: SMOKE_URL })
+        const result = await downloadBuild({
+          id: 'smoke-build',
+          key: 'smoke-build',
+          url: SMOKE_URL,
+          sha256: SMOKE_SHA256 || undefined,
+        })
         smokeLog('DOWNLOAD_OK ' + JSON.stringify(result))
         app.quit()
       } catch (error) {

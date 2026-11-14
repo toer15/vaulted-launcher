@@ -21,7 +21,7 @@ export interface DownloadProgress {
   percent: number | null
   /** estimated seconds left, or null while the rate is unknown */
   etaSeconds: number | null
-  phase: 'downloading' | 'extracting'
+  phase: 'downloading' | 'verifying' | 'extracting'
 }
 
 export interface DownloadResult {
@@ -39,7 +39,7 @@ export interface LauncherBridge {
   launchBuild(payload: LaunchPayload): Promise<{ pid: number | null }>
   closeBuild?(payload: { id: string }): Promise<{ closed: boolean }>
   checkBuilds?(builds: Array<{ id: string; executable: string }>): Promise<Record<string, boolean>>
-  downloadBuild?(payload: { id: string; key: string; url: string }): Promise<DownloadResult>
+  downloadBuild?(payload: { id: string; key: string; url: string; sha256?: string }): Promise<DownloadResult>
   cancelDownload?(payload: { id: string }): Promise<{ cancelled: boolean }>
   onDownloadProgress?(callback: (progress: DownloadProgress) => void): () => void
   onBuildExited?(callback: (payload: { id: string }) => void): () => void
@@ -120,13 +120,13 @@ export async function checkInstalledBuilds(builds: Build[]): Promise<Record<stri
   }
 }
 
-export async function startDownload(id: string, key: string, url: string): Promise<DownloadResult> {
+export async function startDownload(id: string, key: string, url: string, sha256?: string): Promise<DownloadResult> {
   if (!window.arc?.downloadBuild) {
     throw new Error('Downloads need the desktop app — run "npm run app".')
   }
 
   try {
-    return await window.arc.downloadBuild({ id, key, url })
+    return await window.arc.downloadBuild({ id, key, url, sha256 })
   } catch (error) {
     throw cleanIpcError(error)
   }

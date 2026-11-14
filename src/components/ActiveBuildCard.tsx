@@ -139,7 +139,9 @@ export function ActiveBuildCard({
       label:
         download?.phase === 'extracting'
           ? 'Unpacking…'
-          : download?.percent != null
+          : download?.phase === 'verifying'
+            ? 'Verifying checksum…'
+            : download?.percent != null
             ? etaLabel
               ? `Downloading… ${download.percent}% · ${etaLabel}`
               : `Downloading… ${download.percent}%`
@@ -180,7 +182,12 @@ export function ActiveBuildCard({
     missing: hasDownloadSource
       ? 'Not on this PC yet — download it to play.'
       : 'Not on this PC, and no download source for this season.',
-    downloading: download?.phase === 'extracting' ? 'Unpacking the build…' : 'Downloading the build…',
+    downloading:
+      download?.phase === 'extracting'
+        ? 'Unpacking the build…'
+        : download?.phase === 'verifying'
+          ? 'Verifying the archive checksum…'
+          : 'Downloading the build…',
     ready: 'Ready when you are — client installed.',
     launching: 'Fortnite is starting. Have fun.',
     running: 'Fortnite is running. Have fun.',
@@ -253,9 +260,11 @@ export function ActiveBuildCard({
                 <span className="text-fog">
                   {download.phase === 'extracting'
                     ? 'Unpacking archive…'
-                    : etaLabel
-                      ? `Downloading build… · ${etaLabel}`
-                      : 'Downloading build…'}
+                    : download.phase === 'verifying'
+                      ? 'Verifying checksum…'
+                      : etaLabel
+                        ? `Downloading build… · ${etaLabel}`
+                        : 'Downloading build…'}
                 </span>
                 <span className="font-mono font-semibold text-emerald-300">
                   {download.percent != null ? `${download.percent}%` : '…'}

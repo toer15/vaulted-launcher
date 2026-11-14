@@ -57,7 +57,7 @@ export interface DownloadState {
   percent: number | null
   /** estimated seconds left, or null while the rate is unknown */
   etaSeconds: number | null
-  phase: 'downloading' | 'extracting'
+  phase: 'downloading' | 'verifying' | 'extracting'
 }
 
 export interface ToastMessage {
