@@ -67,8 +67,43 @@ export interface ToastMessage {
   tone: 'success' | 'info' | 'error'
 }
 
-export type ShopItemType = 'outfit' | 'emote' | 'pickaxe' | 'glider' | 'backpack'
-export type ShopRarity = 'uncommon' | 'rare' | 'epic' | 'legendary'
+export type ShopItemType =
+  | 'outfit'
+  | 'backpack'
+  | 'pickaxe'
+  | 'glider'
+  | 'emote'
+  | 'wrap'
+  | 'contrail'
+  | 'spray'
+  | 'emoji'
+  | 'loadingscreen'
+  | 'music'
+  | 'toy'
+  | 'pet'
+  | 'petcarrier'
+  | 'sidekick'
+  | 'shoe'
+  | 'aura'
+  | 'banner'
+
+export type ShopRarity =
+  | 'common'
+  | 'uncommon'
+  | 'rare'
+  | 'epic'
+  | 'legendary'
+  | 'mythic'
+  | 'marvel'
+  | 'dc'
+  | 'icon'
+  | 'gaminglegends'
+  | 'starwars'
+  | 'shadow'
+  | 'frozen'
+  | 'lava'
+  | 'slurp'
+  | 'dark'
 
 export interface ShopItem {
   id: string
@@ -78,6 +113,20 @@ export interface ShopItem {
   rarity: ShopRarity
   price: number
   season: string
+  /** remote cosmetic art; bundled classics use a local PNG instead */
+  image?: string
+  setName?: string
+  series?: string
+  description?: string
+}
+
+export interface ShopHoliday {
+  id: string
+  name: string
+  tagline: string
+  accent: string
+  accentAlt: string
+  soft: string
 }
 
 export interface ShopProgress {
@@ -99,6 +148,7 @@ export interface ShopState {
 
 export interface ShopDay {
   day: string
+  holiday: ShopHoliday | null
   featured: ShopItem[]
   daily: ShopItem[]
 }

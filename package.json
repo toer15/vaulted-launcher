@@ -2,7 +2,7 @@
   "name": "vaulted-launcher",
   "productName": "VAULTED Launcher",
   "private": true,
-  "version": "1.0.22",
+  "version": "1.0.23",
   "description": "VAULTED — Fortnite build launcher",
   "author": "VAULTED",
   "type": "module",
@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "app": "npm run build && electron .",
     "app:dev": "electron . --dev",
+    "catalog": "node scripts/build-shop-catalog.cjs",
     "icon": "electron scripts/make-icon.cjs",
     "dist": "npm run build && electron-builder --win nsis --publish never"
   },

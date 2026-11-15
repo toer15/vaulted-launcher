@@ -168,6 +168,7 @@ export function useItemShop({ builds, installed, activeId, runningId }: UseItemS
   return {
     day,
     shop,
+    catalogCount: SHOP_CATALOG.length,
     vbucks: state.vbucks,
     owned: state.owned,
     progress: state.progress,

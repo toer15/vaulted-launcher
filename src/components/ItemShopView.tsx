@@ -5,21 +5,31 @@ import {
   ChevronDown,
   Clock3,
   Coins,
+  Disc3,
+  Flag,
+  Footprints,
+  Gamepad2,
   Hammer,
+  Image,
   Music2,
+  Paintbrush,
+  PawPrint,
   Play,
   Shirt,
+  Smile,
   Sparkles,
+  SprayCan,
   Store,
+  Sun,
   Timer,
   Trophy,
+  UserRound,
   Wind,
   type LucideIcon,
 } from 'lucide-react'
 import {
   DAILY_CHALLENGES,
   RARITY_META,
-  SHOP_CATALOG,
   SHOP_TYPE_LABEL,
   challengeValue,
   formatCountdown,
@@ -35,14 +45,28 @@ import type { Build, ShopDay, ShopItem, ShopItemType, ShopProgress, ToastMessage
 
 const TYPE_ICONS: Record<ShopItemType, LucideIcon> = {
   outfit: Shirt,
-  emote: Music2,
+  backpack: Backpack,
   pickaxe: Hammer,
   glider: Wind,
-  backpack: Backpack,
+  emote: Music2,
+  wrap: Paintbrush,
+  contrail: Wind,
+  spray: SprayCan,
+  emoji: Smile,
+  loadingscreen: Image,
+  music: Disc3,
+  toy: Gamepad2,
+  pet: PawPrint,
+  petcarrier: PawPrint,
+  sidekick: UserRound,
+  shoe: Footprints,
+  aura: Sun,
+  banner: Flag,
 }
 
 interface ItemShopViewProps {
   shop: ShopDay
+  catalogCount: number
   vbucks: number
   owned: string[]
   progress: ShopProgress
@@ -73,11 +97,11 @@ function Price({ amount }: { amount: number }) {
   )
 }
 
-function SectionHeading({ eyebrow, title, detail }: { eyebrow: string; title: string; detail?: string }) {
+function SectionHeading({ eyebrow, title, detail, accent }: { eyebrow: string; title: string; detail?: string; accent?: string }) {
   return (
     <div className="mb-3 flex items-end justify-between gap-3 border-b border-[#29445c] pb-2.5">
       <div>
-        <p className="text-[9px] font-bold uppercase tracking-[0.24em] text-[#6ebbe5]">{eyebrow}</p>
+        <p className="text-[9px] font-bold uppercase tracking-[0.24em] text-[#6ebbe5]" style={accent ? { color: accent } : undefined}>{eyebrow}</p>
         <h2 className="mt-0.5 font-display text-[17px] font-bold uppercase tracking-[0.08em] text-[#f1e4c3]">{title}</h2>
       </div>
       {detail && <span className="pb-0.5 text-[10.5px] text-[#7f9bb1]">{detail}</span>}
@@ -87,6 +111,7 @@ function SectionHeading({ eyebrow, title, detail }: { eyebrow: string; title: st
 
 export function ItemShopView({
   shop,
+  catalogCount,
   vbucks,
   owned,
   progress,
@@ -109,6 +134,7 @@ export function ItemShopView({
 
   const refreshIn = nextShopRefresh(now).getTime() - now.getTime()
   const selectedInstalled = challengeBuild ? Boolean(installed[challengeBuild.id]) : false
+  const holiday = shop.holiday
 
   const buy = (item: ShopItem) => {
     const result = onPurchase(item.id)
@@ -148,18 +174,32 @@ export function ItemShopView({
   }
 
   return (
-    <section className="animate-fade-up relative overflow-hidden rounded-3xl border border-[#203b52] bg-[#07111c] shadow-[0_35px_90px_-45px_rgba(0,0,0,0.95)]">
-      <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#f6cf79] via-[#55c8ec] to-[#f6cf79]/30" />
+    <section
+      className="animate-fade-up relative overflow-hidden rounded-3xl border border-[#203b52] bg-[#07111c] shadow-[0_35px_90px_-45px_rgba(0,0,0,0.95)]"
+      style={holiday ? { borderColor: `${holiday.accent}66`, background: `radial-gradient(circle at 85% 0%, ${holiday.accent}22, transparent 42%), #07111c` } : undefined}
+    >
+      <div
+        className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#f6cf79] via-[#55c8ec] to-[#f6cf79]/30"
+        style={holiday ? { background: `linear-gradient(90deg, ${holiday.accent}, ${holiday.accentAlt}, ${holiday.accent}55)` } : undefined}
+      />
       <div className="shop-grid-bg pointer-events-none absolute inset-0 opacity-80" aria-hidden />
-      <div className="pointer-events-none absolute -right-32 -top-44 h-[460px] w-[460px] rounded-full bg-[#1e7fa8]/20 blur-[120px]" aria-hidden />
-      <div className="pointer-events-none absolute -bottom-44 -left-32 h-[420px] w-[420px] rounded-full bg-[#b4812a]/10 blur-[130px]" aria-hidden />
+      <div
+        className="pointer-events-none absolute -right-32 -top-44 h-[460px] w-[460px] rounded-full bg-[#1e7fa8]/20 blur-[120px]"
+        style={holiday ? { background: `${holiday.accent}24` } : undefined}
+        aria-hidden
+      />
+      <div
+        className="pointer-events-none absolute -bottom-44 -left-32 h-[420px] w-[420px] rounded-full bg-[#b4812a]/10 blur-[130px]"
+        style={holiday ? { background: `${holiday.accentAlt}18` } : undefined}
+        aria-hidden
+      />
 
       <div className="relative p-4 sm:p-6 xl:p-7">
         <header className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.25em] text-[#68c7e4]">
+            <div className="flex items-center gap-2 text-[9px] font-bold uppercase tracking-[0.25em] text-[#68c7e4]" style={holiday ? { color: holiday.accent } : undefined}>
               <Store className="h-3.5 w-3.5" />
-              VAULTED STORE // DAILY ROTATION
+              {holiday ? `${holiday.name.toUpperCase()} // HOLIDAY TAKEOVER` : 'VAULTED STORE // DAILY ROTATION'}
             </div>
             <h1 className="mt-2 font-display text-[2.4rem] font-black uppercase leading-none tracking-[0.045em] text-[#f5e5b8] drop-shadow-[0_3px_0_rgba(0,0,0,0.35)] sm:text-[3rem]">
               Item Shop
@@ -171,7 +211,16 @@ export function ItemShopView({
                 <Clock3 className="h-3 w-3 text-[#e4b85b]" />
                 Refreshes in <span className="font-mono tracking-wider text-[#f3d28c]">{formatCountdown(refreshIn)}</span>
               </span>
+              {holiday && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em]"
+                  style={{ borderColor: `${holiday.accent}55`, background: holiday.soft, color: holiday.accent }}
+                >
+                  <Sparkles className="h-2.5 w-2.5" /> {holiday.name} event
+                </span>
+              )}
             </p>
+            {holiday && <p className="mt-2 max-w-xl text-[11px] leading-relaxed text-[#c7d6df]">{holiday.tagline}</p>}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -186,7 +235,7 @@ export function ItemShopView({
             <div className="rounded-xl border border-[#2a465d] bg-[#0c1b28]/90 px-3.5 py-2.5">
               <span className="block text-[9px] font-bold uppercase tracking-[0.16em] text-[#7194ac]">Collection</span>
               <span className="mt-0.5 block font-mono text-[12px] font-semibold text-[#d7e3e9]">
-                {owned.length} <span className="text-[#627e91]">/ {SHOP_CATALOG.length}</span>
+                {owned.length} <span className="text-[#627e91]">/ {formatVbucks(catalogCount)}</span>
               </span>
             </div>
           </div>
@@ -194,7 +243,12 @@ export function ItemShopView({
 
         <div className="mt-6 grid gap-5 min-[1120px]:grid-cols-[minmax(0,1fr)_340px]">
           <div className="min-w-0">
-            <SectionHeading eyebrow="Marquee drops" title="Featured" detail="Today's biggest fits" />
+            <SectionHeading
+              eyebrow={holiday ? 'Holiday marquee' : 'Marquee drops'}
+              title="Featured"
+              detail={holiday ? `${holiday.name} exclusive fits` : "Today's biggest fits"}
+              accent={holiday?.accent}
+            />
             <div className="grid gap-3 lg:grid-cols-2">
               {shop.featured.map((item, index) => (
                 <FeaturedCard
@@ -209,7 +263,12 @@ export function ItemShopView({
             </div>
 
             <div className="mt-6">
-              <SectionHeading eyebrow="One day only" title="Daily Items" detail={`${shop.daily.length} drops`} />
+              <SectionHeading
+                eyebrow={holiday ? `${holiday.name} event` : 'One day only'}
+                title={holiday ? 'Holiday Items' : 'Daily Items'}
+                detail={`${shop.daily.length} ${holiday ? 'holiday ' : ''}drops`}
+                accent={holiday?.accent}
+              />
               <div className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-3">
                 {shop.daily.map((item) => (
                   <DailyCard
@@ -226,7 +285,7 @@ export function ItemShopView({
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#1c3547] bg-[#081722]/80 px-3 py-2.5 text-[10.5px] leading-relaxed text-[#6e8b9d]">
               <span className="inline-flex items-center gap-1.5">
                 <Sparkles className="h-3 w-3 text-[#e4b85b]" />
-                Item art © Epic Games. Purchases stay in your VAULTED collection.
+                {holiday ? `${holiday.name} stock only. Item art © Epic Games.` : 'Item art © Epic Games. Purchases stay in your VAULTED collection.'}
               </span>
               <span className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-[#516f83]">00:00 UTC reset</span>
             </div>
@@ -442,9 +501,10 @@ function FeaturedCard({
         <div className="relative w-[43%] min-w-[125px] shrink-0 overflow-hidden">
           <div className="absolute inset-0 opacity-35 blur-2xl" style={{ background: rarity.glow }} aria-hidden />
           <img
-            src={shopArt(item.slug)}
+            src={shopArt(item)}
             alt={item.name}
             draggable={false}
+            loading="lazy"
             className="absolute inset-0 h-full w-full scale-[1.08] object-contain object-bottom p-1 drop-shadow-[0_18px_22px_rgba(0,0,0,0.45)] transition-transform duration-500 group-hover:scale-[1.14]"
           />
           {owned && (
@@ -486,9 +546,10 @@ function DailyCard({
       >
         <div className="absolute inset-x-0 top-0 h-0.5" style={{ background: `linear-gradient(90deg, ${rarity.color}, transparent)` }} aria-hidden />
         <img
-          src={shopArt(item.slug)}
+          src={shopArt(item)}
           alt={item.name}
           draggable={false}
+          loading="lazy"
           className="relative h-full w-full object-contain object-center p-2 drop-shadow-[0_14px_18px_rgba(0,0,0,0.45)] transition-transform duration-500 group-hover:scale-105"
         />
         <span className="absolute left-2 top-2 inline-flex items-center gap-1 rounded-md border border-white/10 bg-black/45 px-1.5 py-1 text-[8px] font-semibold uppercase tracking-wide text-[#c7d7df] backdrop-blur">
