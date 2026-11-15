@@ -55,7 +55,7 @@ import type {
 } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.27'
+const APP_VERSION = '1.0.28'
 const TOAST_TTL = 4200
 
 interface VerifyJob {
@@ -457,9 +457,11 @@ export default function App() {
         } else {
           pushToast({
             tone: 'info',
-            title: 'Download finished',
+            title: 'Download finished — files kept',
             description:
-              'No client executable found in the archive — unpack it and use Change to point VAULTED at the folder.',
+              result.reason === 'mobile'
+                ? `This source contains a mobile build (iOS/Android), not a Windows client. The download was kept at ${result.filePath}.`
+                : `The archive was downloaded and unpacked, but no Windows client was found. Nothing was deleted — the files are in ${result.folder}.`,
           })
         }
       } catch (error) {

@@ -30,6 +30,7 @@ export interface DownloadResult {
   filePath: string
   executable: string | null
   folder: string
+  reason?: 'mobile' | 'no-executable' | null
 }
 
 /**

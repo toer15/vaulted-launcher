@@ -167,29 +167,69 @@ function assertBuild(payload) {
   }
 }
 
-function findExecutable(root, depth = 0) {
-  if (depth > 8) return null
+const CLIENT_EXE = 'fortniteclient-win64-shipping.exe'
 
-  let entries
-  try {
-    entries = fs.readdirSync(root, { withFileTypes: true })
-  } catch {
+/** Newer builds also ship bootstrapper copies next to the real client. */
+function isClientExecutableName(name) {
+  const lower = String(name).toLowerCase()
+  return lower === CLIENT_EXE || lower.startsWith(`${CLIENT_EXE}_`)
+}
+
+function findClientExecutable(root, accept) {
+  const visited = new Set()
+
+  const walk = (dir, depth) => {
+    if (depth > 16) return null
+
+    let real
+    try {
+      real = fs.realpathSync(dir).toLowerCase()
+    } catch {
+      return null
+    }
+    if (visited.has(real)) return null
+    visited.add(real)
+
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return null
+    }
+
+    for (const entry of entries) {
+      if (entry.isDirectory() || !accept(entry.name)) continue
+      const full = path.join(dir, entry.name)
+      try {
+        if (fs.statSync(full).size > 0) return full
+      } catch {
+        /* unreadable entry, keep looking */
+      }
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const found = walk(path.join(dir, entry.name), depth + 1)
+      if (found) return found
+    }
+
     return null
   }
 
-  for (const entry of entries) {
-    if (!entry.isDirectory() && entry.name.toLowerCase() === 'fortniteclient-win64-shipping.exe') {
-      return path.join(root, entry.name)
-    }
-  }
+  return walk(root, 0)
+}
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const found = findExecutable(path.join(root, entry.name), depth + 1)
-    if (found) return found
-  }
+function findPrimaryExecutable(root) {
+  return findClientExecutable(root, (name) => name.toLowerCase() === CLIENT_EXE)
+}
 
-  return null
+function findExecutable(root) {
+  // Prefer the real client. Only fall back to an EAC/EOS/BattlEye bootstrapper
+  // when an archive genuinely has no plain Shipping.exe.
+  return (
+    findPrimaryExecutable(root) ??
+    findClientExecutable(root, (name) => name.toLowerCase().startsWith(`${CLIENT_EXE}_`))
+  )
 }
 
 /** strips the standard "...\FortniteGame\Binaries\Win64\exe" tail to get the build root */
@@ -244,7 +284,7 @@ function scanForBuilds() {
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) {
         walk(full, depth + 1)
-      } else if (entry.name.toLowerCase() === 'fortniteclient-win64-shipping.exe') {
+      } else if (isClientExecutableName(entry.name)) {
         const root = folderForExecutable(full)
         const key = root.toLowerCase()
         if (!seen.has(key) && fs.existsSync(root)) {
@@ -701,6 +741,86 @@ function archiveName(parsed) {
   return name ? name.slice(-180) : 'build.zip'
 }
 
+const ARCHIVE_EXTENSIONS = new Set(['.zip', '.7z', '.rar', '.ipa', '.apk', '.iso'])
+
+function uniqueFilePath(directory, name) {
+  const candidate = path.join(directory, name)
+  if (!fs.existsSync(candidate)) return candidate
+
+  const extension = path.extname(name)
+  const base = extension ? name.slice(0, -extension.length) : name
+  for (let index = 1; index < 1000; index += 1) {
+    const next = path.join(directory, `${base}-${index}${extension}`)
+    if (!fs.existsSync(next)) return next
+  }
+  return path.join(directory, `${base}-${Date.now()}${extension}`)
+}
+
+function archiveTypeFromHeader(contentType, contentDisposition) {
+  const value = `${contentType} ${contentDisposition}`.toLowerCase()
+  if (/7z|x-7z/.test(value)) return '7z'
+  if (/rar|x-rar/.test(value)) return 'rar'
+  if (/iso9660|disk image/.test(value)) return 'iso'
+  if (/zip|compressed/.test(value)) return 'zip'
+  return null
+}
+
+function archiveTypeFromName(name) {
+  const extension = path.extname(name).toLowerCase()
+  if (extension === '.zip' || extension === '.ipa' || extension === '.apk') return 'zip'
+  if (extension === '.7z') return '7z'
+  if (extension === '.rar') return 'rar'
+  if (extension === '.iso') return 'iso'
+  return null
+}
+
+function extensionForArchiveType(type) {
+  if (type === 'zip') return '.zip'
+  if (type === '7z') return '.7z'
+  if (type === 'rar') return '.rar'
+  if (type === 'iso') return '.iso'
+  return ''
+}
+
+/** Read just enough bytes to tell an archive from an HTML/error page. */
+async function readFileHead(filePath, length = 512) {
+  const handle = await fs.promises.open(filePath, 'r')
+  try {
+    const buffer = Buffer.alloc(length)
+    const { bytesRead } = await handle.read(buffer, 0, length, 0)
+    return buffer.subarray(0, bytesRead)
+  } finally {
+    await handle.close()
+  }
+}
+
+function archiveTypeFromMagic(buffer) {
+  if (!buffer || buffer.length < 4) return null
+  if (buffer[0] === 0x50 && buffer[1] === 0x4b && [0x03, 0x05, 0x07].includes(buffer[2])) return 'zip'
+  if (buffer.subarray(0, 6).equals(Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c]))) return '7z'
+  if (buffer.subarray(0, 7).equals(Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00]))) return 'rar'
+  if (buffer.subarray(0, 7).equals(Buffer.from([0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01]))) return 'rar'
+  return null
+}
+
+function looksLikeWebPage(buffer) {
+  const head = buffer.toString('utf8', 0, Math.min(buffer.length, 512)).trimStart().toLowerCase()
+  return head.startsWith('<!doctype html') || head.startsWith('<html') || head.startsWith('<?xml')
+}
+
+async function inspectDownloadedFile(filePath, contentType, contentDisposition, requestedName) {
+  const head = await readFileHead(filePath)
+  if (looksLikeWebPage(head)) return { type: null, web: true }
+
+  return {
+    type:
+      archiveTypeFromMagic(head) ??
+      archiveTypeFromHeader(contentType, contentDisposition) ??
+      archiveTypeFromName(requestedName),
+    web: false,
+  }
+}
+
 function downloadConnectionCount(total) {
   if (total < MIN_PARALLEL_BYTES) return 1
   return Math.min(MAX_DOWNLOAD_CONNECTIONS, Math.max(2, Math.ceil(total / (4 * 1024 * 1024))))
@@ -727,7 +847,13 @@ async function probeRangeSupport(parsed, signal) {
     /* the probe is disposable */
   }
 
-  return { supported, total }
+  return {
+    supported,
+    total,
+    finalUrl: response.url || String(parsed),
+    contentType: (response.headers.get('content-type') || '').toLowerCase(),
+    contentDisposition: response.headers.get('content-disposition') || '',
+  }
 }
 
 async function writeAt(handle, buffer, position) {
@@ -832,6 +958,88 @@ async function downloadParallel(parsed, partPath, total, signal, onChunk) {
   }
 }
 
+function findNestedArchives(root, depth = 0, found = []) {
+  if (depth > 6 || found.length >= 4) return found
+
+  let entries
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true })
+  } catch {
+    return found
+  }
+
+  for (const entry of entries) {
+    if (entry.isDirectory()) continue
+    if (!entry.isFile()) continue
+    const extension = path.extname(entry.name).toLowerCase()
+    // .ipa/.apk are mobile packages, not another Windows archive layer.
+    if (!['.zip', '.7z', '.rar', '.iso'].includes(extension)) continue
+    found.push(path.join(root, entry.name))
+    if (found.length >= 4) return found
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.unpacked-')) continue
+    findNestedArchives(path.join(root, entry.name), depth + 1, found)
+    if (found.length >= 4) return found
+  }
+
+  return found
+}
+
+function hasMobilePayload(root, depth = 0) {
+  if (depth > 6) return false
+
+  let entries
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true })
+  } catch {
+    return false
+  }
+
+  for (const entry of entries) {
+    const lower = entry.name.toLowerCase()
+    if (entry.isDirectory()) {
+      if (lower === 'payload' || lower.endsWith('.app')) return true
+    } else if (lower.endsWith('.ipa') || lower.endsWith('.apk') || lower === 'androidmanifest.xml') {
+      return true
+    }
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.unpacked-')) continue
+    if (hasMobilePayload(path.join(root, entry.name), depth + 1)) return true
+  }
+
+  return false
+}
+
+/** Some mirrors wrap the real game inside another .zip/.7z/.rar. */
+async function unpackNestedArchives(root, downloadedArchive, controller, id) {
+  const archives = findNestedArchives(root).filter(
+    (candidate) => path.resolve(candidate) !== path.resolve(downloadedArchive),
+  )
+
+  for (const archive of archives) {
+    if (controller.signal.aborted) throw abortError()
+    const label = path.basename(archive).replace(/[^a-z0-9._-]/gi, '_').slice(-80)
+    const destination = path.join(path.dirname(archive), `.unpacked-${label}`)
+    try {
+      await fs.promises.mkdir(destination, { recursive: true })
+      await extractArchive(archive, destination, controller, id)
+    } catch (error) {
+      if (controller.signal.aborted) throw abortError()
+      // A nested archive that cannot be opened must not discard the outer
+      // download or anything already unpacked next to it.
+      continue
+    }
+    const executable = findPrimaryExecutable(destination) ?? findExecutable(destination)
+    if (executable) return executable
+  }
+
+  return null
+}
+
 /**
  * Streams an archive to disk, reports progress, unpacks .zip files and locates
  * the client executable. Large archives use parallel byte ranges so several
@@ -857,13 +1065,19 @@ async function downloadBuild(payload) {
   if (downloads.has(id)) throw new Error('This build is already downloading.')
 
   const targetDir = path.join(buildsRoot(), safeKey)
-  const targetExisted = fs.existsSync(targetDir)
+  const existingExecutable = findExecutable(targetDir)
+  if (existingExecutable) {
+    throw new Error(
+      `A build is already installed for this season at:\n${folderForExecutable(existingExecutable)}\n\nVAULTED will not overwrite or delete it. Delete that build first if you really want to download another copy.`,
+    )
+  }
   await fs.promises.mkdir(targetDir, { recursive: true })
 
-  const name = archiveName(parsed)
-  const filePath = path.join(targetDir, name)
-  const partPath = `${filePath}.part`
-  await fs.promises.rm(partPath, { force: true }).catch(() => {})
+  const requestedName = archiveName(parsed)
+  let filePath = uniqueFilePath(targetDir, requestedName)
+  // Never reuse or remove a previous .part file. A cancelled download stays on
+  // disk for manual recovery.
+  const partPath = uniqueFilePath(targetDir, `${requestedName}.part`)
 
   const controller = new AbortController()
   downloads.set(id, controller)
@@ -872,6 +1086,7 @@ async function downloadBuild(payload) {
   let startedAt = Date.now()
   let received = 0
   let total = 0
+  let probe = { supported: false, total: 0, finalUrl: String(parsed), contentType: '', contentDisposition: '' }
 
   const report = (force = false) => {
     const now = Date.now()
@@ -902,7 +1117,6 @@ async function downloadBuild(payload) {
   }
 
   try {
-    let probe = { supported: false, total: 0 }
     try {
       probe = await probeRangeSupport(parsed, controller.signal)
     } catch (error) {
@@ -978,12 +1192,42 @@ async function downloadBuild(payload) {
       const actualSha256 = await sha256File(partPath, controller.signal)
       if (actualSha256 !== expectedSha256) {
         throw new Error(
-          `Download checksum mismatch for ${name}. The archive is corrupted and was not installed. Expected ${expectedSha256}, got ${actualSha256}.`,
+          `Download checksum mismatch for ${requestedName}. The archive is corrupted and was not installed. Expected ${expectedSha256}, got ${actualSha256}.`,
         )
       }
     }
 
-    await fs.promises.rm(filePath, { force: true })
+    const inspection = await inspectDownloadedFile(
+      partPath,
+      probe.contentType,
+      probe.contentDisposition,
+      requestedName,
+    )
+
+    if (inspection.web) {
+      filePath = uniqueFilePath(targetDir, `${requestedName}.html`)
+      await fs.promises.rename(partPath, filePath)
+      throw new Error(
+        `The download source returned a web page instead of an archive. The file was kept at:\n${filePath}\n\nNothing was deleted. Try Refresh sources in Settings.`,
+      )
+    }
+
+    if (!inspection.type) {
+      filePath = uniqueFilePath(targetDir, requestedName)
+      await fs.promises.rename(partPath, filePath)
+      throw new Error(
+        `The downloaded file is not a supported archive. It was kept at:\n${filePath}\n\nNothing was deleted.`,
+      )
+    }
+
+    const extension = path.extname(requestedName).toLowerCase()
+    const finalName = ARCHIVE_EXTENSIONS.has(extension)
+      ? requestedName
+      : `${requestedName}${extensionForArchiveType(inspection.type)}`
+    filePath = uniqueFilePath(targetDir, finalName)
+
+    // Promote the finished download before touching it. Existing archives are
+    // never removed or overwritten; a second copy gets a -1/-2 suffix.
     await fs.promises.rename(partPath, filePath)
 
     send('arc:download-progress', {
@@ -996,42 +1240,37 @@ async function downloadBuild(payload) {
     })
     if (SMOKE_URL) smokeLog('download complete, extracting')
 
-    const extension = path.extname(name).toLowerCase()
-    if (extension === '.zip' || extension === '.7z' || extension === '.rar') {
+    const mobileArchive = path.extname(filePath).toLowerCase() === '.ipa' || path.extname(filePath).toLowerCase() === '.apk'
+    if (!mobileArchive) {
       await extractArchive(filePath, targetDir, controller, id)
+      if (controller.signal.aborted) throw abortError()
     }
 
-    if (controller.signal.aborted) throw abortError()
-    const executable = findExecutable(targetDir)
-    const archiveWasExtracted = extension === '.zip' || extension === '.7z' || extension === '.rar'
-
-    // Only a confirmed install is allowed to discard the archive. A missing
-    // executable, an extraction error, or a cancellation keeps it for manual
-    // recovery.
-    if (executable && archiveWasExtracted) {
-      try {
-        await fs.promises.rm(filePath, { force: true })
-        if (SMOKE_URL) smokeLog('archive deleted after successful install')
-      } catch {
-        // The installed build is still usable if antivirus or a file lock
-        // prevents cleanup; leave the archive in place.
-      }
+    let executable = findPrimaryExecutable(targetDir)
+    if (!executable && !mobileArchive) {
+      executable = await unpackNestedArchives(targetDir, filePath, controller, id)
     }
+    if (!executable) executable = findExecutable(targetDir)
 
+    const mobile = !executable && (mobileArchive || hasMobilePayload(targetDir))
+    const reason = executable ? null : mobile ? 'mobile' : 'no-executable'
+
+    // Deliberately never delete filePath here. The user's download is kept even
+    // after a successful install, and nothing is removed on failure either.
     return {
       filePath,
       executable,
       folder: executable ? folderForExecutable(executable) : targetDir,
+      reason,
     }
   } catch (error) {
-    // Never wipe a completed archive because extraction failed or the user
-    // cancelled. Only remove an empty target created by a failed download.
-    if (!fs.existsSync(filePath) && !targetExisted) {
-      await fs.promises.rm(targetDir, { recursive: true, force: true }).catch(() => {})
-    }
+    // Never wipe the target folder, archive, or extracted files because of a
+    // failed detection, extraction, checksum, or cancellation.
     throw error
   } finally {
-    await fs.promises.rm(partPath, { force: true }).catch(() => {})
+    // Only remove a .part that never received any bytes. Partial downloads are
+    // left in place for manual recovery instead of being silently discarded.
+    if (received === 0) await fs.promises.rm(partPath, { force: true }).catch(() => {})
     extractions.delete(id)
     downloads.delete(id)
   }
