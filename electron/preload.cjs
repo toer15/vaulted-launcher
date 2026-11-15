@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('arc', {
   cancelDownload: (payload) => ipcRenderer.invoke('arc:cancel-download', payload),
   onDownloadProgress: (callback) => subscribe('arc:download-progress', callback),
   onBuildExited: (callback) => subscribe('arc:build-exited', callback),
+  onLaunchStatus: (callback) => subscribe('arc:launch-status', callback),
   pickFolder: () => ipcRenderer.invoke('arc:pick-folder'),
   scanBuilds: () => ipcRenderer.invoke('arc:scan-builds'),
   checkUpdates: () => ipcRenderer.invoke('arc:check-updates'),

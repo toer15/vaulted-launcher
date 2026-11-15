@@ -5,6 +5,8 @@ export interface LaunchPayload {
   path: string
   executable: string
   version: string
+  /** private-server account name shown in Fortnite */
+  username?: string
 }
 
 export interface WindowControls {
@@ -45,6 +47,7 @@ export interface LauncherBridge {
   cancelDownload?(payload: { id: string }): Promise<{ cancelled: boolean }>
   onDownloadProgress?(callback: (progress: DownloadProgress) => void): () => void
   onBuildExited?(callback: (payload: { id: string }) => void): () => void
+  onLaunchStatus?(callback: (payload: { id?: string; message: string }) => void): () => void
   pickFolder?(): Promise<string | null>
   scanBuilds?(): Promise<string[]>
   checkUpdates?(): Promise<{ ok: boolean; version?: string | null; error?: string }>
@@ -86,7 +89,7 @@ function cleanIpcError(error: unknown): Error {
   return new Error(cleaned || 'Something went wrong.')
 }
 
-export async function launchBuild(build: Build): Promise<{ pid: number | null }> {
+export async function launchBuild(build: Build, username?: string): Promise<{ pid: number | null }> {
   if (!hasNativeBridge()) {
     throw new Error('Launching needs the desktop app — run "npm run app".')
   }
@@ -97,6 +100,7 @@ export async function launchBuild(build: Build): Promise<{ pid: number | null }>
       path: build.path,
       executable: build.executable,
       version: build.version,
+      username,
     })
   } catch (error) {
     throw cleanIpcError(error)

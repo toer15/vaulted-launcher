@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.25",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.25/VAULTED-Launcher-1.0.25-Setup.exe",
-  "notes": "Online now launches the downloaded build you selected instead of opening a community website. Every VAULTED-managed install has a Verify files button that checks executables, PAK headers, empty files, temp files and unreadable files. Item Shop purchases now sync to your VAULTED account, open in a full Locker, and stay equipped across every chapter and season."
+  "version": "1.0.26",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.26/VAULTED-Launcher-1.0.26-Setup.exe",
+  "notes": "Fortnite login now works on old builds. VAULTED starts its own local private server and injects the redirect before launch, so every season signs in with your VAULTED username instead of showing Login Failed. No website and no separate launcher setup required."
 }

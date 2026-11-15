@@ -2,7 +2,7 @@
   "name": "vaulted-launcher",
   "productName": "VAULTED Launcher",
   "private": true,
-  "version": "1.0.25",
+  "version": "1.0.26",
   "description": "VAULTED — Fortnite build launcher",
   "author": "VAULTED",
   "type": "module",
@@ -58,6 +58,10 @@
           "7z.dll",
           "License.txt"
         ]
+      },
+      {
+        "from": "runtime",
+        "to": "runtime"
       }
     ],
     "win": {

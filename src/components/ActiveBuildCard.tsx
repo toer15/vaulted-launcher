@@ -38,6 +38,7 @@ interface ActiveBuildCardProps {
   canDelete?: boolean
   deleting?: boolean
   selectedServerUrl?: string | null
+  launchStage?: string | null
   verify?: { phase: 'running' | 'done'; report?: BuildVerifyReport; error?: string } | null
   onLaunchOnline?: (server: { name: string; url: string }) => void
   onVerify?: () => void
@@ -83,6 +84,7 @@ export function ActiveBuildCard({
   canDelete,
   deleting,
   selectedServerUrl,
+  launchStage,
   verify,
   onLaunchOnline,
   onVerify,
@@ -222,7 +224,7 @@ export function ActiveBuildCard({
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
     ready: 'Ready when you are — client installed.',
-    launching: 'Fortnite is starting. Have fun.',
+    launching: launchStage ?? 'Fortnite is starting. Have fun.',
     running: 'Fortnite is running. Have fun.',
     error: 'Could not start the client. Check the build path and try again.',
   }

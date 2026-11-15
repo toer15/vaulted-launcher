@@ -55,7 +55,7 @@ import type {
 } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.25'
+const APP_VERSION = '1.0.26'
 const TOAST_TTL = 4200
 
 interface VerifyJob {
@@ -84,6 +84,7 @@ export default function App() {
     () => loadState()?.serverByBuild ?? {},
   )
   const [verifyJob, setVerifyJob] = useState<VerifyJob | null>(null)
+  const [launchStage, setLaunchStage] = useState<string | null>(null)
 
   const [session, setSession] = useState<RiftSession | null>(() => loadSession())
   const [manifest, setManifest] = useState<BuildManifest | null>(() => defaultBuilds as BuildManifest)
@@ -320,11 +321,17 @@ export default function App() {
     const offExit = subscribeBuildExit(({ id }) => {
       setRunningId((current) => (current === id ? null : current))
       setPhase((current) => (current === 'running' ? 'idle' : current))
+      setLaunchStage(null)
+    })
+
+    const offStatus = window.arc?.onLaunchStatus?.(({ message }) => {
+      setLaunchStage(message)
     })
 
     return () => {
       offProgress()
       offExit()
+      offStatus?.()
     }
   }, [native])
 
@@ -528,13 +535,16 @@ export default function App() {
         return
       }
 
-      // installed -> launch the selected client directly. Online is a launch
-      // profile, never a browser handoff.
+      // installed -> start the bundled private server, then launch the client
+      // with the redirected login. Online is a launch profile, never a browser
+      // handoff.
       setPhase('launching')
+      setLaunchStage('Preparing the private server…')
       try {
-        await launchBuild(build)
+        await launchBuild(build, session?.user.username)
         setRunningId(build.id)
         setPhase('running')
+        setLaunchStage(null)
         shop.sets.recordLaunch(build.id)
         pushToast({
           tone: 'success',
@@ -545,6 +555,7 @@ export default function App() {
         })
       } catch (error) {
         setPhase('error')
+        setLaunchStage(null)
         pushToast({
           tone: 'error',
           title: 'Launch failed',
@@ -552,7 +563,7 @@ export default function App() {
         })
       }
     },
-    [downloads, phase, installed, requestDownload, pushToast, runningId, shop.sets],
+    [downloads, phase, installed, requestDownload, pushToast, runningId, session?.user.username, shop.sets],
   )
 
   const handleLaunchOnline = useCallback(
@@ -983,6 +994,7 @@ export default function App() {
                 canDelete={canDeleteActive}
                 deleting={deletingId === activeBuild?.id}
                 selectedServerUrl={activeBuild ? serverByBuild[activeBuild.id] ?? null : null}
+                launchStage={launchStage}
                 verify={verifyJob?.id === activeBuild?.id ? verifyJob : null}
                 onLaunchOnline={handleLaunchOnline}
                 onVerify={() => void handleVerifyBuild()}

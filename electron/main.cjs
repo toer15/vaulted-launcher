@@ -3,7 +3,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const crypto = require('node:crypto')
-const { spawn } = require('node:child_process')
+const { spawn, execFile } = require('node:child_process')
 const { autoUpdater } = require('electron-updater')
 
 const DEV = process.argv.includes('--dev')
@@ -26,18 +26,22 @@ const downloads = new Map()
 const extractions = new Map()
 
 /**
- * Direct client launch flags. Without these the old clients hand off to the
- * installed Epic Games Launcher instead of booting the selected build.
+ * Every old Fortnite client needs a private server and a redirected login.
+ * The bundled backend listens here; Tellurium is injected into the client so
+ * its Epic requests are sent to that backend instead of the retired services.
  */
-const FORTNITE_LAUNCH_ARGS = [
-  '-epicapp=Fortnite',
-  '-epicenv=Prod',
-  '-epicportal',
-  '-epiclocale=en-us',
-  '-epicsandboxid=fn',
-  '-NOSSLPINNING',
-  '-skippatchcheck',
-]
+const BACKEND_PORT = 3551
+const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}/`
+const BACKEND_START_TIMEOUT = 60_000
+const BACKEND_PASSWORD = 'Rebooted'
+const LEGACY_FLTOKEN = '3db3ba5dcbd2e16703f3978d'
+const LEGACY_CALDERA =
+  'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50X2lkIjoiYmU5ZGE1YzJmYmVhNDQwN2IyZjQwZWJhYWQ4NTlhZDQiLCJnZW5lcmF0ZWQiOjE2Mzg3MTcyNzgsImNhbGRlcmFHdWlkIjoiMzgxMGI4NjMtMmE2NS00NDU3LTliNTgtNGRhYjNiNDgyYTg2IiwiYWNQcm92aWRlciI6IkVhc3lBbnRpQ2hlYXQiLCJub3RlcyI6IiIsImZhbGxiYWNrIjpmYWxzZX0.VAWQB67RTxhiWOxx7DBjnzDnXyyEnX7OljJm-j2d88G_WgwQ9wrE6lwMEHZHjBd1ISJdUO1UVUqkfLdU5nofBQ'
+const LEGACY_CALDERA_EOS =
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50X2lkIjoic2FyYWgiLCJnZW5lcmF0ZWQiOjE3NzQxMjEzNzksImNhbGRlcmFHdWlkIjoiZWYzMGE4MjUtMzFlNi00ZWRhLTlmM2EtZTI4YzgwNjYxODkxIiwiYWNQcm92aWRlciI6IkVhc3lBbnRpQ2hlYXRFT1MiLCJub3RlcyI6IiIsImZhbGxiYWNrIjpmYWxzZX0.f7EcDmsjj3XHzdbMl41YHyJE-LlAirjbjaqzcdqBB_Y'
+
+let backendInstallPromise = null
+let backendStartPromise = null
 
 /** pending automatic update install */
 let autoInstallTimer = null
@@ -262,6 +266,260 @@ function abortError() {
   const error = new Error('The operation was aborted.')
   error.name = 'AbortError'
   return error
+}
+
+/* ----------------------------------------------------- private server runtime */
+
+/** Packaged runtime files live next to app.asar; dev uses the repo folder. */
+function runtimeRoot() {
+  const packaged = process.resourcesPath ? path.join(process.resourcesPath, 'runtime') : ''
+  if (packaged && fs.existsSync(path.join(packaged, 'VAULTED-Backend.zip'))) return packaged
+  return path.join(__dirname, '..', 'runtime')
+}
+
+function backendPaths() {
+  const root = path.join(app.getPath('userData'), 'private-server')
+  return {
+    root,
+    node: path.join(root, 'node', 'node.exe'),
+    app: path.join(root, 'neonite_v2', 'app.js'),
+    cwd: path.join(root, 'neonite_v2'),
+  }
+}
+
+function backendLogPath() {
+  return path.join(app.getPath('userData'), 'logs', 'private-server.log')
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function extractZipArchive(archive, destination) {
+  return new Promise((resolve, reject) => {
+    let stderr = ''
+    const child = spawn(sevenZipBinary(), ['x', '-y', '-bso0', '-bse1', `-o${destination}`, archive], {
+      windowsHide: true,
+    })
+    child.stderr?.on('data', (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-6000)
+    })
+    child.on('error', (error) => reject(new Error(`Could not start the backend extractor: ${error.message}`)))
+    child.on('close', (code) => {
+      if (code === 0 || code === 1) resolve()
+      else reject(new Error(`Could not unpack the private server (7-Zip exited ${code}).${stderr.trim() ? `\n${stderr.trim()}` : ''}`))
+    })
+  })
+}
+
+async function ensureBackendRuntime() {
+  const paths = backendPaths()
+  if (fs.existsSync(paths.node) && fs.existsSync(paths.app)) return paths
+
+  if (backendInstallPromise) return backendInstallPromise
+
+  backendInstallPromise = (async () => {
+    send('arc:launch-status', { message: 'Installing the private server (one time)…' })
+    const archive = path.join(runtimeRoot(), 'VAULTED-Backend.zip')
+    if (!fs.existsSync(archive)) {
+      throw new Error('The private server files are missing from this installation. Reinstall VAULTED.')
+    }
+
+    await fs.promises.rm(paths.root, { recursive: true, force: true }).catch(() => {})
+    await fs.promises.mkdir(paths.root, { recursive: true })
+    await extractZipArchive(archive, paths.root)
+
+    if (!fs.existsSync(paths.node) || !fs.existsSync(paths.app)) {
+      throw new Error('The private server could not be installed correctly. Reinstall VAULTED.')
+    }
+    return backendPaths()
+  })().finally(() => {
+    backendInstallPromise = null
+  })
+
+  return backendInstallPromise
+}
+
+async function backendResponds(timeoutMs = 1500) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(BACKEND_URL, { signal: controller.signal })
+    try {
+      await response.body?.cancel()
+    } catch {
+      /* the status code is all we need */
+    }
+    return true
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function waitForBackend(timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await backendResponds()) return true
+    await delay(350)
+  }
+  return backendResponds()
+}
+
+async function ensureLocalBackend() {
+  if (await backendResponds()) return { reused: true, pid: null }
+  if (backendStartPromise) return backendStartPromise
+
+  backendStartPromise = (async () => {
+    const paths = await ensureBackendRuntime()
+    const logFile = backendLogPath()
+    await fs.promises.mkdir(path.dirname(logFile), { recursive: true })
+
+    send('arc:launch-status', { message: 'Starting the private server…' })
+    const fd = fs.openSync(logFile, 'a')
+    let child
+    try {
+      child = spawn(paths.node, ['app.js'], {
+        cwd: paths.cwd,
+        detached: true,
+        windowsHide: true,
+        stdio: ['ignore', fd, fd],
+        env: { ...process.env, NODE_ENV: 'production' },
+      })
+    } finally {
+      fs.closeSync(fd)
+    }
+
+    if (!child.pid) throw new Error('The private server could not start.')
+    child.unref()
+
+    if (!(await waitForBackend(BACKEND_START_TIMEOUT))) {
+      try {
+        await killProcessTree(child.pid)
+      } catch {
+        /* best effort */
+      }
+      let detail = ''
+      try {
+        detail = fs.readFileSync(logFile, 'utf8').slice(-4000).trim()
+      } catch {
+        /* no log yet */
+      }
+      throw new Error(`The private server did not start.${detail ? `\n\n${detail}` : ''}`)
+    }
+
+    return { reused: false, pid: child.pid }
+  })().finally(() => {
+    backendStartPromise = null
+  })
+
+  return backendStartPromise
+}
+
+function usesEosAuth(payload) {
+  try {
+    return fs.existsSync(
+      path.join(path.dirname(payload.executable), 'FortniteClient-Win64-Shipping_EAC_EOS.exe'),
+    )
+  } catch {
+    return false
+  }
+}
+
+function fortniteLaunchArgs(payload) {
+  const username =
+    String(payload.username || 'Player')
+      .replace(/[^a-z0-9_]/gi, '')
+      .slice(0, 24) || 'Player'
+  const eos = usesEosAuth(payload)
+  const args = [
+    '-epicapp=Fortnite',
+    '-epicenv=Prod',
+    '-epiclocale=en-us',
+    '-epicportal',
+    '-skippatchcheck',
+    '-nobe',
+    `-fromfl=${eos ? 'eaceos' : 'eac'}`,
+    `-fltoken=${LEGACY_FLTOKEN}`,
+    `-caldera=${eos ? LEGACY_CALDERA_EOS : LEGACY_CALDERA}`,
+    `-AUTH_LOGIN=${username}`,
+    `-AUTH_PASSWORD=${BACKEND_PASSWORD}`,
+    '-AUTH_TYPE=epic',
+    '-log',
+  ]
+  if (eos) args.push('-nouac', '-nocodeguards')
+  return args
+}
+
+/**
+ * Starts the game suspended, loads the redirect DLL into it, then resumes it.
+ * Doing this before any client code runs is what guarantees the very first
+ * OAuth request is redirected instead of hitting Epic and failing with 1015.
+ */
+function launchInjectedGame(payload) {
+  return new Promise((resolve, reject) => {
+    const injector = path.join(runtimeRoot(), 'VaultedInjector.exe')
+    const dll = path.join(runtimeRoot(), 'Tellurium.dll')
+    if (!fs.existsSync(injector)) return reject(new Error('The login injector is missing from this installation. Reinstall VAULTED.'))
+    if (!fs.existsSync(dll)) return reject(new Error('The login redirect is missing from this installation. Reinstall VAULTED.'))
+
+    const workingDirectory = path.dirname(payload.executable)
+    const child = spawn(
+      injector,
+      [payload.executable, dll, workingDirectory, ...fortniteLaunchArgs(payload)],
+      { cwd: workingDirectory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
+    )
+
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const finishError = (message) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(new Error(message))
+    }
+    const timer = setTimeout(() => {
+      finishError('The login redirect timed out while attaching to Fortnite.')
+      void killProcessTree(child.pid)
+    }, 30_000)
+
+    child.stdout?.on('data', (chunk) => {
+      stdout = (stdout + chunk.toString()).slice(-4000)
+      const match = /(?:^|\r?\n)PID=(\d+)/.exec(stdout)
+      if (match && !settled) {
+        settled = true
+        clearTimeout(timer)
+        resolve({ child, pid: Number(match[1]) })
+      }
+    })
+    child.stderr?.on('data', (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-4000)
+    })
+    child.on('error', (error) => finishError(`Could not run the login injector: ${error.message}`))
+    child.on('exit', (code) => {
+      if (settled) return
+      const detail = stderr.trim() || stdout.trim()
+      finishError(`Fortnite could not start.${detail ? `\n${detail}` : code ? ` (injector exited ${code})` : ''}`)
+    })
+  })
+}
+
+function killProcessTree(pid) {
+  return new Promise((resolve) => {
+    if (!pid) return resolve()
+    if (process.platform === 'win32') {
+      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve())
+    } else {
+      try {
+        process.kill(pid, 'SIGTERM')
+      } catch {
+        /* already gone */
+      }
+      resolve()
+    }
+  })
 }
 
 /** Normalize a manifest checksum, rejecting anything that is not real SHA-256. */
@@ -992,22 +1250,34 @@ function registerIpc() {
     assertBuild(payload)
 
     const id = typeof payload.id === 'string' ? payload.id : null
-    const child = spawn(payload.executable, FORTNITE_LAUNCH_ARGS, {
-      cwd: payload.path,
-      detached: true,
-      stdio: 'ignore',
-    })
-    child.unref()
+    let injector = null
+    let gamePid = null
 
-    if (id) {
-      running.set(id, { pid: child.pid ?? null })
-      child.on('exit', () => {
-        running.delete(id)
-        send('arc:build-exited', { id })
-      })
+    try {
+      send('arc:launch-status', { id: id ?? undefined, message: 'Preparing the private server…' })
+      await ensureLocalBackend()
+
+      send('arc:launch-status', { id: id ?? undefined, message: 'Starting Fortnite…' })
+      const launched = await launchInjectedGame(payload)
+      injector = launched.child
+      gamePid = launched.pid
+
+      if (id) {
+        running.set(id, { pid: gamePid, injectorPid: injector.pid ?? null })
+        injector.on('exit', () => {
+          running.delete(id)
+          send('arc:build-exited', { id })
+        })
+      }
+
+      send('arc:launch-status', { id: id ?? undefined, message: 'Signing in to the private server…' })
+      return { pid: gamePid, privateServer: true }
+    } catch (error) {
+      if (gamePid) await killProcessTree(gamePid)
+      if (injector?.pid) await killProcessTree(injector.pid)
+      if (id) running.delete(id)
+      throw error
     }
-
-    return { pid: child.pid ?? null }
   })
 
   ipcMain.handle('arc:close-build', async (_event, payload) => {
@@ -1015,18 +1285,7 @@ function registerIpc() {
     const entry = running.get(id)
     if (!entry?.pid) return { closed: false }
 
-    await new Promise((resolve) => {
-      if (process.platform === 'win32') {
-        execFile('taskkill', ['/PID', String(entry.pid), '/T', '/F'], { windowsHide: true }, () => resolve())
-      } else {
-        try {
-          process.kill(entry.pid, 'SIGTERM')
-        } catch {
-          /* already gone */
-        }
-        resolve()
-      }
-    })
+    await killProcessTree(entry.pid)
 
     running.delete(id)
     return { closed: true }
