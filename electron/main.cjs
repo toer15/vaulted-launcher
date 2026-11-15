@@ -752,8 +752,12 @@ function fortniteLaunchArgs(payload, options = {}) {
     '-log',
   ]
   if (eos) args.push('-nouac', '-nocodeguards')
-  if (options.host) args.push('-nosplash', '-nosound')
-  if (options.headless) args.push('-nullrhi')
+  if (options.host) {
+    // Magnesium's AutoHosting countdown lives in its ImGui window. A null RHI
+    // never initialises that window, so the host must keep a real renderer and
+    // run in a small windowed mode instead.
+    args.push('-nosplash', '-nosound', '-windowed', '-ResX=640', '-ResY=360')
+  }
   return args
 }
 
@@ -917,8 +921,31 @@ function configureAutoHost(payload) {
   }
 }
 
+/** Read enough of a log to identify the build without loading a 30 MB log. */
+function logBelongsToBuild(file, expectedExecutable) {
+  if (!expectedExecutable) return true
+  try {
+    const fd = fs.openSync(file, 'r')
+    try {
+      const head = Buffer.alloc(64 * 1024)
+      const read = fs.readSync(fd, head, 0, head.length, 0)
+      const text = head.subarray(0, read).toString('utf8')
+      const match = /LogInit:\s*Base Directory:\s*([^\r\n]+)/i.exec(text)
+      if (!match) return false
+      const normalize = (value) => path.resolve(String(value).trim()).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+      const expected = normalize(path.dirname(expectedExecutable))
+      const actual = normalize(match[1])
+      return actual === expected || actual.startsWith(`${expected}/`)
+    } finally {
+      fs.closeSync(fd)
+    }
+  } catch {
+    return false
+  }
+}
+
 /** Wait for the host client to finish its private-server login. */
-async function waitForFortniteLogin(startedAt, pid, timeoutMs = 25_000) {
+async function waitForFortniteLogin(startedAt, pid, timeoutMs = 60_000, expectedExecutable = '') {
   const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local')
   const logDirectory = path.join(localAppData, 'FortniteGame', 'Saved', 'Logs')
   const deadline = Date.now() + timeoutMs
@@ -936,7 +963,10 @@ async function waitForFortniteLogin(startedAt, pid, timeoutMs = 25_000) {
         .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)
 
       for (const { file } of logs) {
-        const text = fs.readFileSync(file, 'utf8').slice(-250_000)
+        // The official client writes to FortniteGame.log too. Never let its
+        // previous "(Completed)" line make us inject into an unready host.
+        if (!logBelongsToBuild(file, expectedExecutable)) continue
+        const text = fs.readFileSync(file, 'utf8')
         if (/UOnlineAccountCommon::ContinueLoggingIn/i.test(text) && /\(Completed\)/i.test(text)) {
           return true
         }
@@ -973,7 +1003,7 @@ async function ensureGameServer(payload) {
   const hostStartedAt = Date.now()
   const launched = await launchInjectedGame(
     { ...payload, username: hostUsername },
-    { host: true, headless: true },
+    { host: true },
   )
 
   const state = {
@@ -990,11 +1020,13 @@ async function ensureGameServer(payload) {
 
   try {
     send('arc:launch-status', { id: payload?.id, message: 'Waiting for the game server to log in…' })
-    const loggedIn = await waitForFortniteLogin(hostStartedAt, state.pid)
+    const loggedIn = await waitForFortniteLogin(hostStartedAt, state.pid, 60_000, payload.executable)
     if (!processAlive(state.pid)) {
       throw new Error('The local game server closed before it finished loading. Close any other running Fortnite client and try again.')
     }
-    if (!loggedIn) await delay(5_000)
+    if (!loggedIn) {
+      throw new Error('The local game server did not finish signing in. Close any other Fortnite client and try again.')
+    }
 
     send('arc:launch-status', { id: payload?.id, message: 'Starting matchmaking on the local game server…' })
     const memoryDll = path.join(runtimeRoot(), 'Memory.dll')
