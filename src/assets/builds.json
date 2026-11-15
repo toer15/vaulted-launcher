@@ -1,6 +1,6 @@
 {
   "_format": "Map a season key (chapter-season, e.g. ch1-s3) to that season's archive. Keys: url (required, direct zip/http link), version (e.g. 3.6), sha256 (optional), and for seasons newer than the app: chapter, season, label, short, era.",
-  "updatedAt": "2026-11-14T22:24:54.379Z",
+  "updatedAt": "2026-11-15T04:46:14.998Z",
   "seasons": {
     "ch2-s2": {
       "url": "https://cdn.cbn.lol/12.41",
@@ -543,8 +543,8 @@
       "sizeBytes": 21191740399
     },
     "ch5-s3": {
-      "url": "https://cold-eu-agl-1.gofile.io/download/web/ffa037a2-b070-4941-875b-6158b5b131fa/%2B%2BFortnite%2BRelease-30.00-CL-33962396.rar",
-      "version": "30.00",
+      "url": "https://fortforge.co.uk/download/8b9818ef-ae3e-49e5-9e62-e3100ccbcffe/build",
+      "version": "30.30",
       "servers": [
         {
           "name": "Reboot",
@@ -554,11 +554,12 @@
           "name": "Carbon",
           "url": "https://builds.cbn.lol/"
         }
-      ]
+      ],
+      "sizeBytes": 73367000433
     },
     "ch5-s4": {
-      "url": "https://cold-na-phx-10.gofile.io/download/web/32cce581-05c7-4f1f-aad3-a21ab207b418/%2B%2BFortnite%2BRelease-31.41-CL-37324991-Windows.rar",
-      "version": "31.41",
+      "url": "https://fortforge.co.uk/download/ab5f64a1-f49e-4a3c-add2-f31c33e7ca53/build",
+      "version": "31.40",
       "servers": [
         {
           "name": "Reboot",
@@ -568,10 +569,11 @@
           "name": "Carbon",
           "url": "https://builds.cbn.lol/"
         }
-      ]
+      ],
+      "sizeBytes": 64131788085
     },
     "ch4-s4": {
-      "url": "",
+      "url": "https://fortforge.co.uk/download/60c49654-8ab0-441d-9ef3-da9ee2f58e2d/build",
       "version": "26.30",
       "servers": [
         {
@@ -582,11 +584,12 @@
           "name": "Carbon",
           "url": "https://builds.cbn.lol/"
         }
-      ]
+      ],
+      "sizeBytes": 74419514811
     },
     "ch5-s2": {
-      "url": "",
-      "version": "29.40",
+      "url": "https://fortforge.co.uk/download/38052f13-5afc-429a-a361-7a559285b5b4/build",
+      "version": "29.30",
       "servers": [
         {
           "name": "Reboot",
@@ -596,10 +599,11 @@
           "name": "Carbon",
           "url": "https://builds.cbn.lol/"
         }
-      ]
+      ],
+      "sizeBytes": 59492160383
     },
     "ch5-remix": {
-      "url": "",
+      "url": "https://fortforge.co.uk/download/8d742309-e9de-4abb-859e-71915c0141e7/build",
       "version": "32.00",
       "servers": [
         {
@@ -610,10 +614,11 @@
           "name": "Carbon",
           "url": "https://builds.cbn.lol/"
         }
-      ]
+      ],
+      "sizeBytes": 48165375351
     },
     "ch7-s4": {
-      "url": "",
+      "url": "https://fortforge.co.uk/download/34e37a10-4a84-4cee-861e-a96635693300/build",
       "version": "42.00",
       "servers": [
         {
@@ -624,10 +629,11 @@
           "name": "Carbon",
           "url": "https://builds.cbn.lol/"
         }
-      ]
+      ],
+      "sizeBytes": 145317973819
     },
     "ch7-mini1": {
-      "url": "",
+      "url": "https://fortforge.co.uk/download/ab2ab020-c255-4580-8754-71a9b035711b/build",
       "version": "43.00",
       "servers": [
         {
@@ -638,7 +644,8 @@
           "name": "Carbon",
           "url": "https://builds.cbn.lol/"
         }
-      ]
+      ],
+      "sizeBytes": 150573772350
     }
   }
 }
