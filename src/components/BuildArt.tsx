@@ -1,5 +1,5 @@
 import { cx } from '../lib/cx'
-import { seasonImageFor } from '../lib/art'
+import { lobbyFor, seasonImageFor } from '../lib/art'
 import type { SeasonInfo } from '../types'
 
 interface BuildArtProps {
@@ -10,13 +10,13 @@ interface BuildArtProps {
 }
 
 /**
- * Renders the season's official cover art on the launcher card — the same
- * artwork that season used on its promotional card. The artwork is bundled, so
- * every season shows the right cover at every launch.
+ * Uses the exact in-game lobby backdrop for the big Play card, so each season
+ * opens on the scene players actually stood in that season. Compact library
+ * thumbnails keep the promo cover because it is easier to identify at 48px.
  */
 export function BuildArt({ season, className, compact = false }: BuildArtProps) {
   const { from, to, glow } = season.accent
-  const art = seasonImageFor(season)
+  const art = compact ? seasonImageFor(season) : lobbyFor(season) ?? seasonImageFor(season)
 
   if (art) {
     return (
@@ -33,9 +33,9 @@ export function BuildArt({ season, className, compact = false }: BuildArtProps) 
         {/* keep the headline legible without burying the real lobby scene */}
         {!compact && (
           <>
-            <div className="absolute inset-0 bg-gradient-to-r from-[#05060a]/90 via-[#05060a]/48 to-[#05060a]/5" />
-            <div className="absolute inset-0 bg-gradient-to-t from-panel via-panel/22 to-transparent" />
-            <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-[#05060a]/60 to-transparent" />
+            <div className="absolute inset-0 bg-gradient-to-r from-[#05060a]/78 via-[#05060a]/32 to-transparent" />
+            <div className="absolute inset-0 bg-gradient-to-t from-panel via-panel/16 to-transparent" />
+            <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-[#05060a]/50 to-transparent" />
             <div className="absolute inset-0 grain opacity-20" />
           </>
         )}

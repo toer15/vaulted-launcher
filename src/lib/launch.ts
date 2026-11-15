@@ -92,7 +92,7 @@ export interface LauncherBridge {
   onLaunchStatus?(callback: (payload: { id?: string; message: string }) => void): () => void
   pickFolder?(): Promise<string | null>
   scanBuilds?(): Promise<string[]>
-  checkUpdates?(): Promise<{ ok: boolean; version?: string | null; error?: string }>
+  checkUpdates?(): Promise<{ ok: boolean; version?: string | null; currentVersion?: string; error?: string }>
   installUpdate?(): Promise<{ ok: boolean; error?: string }>
   downloadUpdate?(): Promise<{ ok: boolean; error?: string }>
   onUpdateAvailable?(callback: (info: { version: string }) => void): () => void

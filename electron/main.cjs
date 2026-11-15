@@ -2808,7 +2808,7 @@ function scheduleSilentInstall() {
 ipcMain.handle('arc:check-updates', async () => {
   try {
     const result = await autoUpdater.checkForUpdates()
-    return { ok: true, version: result?.updateInfo?.version ?? null }
+    return { ok: true, version: result?.updateInfo?.version ?? null, currentVersion: app.getVersion() }
   } catch (error) {
     return { ok: false, error: String(error && error.message ? error.message : error) }
   }
@@ -2838,10 +2838,10 @@ app.whenReady().then(() => {
     app.on('render-process-gone', (_event, _contents, details) => smokeLog('render gone: ' + JSON.stringify(details)))
   }
 
-  // Updates are checked automatically, but never downloaded silently in the
-  // background: a stalled download used to hang forever. The user triggers the
-  // download from Settings, and it installs on the next quit.
-  autoUpdater.autoDownload = false
+  // Keep the launcher on the newest release without requiring a Settings
+  // click: check on launch, download in the background, then install as soon
+  // as no game or build download is active.
+  autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.autoRunAppAfterInstall = true
   autoUpdater.on('update-available', (info) => {
@@ -2869,11 +2869,11 @@ app.whenReady().then(() => {
   // own, so running it before the host exists is safe.
   void ensureLocalMatchmaker().catch(() => {})
 
-  // check on launch and every 30 minutes; downloads install themselves
+  // Check on launch and every five minutes; downloads install themselves.
   if (!DEV && !SMOKE) {
     const check = () => autoUpdater.checkForUpdates().catch(() => {})
     setTimeout(check, 5000)
-    setInterval(check, 30 * 60 * 1000)
+    setInterval(check, 5 * 60 * 1000)
   }
 
   app.on('activate', () => {

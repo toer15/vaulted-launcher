@@ -6,6 +6,7 @@ import {
   Download,
   FolderPlus,
   Loader2,
+  Wifi,
   Play,
   ShieldCheck,
   Sparkles,
@@ -26,6 +27,8 @@ interface ActiveBuildCardProps {
   download: DownloadState | null
   /** players with this season open right now (null while unknown) */
   activeNow?: number | null
+  /** public VAULTED lobbies currently listed for this season */
+  onlineLobbyCount?: number
   account: Account
   sourceKeys?: Set<string>
   downloadSize?: number | null
@@ -69,6 +72,7 @@ export function ActiveBuildCard({
   state,
   download,
   activeNow,
+  onlineLobbyCount = 0,
   account,
   sourceKeys,
   downloadSize,
@@ -159,7 +163,7 @@ export function ActiveBuildCard({
       glow: 'rgba(16,185,129,0.45)',
     },
     ready: {
-      label: 'Start',
+      label: 'Play',
       icon: Play,
       background: 'linear-gradient(120deg, #7c8cff, #a855f7)',
       glow: 'rgba(124,140,255,0.6)',
@@ -198,7 +202,10 @@ export function ActiveBuildCard({
         : download?.phase === 'verifying'
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
-    ready: 'Ready — starts this season’s match server and opens Fortnite.',
+    ready:
+      onlineLobbyCount > 0
+        ? `Ready — ${onlineLobbyCount} public lobby${onlineLobbyCount === 1 ? '' : 'ies'} online. Play joins one automatically.`
+        : 'Ready — Play hosts this season automatically when no public lobby is online.',
     launching: launchStage ?? 'Fortnite is starting. Have fun.',
     running: 'Fortnite is running. Have fun.',
     error: 'Could not start the client. Check the build path and try again.',
@@ -254,6 +261,23 @@ Season · {season.short}
               </>
             )}
           </p>
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-fog">
+              <Wifi className="h-3.5 w-3.5" /> Auto-connect
+            </span>
+            {onlineLobbyCount > 0 ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-2.5 py-1 text-[10.5px] font-semibold text-emerald-100">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
+                {onlineLobbyCount} public lobby{onlineLobbyCount === 1 ? '' : 'ies'} online
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10.5px] text-fog">
+                <span className="h-1.5 w-1.5 rounded-full bg-fog/50" />
+                No public lobby yet — Play starts one
+              </span>
+            )}
+          </div>
         </div>
 
         {/* bottom: progress, status, action dock */}

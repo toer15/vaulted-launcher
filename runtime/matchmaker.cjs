@@ -32,7 +32,12 @@ function selectedPlaylistName() {
       'utf8',
     )
     const match = /LastSelectedPlaylist\s*=\s*\([^\r\n]*?PlaylistName\s*=\s*"([^"]+)"/i.exec(text)
-    return match?.[1]?.replace(/[^a-z0-9_]/gi, '') || null
+    const name = match?.[1]?.replace(/[^a-z0-9_]/gi, '') || null
+    // Fresh profiles default to Papaya (Party Royale), while the launcher
+    // starts the host in Solos. Normalize it here too or the queue waits for a
+    // playlist that is not the one the host is actually running.
+    if (name && name.toLowerCase() === 'playlist_papaya') return 'Playlist_DefaultSolo'
+    return name
   } catch {
     return null
   }

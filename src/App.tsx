@@ -10,7 +10,7 @@ import { SettingsView } from './components/SettingsView'
 import { ToastStack } from './components/Toast'
 import { TopBar } from './components/TopBar'
 import { artKeyFor } from './lib/art'
-import { fetchFriends, publishSession, stopHosting } from './lib/friends'
+import { fetchFriends, publishSession, stopHosting, type LobbyInfo } from './lib/friends'
 import {
   canDownloadBuilds,
   cancelDownload,
@@ -57,7 +57,7 @@ import type {
 } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.50'
+const APP_VERSION = __APP_VERSION__
 const TOAST_TTL = 4200
 
 interface VerifyJob {
@@ -91,6 +91,7 @@ export default function App() {
   const [sourcesStatus, setSourcesStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [sourcesError, setSourcesError] = useState<string | null>(null)
   const [activeCounts, setActiveCounts] = useState<Record<string, number>>({})
+  const [onlineLobbies, setOnlineLobbies] = useState<LobbyInfo[]>([])
   const [scanning, setScanning] = useState(false)
   const autoScanned = useRef(false)
   const [updateState, setUpdateState] = useState<{
@@ -178,6 +179,17 @@ export default function App() {
 
   const activeKey = activeBuild ? artKeyFor(activeBuild.season) : null
 
+  const activeOnlineLobbyCount = useMemo(() => {
+    if (!activeBuild) return 0
+    return onlineLobbies.filter(
+      (lobby) =>
+        lobby.public &&
+        lobby.username !== account.username &&
+        (lobby.buildId === activeBuild.id ||
+          lobby.label?.toLowerCase() === activeBuild.season.label.toLowerCase()),
+    ).length
+  }, [account.username, activeBuild, onlineLobbies])
+
   // validate a cached session once; a 401 sends the user back to the gate
   useEffect(() => {
     if (!session) return
@@ -261,6 +273,30 @@ export default function App() {
     if (!session) return
     void refreshSources()
   }, [session, refreshSources])
+
+  // The relay is the only direct online path: public VAULTED lobbies for the
+  // selected season. Poll them so the Play card can show the real state.
+  useEffect(() => {
+    if (!session) {
+      setOnlineLobbies([])
+      return
+    }
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const summary = await fetchFriends()
+        if (!cancelled) setOnlineLobbies(summary.lobbies)
+      } catch {
+        /* offline — keep the last known lobby list */
+      }
+    }
+    void poll()
+    const timer = window.setInterval(() => void poll(), 30_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [session])
 
   // heartbeat the season being viewed, then show live counts
   useEffect(() => {
@@ -551,10 +587,32 @@ export default function App() {
         return
       }
 
-      // installed -> start the bundled match server, then launch the client
-      // straight into the game. There is no browser or server picker.
+      // Installed -> join a live public lobby for this exact season when one
+      // is listed, otherwise host the season. No website or manual address
+      // entry is involved either way.
+      let target = join
+      if (!target && session) {
+        try {
+          const summary = await fetchFriends()
+          const match = summary.lobbies.find(
+            (lobby) =>
+              lobby.public &&
+              lobby.username !== session.user.username &&
+              (lobby.buildId === build.id ||
+                lobby.label?.toLowerCase() === build.season.label.toLowerCase()),
+          )
+          if (match) {
+            const [host, portText] = match.address.split(':')
+            const port = Number(portText) || 7777
+            if (host) target = { host, port }
+          }
+        } catch {
+          /* no live lobby reachable — fall back to hosting */
+        }
+      }
+
       setPhase('launching')
-      setLaunchStage('Preparing the private server…')
+      setLaunchStage(target ? 'Connecting to a live lobby…' : 'Preparing the private server…')
       try {
         const launched = await launchBuild(
           build,
@@ -563,13 +621,13 @@ export default function App() {
             items: inventoryItemsFor(shop.owned),
             equipped: shop.equipped,
           },
-          join,
+          target,
         )
         setRunningId(build.id)
         setPhase('running')
         setLaunchStage(null)
         shop.sets.recordLaunch(build.id)
-        if (join) {
+        if (target) {
           setHostedLobby(null)
           void stopHosting().catch(() => {})
         } else {
@@ -596,13 +654,13 @@ export default function App() {
         }
         pushToast({
           tone: launched.privateServer === false ? 'info' : 'success',
-          title: join
-            ? `Joining ${join.host}`
+          title: target
+            ? `Joining ${target.host}`
             : launched.privateServer === false
               ? 'Opening the lobby only'
               : 'Fortnite is starting. Have fun.',
-          description: join
-            ? `${build.season.label} · your client is pointed at ${join.host}:${join.port}`
+          description: target
+            ? `${build.season.label} · your client is pointed at ${target.host}:${target.port}`
             : launched.privateServer === false
               ? `${build.season.label} · no match server available for this build — no queue was started.`
               : `${build.season.label} · v${build.version} · your lobby is listed for everyone in Open lobbies.`,
@@ -973,10 +1031,11 @@ export default function App() {
     setUpdateState({ state: 'checking' })
     try {
       const result = await window.arc.checkUpdates()
-      if (result?.version && compareVersions(result.version, APP_VERSION) > 0) {
+      const currentVersion = result?.currentVersion || APP_VERSION
+      if (result?.version && compareVersions(result.version, currentVersion) > 0) {
         setUpdateState({ state: 'available', message: `v${result.version} available — download in Settings.` })
       } else {
-        setUpdateState({ state: 'current', message: `You're on the newest version (v${APP_VERSION}).` })
+        setUpdateState({ state: 'current', message: `You're on the newest version (v${currentVersion}).` })
       }
     } catch {
       setUpdateState({ state: 'error', message: 'Could not reach the update feed.' })
@@ -1144,6 +1203,7 @@ export default function App() {
                 state={activeState}
                 download={activeBuild ? downloads[activeBuild.id] ?? null : null}
                 activeNow={activeKey ? Math.max(0, (activeCounts[activeKey] ?? 0) - 1) : null}
+                onlineLobbyCount={activeOnlineLobbyCount}
                 account={account}
                 sourceKeys={sourceKeys}
                 downloadSize={activeDownloadSize}
