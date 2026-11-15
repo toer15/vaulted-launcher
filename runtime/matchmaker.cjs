@@ -175,13 +175,13 @@ function websocketClient(socket) {
 
     sendStatus('Connecting')
     schedule(500, () =>
-      sendStatus('Waiting', { totalPlayers: 1, connectedPlayers: 1, estimatedWaitSec: 2 }),
+      sendStatus('Waiting', { totalPlayers: 1, connectedPlayers: 1, estimatedWaitSec: 1 }),
     )
     schedule(1500, () =>
       sendStatus('Queued', {
         ticketId: randomId(),
         queuedPlayers: 1,
-        estimatedWaitSec: 2,
+        estimatedWaitSec: 1,
         status: {},
       }),
     )
@@ -203,6 +203,11 @@ function websocketClient(socket) {
         if (!waitingOnStateSince) {
           waitingOnStateSince = Date.now()
           log('hidden host is not ready for the selected playlist yet')
+        }
+        if (Date.now() - waitingOnStateSince > 8000) {
+          log('host not ready after 8s; attempting join anyway')
+          announced = true
+          finishMatch()
         }
         return
       }
