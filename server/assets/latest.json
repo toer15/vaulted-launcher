@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.32",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.32/VAULTED-Launcher-1.0.32-Setup.exe",
-  "notes": "Every season now has a working Windows download mirror in the catalog, including the entries that had no source or dead Gofile links. The exact 29.40, 30.00, and 31.41 archives are no longer hosted anywhere reachable, so those seasons use the nearest verified Windows build (29.30, 30.30, and 31.40). Modern EOS login and the D3D11 launch fix remain included."
+  "version": "1.0.33",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.33/VAULTED-Launcher-1.0.33-Setup.exe",
+  "notes": "The hidden game server and local matchmaking now read the playlist selected in Fortnite and host that exact mode instead of always defaulting to Solos. Switching modes while the launcher is open restarts the hidden host before a session is assigned. Includes the modern EOS login and D3D11 launch fixes."
 }

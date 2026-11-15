@@ -2,11 +2,16 @@
 
 const http = require('node:http')
 const crypto = require('node:crypto')
+const fs = require('node:fs')
 const net = require('node:net')
+const path = require('node:path')
 
+const matchmakerVersion = 2
 const matchmakerPort = Number(process.env.VAULTED_MATCHMAKER_PORT || 3552)
 const gamePort = Number(process.env.VAULTED_GAME_PORT || 7777)
 const gameHost = process.env.VAULTED_GAME_HOST || '127.0.0.1'
+const gameStateFile = process.env.VAULTED_GAME_STATE_FILE ||
+  (process.env.APPDATA ? path.join(process.env.APPDATA, 'VAULTED Launcher', 'game-server-state.json') : '')
 
 function log(message) {
   console.log(`[VAULTED-MM] ${new Date().toISOString()} ${message}`)
@@ -14,6 +19,39 @@ function log(message) {
 
 function randomId() {
   return crypto.randomBytes(16).toString('hex')
+}
+
+/** The launcher writes the player's current playlist here before matchmaking. */
+function selectedPlaylistName() {
+  const localAppData = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local')
+  try {
+    const text = fs.readFileSync(
+      path.join(localAppData, 'FortniteGame', 'Saved', 'Config', 'WindowsClient', 'GameUserSettings.ini'),
+      'utf8',
+    )
+    const match = /LastSelectedPlaylist\s*=\s*\([^\r\n]*?PlaylistName\s*=\s*"([^"]+)"/i.exec(text)
+    return match?.[1]?.replace(/[^a-z0-9_]/gi, '') || null
+  } catch {
+    return null
+  }
+}
+
+/** Never assign a session until the hidden host is running the selected mode. */
+function hostReadyForSelectedPlaylist() {
+  if (!gameStateFile) return true
+  let state
+  try {
+    state = JSON.parse(fs.readFileSync(gameStateFile, 'utf8'))
+  } catch {
+    return true
+  }
+  if (!state || typeof state !== 'object') return true
+  if (state.ready !== true) return false
+  const hostPlaylist = String(state.playlist || '').trim()
+  if (!hostPlaylist) return true
+  const selected = selectedPlaylistName()
+  if (!selected) return true
+  return hostPlaylist.toLowerCase() === selected.toLowerCase()
 }
 
 /** A tiny RFC 6455 server: the client only needs text status messages. */
@@ -103,6 +141,7 @@ function websocketClient(socket) {
       socketTest.setTimeout(700)
       socketTest.once('connect', () => {
         socketTest.destroy()
+        if (!hostReadyForSelectedPlaylist()) return
         announced = true
         log('game server is listening; assigning session')
         finishMatch()
@@ -195,7 +234,7 @@ function websocketClient(socket) {
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-    res.end(JSON.stringify({ ok: true, service: 'vaulted-matchmaker', gamePort }))
+    res.end(JSON.stringify({ ok: true, service: 'vaulted-matchmaker', version: matchmakerVersion, gamePort }))
     return
   }
   res.writeHead(404)

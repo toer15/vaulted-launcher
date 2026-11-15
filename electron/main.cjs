@@ -36,6 +36,7 @@ const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}/`
 const BACKEND_START_TIMEOUT = 60_000
 const MATCHMAKER_PORT = 3552
 const MATCHMAKER_URL = `http://127.0.0.1:${MATCHMAKER_PORT}`
+const MATCHMAKER_PROTOCOL = 2
 const GAME_SERVER_PORT = 7777
 const BACKEND_PASSWORD = 'Rebooted'
 const LEGACY_FLTOKEN = '3db3ba5dcbd2e16703f3978d'
@@ -49,8 +50,12 @@ let backendStartPromise = null
 let backendReady = false
 let backendUsername = ''
 let matchmakerStartPromise = null
-/** { child, pid, injectorPid, buildId, dll } for the local listen server */
+/** { child, pid, injectorPid, buildId, dll, payload } for the local listen server */
 let gameServerState = null
+let gameServerStarting = false
+let gameServerPlaylist = null
+let playlistSyncPromise = null
+let playlistWatcher = null
 
 /** pending automatic update install */
 let autoInstallTimer = null
@@ -554,6 +559,25 @@ async function waitForBackend(timeoutMs) {
   return backendResponds()
 }
 
+function gameServerStatePath() {
+  return path.join(app.getPath('userData'), 'game-server-state.json')
+}
+
+/** Share the host's active playlist with the standalone matchmaker process. */
+function writeGameServerState(ready, playlist) {
+  try {
+    const file = gameServerStatePath()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ ready: Boolean(ready), playlist: playlist || null, updatedAt: new Date().toISOString() }),
+      'utf8',
+    )
+  } catch (error) {
+    console.warn(`[VAULTED] Could not update the game-server state: ${error.message}`)
+  }
+}
+
 async function matchmakerResponds(timeoutMs = 900) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -561,7 +585,7 @@ async function matchmakerResponds(timeoutMs = 900) {
     const response = await fetch(`${MATCHMAKER_URL}/health`, { signal: controller.signal })
     if (!response.ok) return false
     const body = await response.json()
-    return body?.service === 'vaulted-matchmaker'
+    return body?.service === 'vaulted-matchmaker' && body?.version === MATCHMAKER_PROTOCOL
   } catch {
     return false
   } finally {
@@ -600,6 +624,7 @@ async function ensureLocalMatchmaker() {
           VAULTED_MATCHMAKER_PORT: String(MATCHMAKER_PORT),
           VAULTED_GAME_PORT: String(GAME_SERVER_PORT),
           VAULTED_GAME_HOST: '127.0.0.1',
+          VAULTED_GAME_STATE_FILE: gameServerStatePath(),
         },
       })
     } finally {
@@ -888,12 +913,88 @@ function fortniteVersionKey(payload) {
   return `fn_${major}.${String(minor).padEnd(2, '0')}`
 }
 
+const DEFAULT_PLAYLIST = 'Playlist_DefaultSolo'
+let cachedPlaylistPaths = null
+
+/** The client writes the player's current playlist here before matchmaking. */
+function gameUserSettingsPath() {
+  const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local')
+  return path.join(localAppData, 'FortniteGame', 'Saved', 'Config', 'WindowsClient', 'GameUserSettings.ini')
+}
+
+function readSelectedPlaylist(useDefault = true) {
+  try {
+    const text = fs.readFileSync(gameUserSettingsPath(), 'utf8')
+    const match = /LastSelectedPlaylist\s*=\s*\([^\r\n]*?PlaylistName\s*=\s*"([^"]+)"/i.exec(text)
+    if (!match?.[1]) return useDefault ? DEFAULT_PLAYLIST : null
+    return canonicalPlaylistName(match[1])
+  } catch {
+    return useDefault ? DEFAULT_PLAYLIST : null
+  }
+}
+
+/** Playlist asset paths for every mode the frontend can select. */
+function playlistPaths() {
+  if (cachedPlaylistPaths) return cachedPlaylistPaths
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(runtimeRoot(), 'playlist-paths.json'), 'utf8'))
+    cachedPlaylistPaths = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    cachedPlaylistPaths = {}
+  }
+  return cachedPlaylistPaths
+}
+
+function canonicalPlaylistName(value) {
+  const raw = String(value || '').trim().replace(/^"|"$/g, '').replace(/[^a-z0-9_]/gi, '')
+  if (!raw) return DEFAULT_PLAYLIST
+  const candidate = /^playlist_/i.test(raw) ? raw : `Playlist_${raw}`
+  const paths = playlistPaths()
+  const exact = Object.keys(paths).find((key) => key.toLowerCase() === candidate.toLowerCase())
+  return exact || candidate.replace(/^playlist_/i, 'Playlist_')
+}
+
+function playlistAssetPath(playlist) {
+  const name = canonicalPlaylistName(playlist)
+  const paths = playlistPaths()
+  return paths[name] || `/Game/Athena/Playlists/${name}.${name}`
+}
+
+/** Magnesium's radio-button index; Custom is the safe index for new modes. */
+const PLAYLIST_SELECTION_INDEX = {
+  playlist_defaultsolo: 0,
+  playlist_defaultduo: 1,
+  playlist_trios: 2,
+  playlist_defaulttrios: 2,
+  playlist_defaultsquad: 3,
+  playlist_playground: 12,
+  playlist_playgroundv2: 13,
+  playlist_creative: 13,
+  playlist_nobuildbr_solo: 8,
+  playlist_nobuildbr_duo: 9,
+  playlist_nobuildbr_trio: 10,
+  playlist_nobuildbr_squad: 11,
+  playlist_showdown_solo: 29,
+  playlist_showdown_duos: 30,
+  playlist_showdown_trios: 31,
+  playlist_showdown_squads: 32,
+  playlist_showdownalt_solo: 33,
+  playlist_showdownalt_duos: 34,
+  playlist_showdownalt_trios: 35,
+  playlist_showdownalt_squads: 36,
+}
+
+function playlistSelectionIndex(playlist) {
+  return PLAYLIST_SELECTION_INDEX[canonicalPlaylistName(playlist).toLowerCase()] ?? 51
+}
+
 /**
  * The bundled game server has a Start Match button. AutoHosting lets the host
- * start its listen server without a second click, so every playlist/gamemode
- * reaches a joinable 127.0.0.1 session before the player client asks for one.
+ * start its listen server without a second click. The selected playlist must
+ * be written into the same profile, otherwise Magnesium always falls back to
+ * Solos even though the player queued for a different mode.
  */
-function configureAutoHost(payload) {
+function configureAutoHost(payload, selectedPlaylist = readSelectedPlaylist()) {
   const profile = fortniteVersionKey(payload)
   if (!profile) return false
 
@@ -912,9 +1013,25 @@ function configureAutoHost(payload) {
   }
 
   const previous = document.profiles[profile] && typeof document.profiles[profile] === 'object' ? document.profiles[profile] : {}
+  const playlist = canonicalPlaylistName(selectedPlaylist)
+  // Magnesium reads restore data from the profile's "preferences" object. A
+  // top-level selection is ignored, and save_settings must be true for the
+  // host to apply it before starting a match.
+  const preferences = previous.preferences && typeof previous.preferences === 'object' && !Array.isArray(previous.preferences) ? { ...previous.preferences } : {}
+  const selection = preferences.selection && typeof preferences.selection === 'object' && !Array.isArray(preferences.selection) ? { ...preferences.selection } : {}
+  const resolvedPaths = preferences.resolved_paths && typeof preferences.resolved_paths === 'object' && !Array.isArray(preferences.resolved_paths) ? { ...preferences.resolved_paths } : {}
+  const autoHost = previous.auto_host && typeof previous.auto_host === 'object' && !Array.isArray(previous.auto_host) ? { ...previous.auto_host } : {}
+  selection.playlist = playlistSelectionIndex(playlist)
+  resolvedPaths.playlist = playlistAssetPath(playlist)
+  preferences.selection = selection
+  preferences.resolved_paths = resolvedPaths
+  autoHost.enabled = true
+  autoHost.delay_seconds = 5
+  autoHost.save_settings = true
   document.profiles[profile] = {
     ...previous,
-    auto_host: { enabled: true, delay_seconds: 5, save_settings: false },
+    preferences,
+    auto_host: autoHost,
   }
 
   try {
@@ -925,6 +1042,40 @@ function configureAutoHost(payload) {
     console.warn(`[VAULTED] Could not enable automatic game-server hosting: ${error.message}`)
     return false
   }
+}
+
+/** Stop and rebuild the hidden host when the player switches playlists in the lobby. */
+async function syncGameServerPlaylist() {
+  if (playlistSyncPromise || gameServerStarting || !gameServerState || running.size === 0) return
+  const selected = readSelectedPlaylist(false)
+  if (!selected || selected === gameServerPlaylist) return
+  const payload = gameServerState.payload
+  if (!payload) return
+
+  playlistSyncPromise = (async () => {
+    const id = typeof payload.id === 'string' ? payload.id : undefined
+    send('arc:launch-status', { id, message: `Switching the local game server to ${selected.replace(/^Playlist_/i, '')}…` })
+    await stopGameServer()
+    try {
+      await ensureGameServer(payload)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[VAULTED] Could not switch the local game server playlist: ${message}`)
+      send('arc:launch-status', { id, message: `Could not switch the game server to ${selected.replace(/^Playlist_/i, '')}.` })
+    }
+  })().finally(() => {
+    playlistSyncPromise = null
+  })
+
+  return playlistSyncPromise
+}
+
+function startPlaylistWatcher() {
+  if (playlistWatcher) return
+  playlistWatcher = setInterval(() => {
+    void syncGameServerPlaylist()
+  }, 1200)
+  playlistWatcher.unref?.()
 }
 
 /** Read enough of a log to identify the build without loading a 30 MB log. */
@@ -988,6 +1139,8 @@ async function waitForFortniteLogin(startedAt, pid, timeoutMs = 60_000, expected
 async function stopGameServer() {
   const state = gameServerState
   gameServerState = null
+  gameServerPlaylist = null
+  writeGameServerState(false, null)
   if (state?.injectorPid && state.injectorPid !== state.pid) await killProcessTree(state.injectorPid)
   if (state?.pid) await killProcessTree(state.pid)
 }
@@ -998,12 +1151,27 @@ async function stopGameServer() {
  * client to 127.0.0.1:7777.
  */
 async function ensureGameServer(payload) {
-  if (await portOpen(GAME_SERVER_PORT)) return { reused: true }
+  if (gameServerStarting) return { reused: false, busy: true }
+  gameServerStarting = true
+  try {
+    return await startGameServer(payload)
+  } finally {
+    gameServerStarting = false
+  }
+}
+
+async function startGameServer(payload) {
+  const selectedPlaylist = readSelectedPlaylist()
+  if (await portOpen(GAME_SERVER_PORT)) {
+    writeGameServerState(true, null)
+    return { reused: true }
+  }
   if (gameServerState) await stopGameServer()
 
   const dll = gameServerDll(payload)
   const hostUsername = `${normalizeUsername(payload.username)}Host`.slice(0, 24)
-  configureAutoHost(payload)
+  configureAutoHost(payload, selectedPlaylist)
+  writeGameServerState(false, selectedPlaylist)
 
   send('arc:launch-status', { id: payload?.id, message: 'Starting the local game server…' })
   const hostStartedAt = Date.now()
@@ -1018,10 +1186,16 @@ async function ensureGameServer(payload) {
     injectorPid: launched.child.pid ?? null,
     buildId: payload?.id ?? payload?.path ?? '',
     dll,
+    payload: { ...payload },
   }
   gameServerState = state
+  gameServerPlaylist = selectedPlaylist
   launched.child.on('exit', () => {
-    if (gameServerState === state) gameServerState = null
+    if (gameServerState === state) {
+      gameServerState = null
+      gameServerPlaylist = null
+      writeGameServerState(false, null)
+    }
   })
 
   try {
@@ -1046,6 +1220,7 @@ async function ensureGameServer(payload) {
     if (!(await waitForPort(GAME_SERVER_PORT, 90_000))) {
       throw new Error('The local game server did not open port 7777. Close any other running Fortnite client and try again.')
     }
+    writeGameServerState(true, selectedPlaylist)
     send('arc:launch-status', { id: payload?.id, message: 'Local game server is ready.' })
     return { reused: false }
   } catch (error) {
@@ -2197,6 +2372,7 @@ app.whenReady().then(() => {
 
   registerIpc()
   createWindow()
+  startPlaylistWatcher()
 
   // check on launch and every 30 minutes; downloads install themselves
   if (!DEV && !SMOKE) {

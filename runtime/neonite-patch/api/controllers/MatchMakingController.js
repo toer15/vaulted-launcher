@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { ApiException } = require('../../structs/errors');
 const errors = require('../../structs/errors');
 const NeoLog = require('../../structs/NeoLog');
@@ -6,8 +8,30 @@ const NeoLog = require('../../structs/NeoLog');
 const GAME_HOST = process.env.VAULTED_GAME_HOST || '127.0.0.1';
 const GAME_PORT = Number(process.env.VAULTED_GAME_PORT || 7777);
 const MATCHMAKER_URL = process.env.VAULTED_MATCHMAKER_URL || 'ws://127.0.0.1:3552';
+const DEFAULT_PLAYLIST = 'Playlist_DefaultSolo';
+
+/** Read the playlist the frontend currently has selected. */
+function selectedPlaylistName() {
+  const localAppData = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local');
+  try {
+    const text = fs.readFileSync(
+      path.join(localAppData, 'FortniteGame', 'Saved', 'Config', 'WindowsClient', 'GameUserSettings.ini'),
+      'utf8',
+    );
+    const match = /LastSelectedPlaylist\s*=\s*\([^\r\n]*?PlaylistName\s*=\s*"([^"]+)"/i.exec(text);
+    const name = String(match?.[1] || DEFAULT_PLAYLIST).replace(/[^a-z0-9_]/gi, '');
+    return name || DEFAULT_PLAYLIST;
+  } catch {
+    return DEFAULT_PLAYLIST;
+  }
+}
+
+function playlistMnemonic(name) {
+  return String(name || DEFAULT_PLAYLIST).replace(/^playlist_/i, 'playlist_').toLowerCase();
+}
+
 let currentBuildUniqueId = '0';
-let currentPlaylist = 'playlist_defaultsolo';
+let currentPlaylist = playlistMnemonic(selectedPlaylistName());
 
 function randomId() {
   return crypto.randomBytes(16).toString('hex');
@@ -19,21 +43,37 @@ function parseBucket(bucketId) {
     netcl: parts[0] || '',
     hotfix: parts[1] || '0',
     region: parts[2] || 'NAE',
-    playlist: parts[3] || 'playlist_defaultsolo',
+    playlist: parts[3] || currentPlaylist,
   };
 }
 
 function playlistName(playlist) {
-  const value = String(playlist || 'playlist_defaultsolo').trim();
-  if (!value) return 'Playlist_DefaultSolo';
+  const value = String(playlist || currentPlaylist || DEFAULT_PLAYLIST).trim();
+  if (!value) return DEFAULT_PLAYLIST;
+
+  const selected = selectedPlaylistName();
+  if (value.toLowerCase() === playlistMnemonic(selected)) return selected;
+
   const name = value.replace(/^playlist_/i, '');
   const known = {
     defaultsolo: 'DefaultSolo',
     defaultduo: 'DefaultDuo',
+    defaulttrios: 'DefaultTrios',
     defaultsquad: 'DefaultSquad',
+    trios: 'Trios',
+    playground: 'Playground',
     playgroundv2: 'PlaygroundV2',
     creative: 'Creative',
     showdown: 'Showdown',
+    papaya: 'Papaya',
+    nobuildbr_solo: 'NoBuildBR_Solo',
+    nobuildbr_duo: 'NoBuildBR_Duo',
+    nobuildbr_trio: 'NoBuildBR_Trio',
+    nobuildbr_squad: 'NoBuildBR_Squad',
+    showdownalt_solo: 'ShowdownAlt_Solo',
+    showdownalt_duos: 'ShowdownAlt_Duos',
+    showdownalt_trios: 'ShowdownAlt_Trios',
+    showdownalt_squads: 'ShowdownAlt_Squads',
   };
   return `Playlist_${known[name.toLowerCase()] || name}`;
 }
@@ -102,7 +142,7 @@ module.exports = {
   },
 
   matchmakingSession2: function (req, res) {
-    const playlist = req.cookies?.currentPlaylist || currentPlaylist || 'playlist_defaultsolo';
+    const playlist = req.cookies?.currentPlaylist || currentPlaylist || playlistMnemonic(DEFAULT_PLAYLIST);
     const buildUniqueId = req.cookies?.currentbuildUniqueId || req.cookies?.NetCL || currentBuildUniqueId || '0';
     const sessionId = req.params.sessionId;
     const ownerId = randomId().toUpperCase();
