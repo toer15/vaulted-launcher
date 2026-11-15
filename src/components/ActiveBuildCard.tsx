@@ -12,6 +12,7 @@ import {
   Play,
   ShieldCheck,
   Sparkles,
+  Trash2,
   TriangleAlert,
   X,
 } from 'lucide-react'
@@ -19,6 +20,7 @@ import { AccountChip } from './AccountChip'
 import { BuildArt } from './BuildArt'
 import { artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
+import { formatDownloadSize } from '../lib/downloadSize'
 import { openExternal } from '../lib/network'
 import type { Account, Build, BuildState, DownloadState } from '../types'
 
@@ -30,11 +32,15 @@ interface ActiveBuildCardProps {
   activeNow?: number | null
   account: Account
   sourceKeys?: Set<string>
+  downloadSize?: number | null
   servers?: Array<{ name: string; url: string }>
   installed?: Record<string, boolean>
+  canDelete?: boolean
+  deleting?: boolean
   onLogout: () => void
   onPrimary: () => void
   onCancelDownload: () => void
+  onDelete?: () => void
   onChangeBuild: () => void
   onAddBuild: () => void
 }
@@ -67,11 +73,15 @@ export function ActiveBuildCard({
   activeNow,
   account,
   sourceKeys,
+  downloadSize,
   servers,
   installed,
+  canDelete,
+  deleting,
   onLogout,
   onPrimary,
   onCancelDownload,
+  onDelete,
   onChangeBuild,
   onAddBuild,
 }: ActiveBuildCardProps) {
@@ -120,11 +130,13 @@ export function ActiveBuildCard({
 
   const hasDownloadSource = Boolean(artKeyFor(season) && sourceKeys?.has(artKeyFor(season)!))
   const etaLabel = download?.phase === 'downloading' ? formatEta(download.etaSeconds) : null
+  const downloadSizeLabel = downloadSize ? formatDownloadSize(downloadSize) : null
+  const showDelete = Boolean(canDelete && isInstalled && !busy && state !== 'running' && onDelete)
 
   const primary = {
     missing: hasDownloadSource
       ? {
-          label: `Download ${season.label}`,
+          label: `Download ${season.label}${downloadSizeLabel ? ` · ${downloadSizeLabel}` : ''}`,
           icon: Download,
           background: 'linear-gradient(120deg, #34d399, #059669)',
           glow: 'rgba(16,185,129,0.55)',
@@ -180,7 +192,9 @@ export function ActiveBuildCard({
 
   const statusText: Record<BuildState, string> = {
     missing: hasDownloadSource
-      ? 'Not on this PC yet — download it to play.'
+      ? downloadSizeLabel
+        ? `Not on this PC yet — ${downloadSizeLabel} download.`
+        : 'Not on this PC yet — download it to play.'
       : 'Not on this PC, and no download source for this season.',
     downloading:
       download?.phase === 'extracting'
@@ -369,6 +383,23 @@ export function ActiveBuildCard({
                     >
                       <Ban className="h-3.5 w-3.5" />
                       {download?.phase === 'extracting' ? 'Cancel unpacking' : 'Cancel'}
+                    </button>
+                  )}
+
+                  {showDelete && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onDelete?.()
+                      }}
+                      disabled={deleting}
+                      aria-label={`Delete ${season.label} from this PC`}
+                      title={`Delete ${season.label} download`}
+                      className="inline-flex items-center gap-2 rounded-xl border border-rose-400/35 bg-rose-500/10 px-3.5 py-3 text-[12.5px] font-semibold text-rose-200 transition-all duration-200 hover:border-rose-400/70 hover:bg-rose-500/20 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                      {deleting ? 'Deleting…' : 'Delete'}
                     </button>
                   )}
 

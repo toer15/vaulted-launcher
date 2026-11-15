@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  ArrowDown,
+  ArrowUp,
   Backpack,
   Check,
   ChevronDown,
@@ -11,6 +13,7 @@ import {
   Gamepad2,
   Hammer,
   Image,
+  Maximize2,
   Music2,
   Paintbrush,
   PawPrint,
@@ -41,6 +44,7 @@ import {
 } from '../lib/shop'
 import { cx } from '../lib/cx'
 import type { ClaimResult, PurchaseResult } from '../lib/useItemShop'
+import { ShopItemViewer } from './ShopItemViewer'
 import type { Build, ShopDay, ShopItem, ShopItemType, ShopProgress, ToastMessage } from '../types'
 
 const TYPE_ICONS: Record<ShopItemType, LucideIcon> = {
@@ -125,7 +129,19 @@ export function ItemShopView({
   pushToast,
 }: ItemShopViewProps) {
   const [now, setNow] = useState(() => new Date())
+  const [selected, setSelected] = useState<ShopItem | null>(null)
+  const sectionRef = useRef<HTMLElement>(null)
   const ownedSet = useMemo(() => new Set(owned), [owned])
+  const closeViewer = useCallback(() => setSelected(null), [])
+
+  const scrollShop = (direction: -1 | 1) => {
+    const scroller = sectionRef.current?.closest('main') as HTMLElement | null
+    if (scroller && scroller.scrollHeight > scroller.clientHeight) {
+      scroller.scrollBy({ top: direction * Math.max(360, scroller.clientHeight * 0.72), behavior: 'smooth' })
+    } else {
+      window.scrollBy({ top: direction * 480, behavior: 'smooth' })
+    }
+  }
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1_000)
@@ -175,7 +191,8 @@ export function ItemShopView({
 
   return (
     <section
-      className="animate-fade-up relative overflow-hidden rounded-3xl border border-[#203b52] bg-[#07111c] shadow-[0_35px_90px_-45px_rgba(0,0,0,0.95)]"
+      ref={sectionRef}
+      className="animate-fade-up relative shrink-0 overflow-hidden rounded-3xl border border-[#203b52] bg-[#07111c] shadow-[0_35px_90px_-45px_rgba(0,0,0,0.95)]"
       style={holiday ? { borderColor: `${holiday.accent}66`, background: `radial-gradient(circle at 85% 0%, ${holiday.accent}22, transparent 42%), #07111c` } : undefined}
     >
       <div
@@ -238,6 +255,26 @@ export function ItemShopView({
                 {owned.length} <span className="text-[#627e91]">/ {formatVbucks(catalogCount)}</span>
               </span>
             </div>
+            <div className="inline-flex items-center gap-1 rounded-xl border border-[#2a465d] bg-[#0c1b28]/90 p-1" aria-label="Shop scroll controls">
+              <button
+                type="button"
+                onClick={() => scrollShop(-1)}
+                className="grid h-7 w-7 place-items-center rounded-lg text-[#8fb1c3] transition-colors hover:bg-white/10 hover:text-white"
+                aria-label="Scroll shop up"
+                title="Scroll shop up"
+              >
+                <ArrowUp className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => scrollShop(1)}
+                className="grid h-7 w-7 place-items-center rounded-lg text-[#8fb1c3] transition-colors hover:bg-white/10 hover:text-white"
+                aria-label="Scroll shop down"
+                title="Scroll shop down"
+              >
+                <ArrowDown className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
         </header>
 
@@ -258,6 +295,7 @@ export function ItemShopView({
                   owned={ownedSet.has(item.id)}
                   canAfford={vbucks >= item.price}
                   onBuy={() => buy(item)}
+                  onOpen={() => setSelected(item)}
                 />
               ))}
             </div>
@@ -277,6 +315,7 @@ export function ItemShopView({
                     owned={ownedSet.has(item.id)}
                     canAfford={vbucks >= item.price}
                     onBuy={() => buy(item)}
+                    onOpen={() => setSelected(item)}
                   />
                 ))}
               </div>
@@ -442,6 +481,17 @@ export function ItemShopView({
           </aside>
         </div>
       </div>
+
+      {selected && (
+        <ShopItemViewer
+          item={selected}
+          holiday={holiday}
+          owned={ownedSet.has(selected.id)}
+          canAfford={vbucks >= selected.price}
+          onBuy={() => buy(selected)}
+          onClose={closeViewer}
+        />
+      )}
     </section>
   )
 }
@@ -451,12 +501,14 @@ function FeaturedCard({
   owned,
   canAfford,
   onBuy,
+  onOpen,
   delay,
 }: {
   item: ShopItem
   owned: boolean
   canAfford: boolean
   onBuy: () => void
+  onOpen: () => void
   delay: number
 }) {
   const rarity = RARITY_META[item.rarity]
@@ -464,8 +516,18 @@ function FeaturedCard({
 
   return (
     <article
-      className="animate-fade-up group relative min-h-[236px] overflow-hidden rounded-2xl border bg-[#0a1722] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]"
+      className="animate-fade-up group relative min-h-[236px] cursor-pointer overflow-hidden rounded-2xl border bg-[#0a1722] shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#63bdd9]"
       style={{ borderColor: `${rarity.color}66`, animationDelay: `${delay * 60}ms` }}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onOpen()
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${item.name} 3D preview`}
     >
       <div
         className="absolute inset-0"
@@ -512,6 +574,9 @@ function FeaturedCard({
               <Check className="h-2.5 w-2.5" /> Owned
             </span>
           )}
+          <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-md border border-white/10 bg-black/45 px-1.5 py-1 text-[8px] font-semibold uppercase tracking-wide text-[#d6e6ed] backdrop-blur transition-colors group-hover:border-white/25 group-hover:bg-black/65">
+            <Maximize2 className="h-2.5 w-2.5" /> Inspect
+          </span>
         </div>
       </div>
     </article>
@@ -523,19 +588,31 @@ function DailyCard({
   owned,
   canAfford,
   onBuy,
+  onOpen,
 }: {
   item: ShopItem
   owned: boolean
   canAfford: boolean
   onBuy: () => void
+  onOpen: () => void
 }) {
   const rarity = RARITY_META[item.rarity]
   const Icon = TYPE_ICONS[item.type]
 
   return (
     <article
-      className="group overflow-hidden rounded-2xl border bg-[#0a1722] transition-transform duration-300 hover:-translate-y-0.5"
+      className="group cursor-pointer overflow-hidden rounded-2xl border bg-[#0a1722] transition-transform duration-300 hover:-translate-y-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#63bdd9]"
       style={{ borderColor: `${rarity.color}4d` }}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onOpen()
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ${item.name} 3D preview`}
     >
       <div
         className="relative h-[150px] overflow-hidden border-b"
@@ -560,6 +637,9 @@ function DailyCard({
             <Check className="h-2.5 w-2.5" /> Owned
           </span>
         )}
+        <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-md border border-white/10 bg-black/45 px-1.5 py-1 text-[8px] font-semibold uppercase tracking-wide text-[#d6e6ed] backdrop-blur transition-colors group-hover:border-white/25 group-hover:bg-black/65">
+          <Maximize2 className="h-2.5 w-2.5" /> Inspect
+        </span>
       </div>
       <div className="p-3.5">
         <h3 className="truncate font-display text-[14px] font-bold tracking-tight text-[#f1e7d0]">{item.name}</h3>
@@ -601,7 +681,10 @@ function BuyButton({
   return (
     <button
       type="button"
-      onClick={onBuy}
+      onClick={(event) => {
+        event.stopPropagation()
+        onBuy()
+      }}
       disabled={!canAfford}
       title={canAfford ? `Buy ${item.name}` : 'Not enough V-Bucks'}
       className={cx(

@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.23",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.23/VAULTED-Launcher-1.0.23-Setup.exe",
-  "notes": "The Item Shop now carries the full Fortnite cosmetic catalog: 16,788 outfits, emotes, harvesting tools, gliders, back blings, wraps, contrails, sprays, emojis, loading screens, jam tracks, toys, kicks, auras and banners. The rotation changes every 24 hours, and holiday days automatically replace normal stock with that holiday's own themed items."
+  "version": "1.0.24",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.24/VAULTED-Launcher-1.0.24-Setup.exe",
+  "notes": "Downloaded builds now have a red Delete button beside Start, with a confirmation before the managed build folder and its archive are removed. Every Item Shop card opens a draggable 360-degree cosmetic showcase with auto-spin, the shop itself now scrolls with up/down controls, and every available season shows its archive size in GB before download. Start now opens the selected downloaded build directly instead of handing off to Epic Games."
 }

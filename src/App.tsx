@@ -14,6 +14,7 @@ import {
   cancelDownload,
   checkInstalledBuilds,
   closeBuildProcess,
+  deleteBuild,
   hasNativeBridge,
   launchBuild,
   pickBuildFolder,
@@ -43,7 +44,7 @@ import { useItemShop } from './lib/useItemShop'
 import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.23'
+const APP_VERSION = '1.0.24'
 const TOAST_TTL = 4200
 
 export default function App() {
@@ -55,6 +56,7 @@ export default function App() {
   const [phase, setPhase] = useState<LaunchPhase>('idle')
   const [installed, setInstalled] = useState<Record<string, boolean>>({})
   const [downloads, setDownloads] = useState<Record<string, DownloadState>>({})
+  const [deletingId, setDeletingId] = useState<string | null>(null)
   const [runningId, setRunningId] = useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -98,6 +100,16 @@ export default function App() {
           .filter(([, source]) => Boolean(source?.url))
           .map(([key]) => key),
       ),
+    [manifest],
+  )
+
+  const sourceSizes = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(manifest?.seasons ?? {})
+          .filter(([, source]) => typeof source?.sizeBytes === 'number' && source.sizeBytes > 0)
+          .map(([key, source]) => [key, source.sizeBytes as number]),
+      ) as Record<string, number>,
     [manifest],
   )
 
@@ -173,8 +185,22 @@ export default function App() {
     setSourcesError(null)
     try {
       const next = await fetchManifest()
-      setManifest(next)
-      applyExtraSeasons(next)
+      // The bundled manifest carries archive sizes for offline/first-run use;
+      // an older feed without them must not erase the GB labels.
+      const bundled = defaultBuilds as BuildManifest
+      const withSizes: BuildManifest = {
+        ...next,
+        seasons: Object.fromEntries(
+          Object.entries(next.seasons).map(([key, source]) => [
+            key,
+            source.sizeBytes || !bundled.seasons[key]?.sizeBytes
+              ? source
+              : { ...source, sizeBytes: bundled.seasons[key].sizeBytes },
+          ]),
+        ),
+      }
+      setManifest(withSizes)
+      applyExtraSeasons(withSizes)
       setSourcesStatus('ready')
       return next
     } catch (error) {
@@ -530,6 +556,50 @@ export default function App() {
     void cancelDownload(activeBuild.id)
   }, [activeBuild])
 
+  const handleDeleteBuild = useCallback(async () => {
+    const build = activeBuild
+    if (!build || !installed[build.id] || deletingId) return
+    if (!window.confirm(`Delete ${build.season.label} from this PC?\n\nThis removes the downloaded build and its archive.`)) return
+
+    setDeletingId(build.id)
+    try {
+      const result = await deleteBuild(build.id, build.path)
+      if (!result.deleted) {
+        pushToast({
+          tone: 'error',
+          title: result.running ? 'Close the build first' : 'Could not delete this build',
+          description: result.running
+            ? 'The client is still running. Close it, then try again.'
+            : 'Only builds downloaded by VAULTED can be deleted from disk.',
+        })
+        return
+      }
+
+      setInstalled((prev) => ({ ...prev, [build.id]: false }))
+      setBuilds((prev) =>
+        prev.map((item) =>
+          item.id === build.id
+            ? { ...item, placeholder: true, executable: '', path: '', folderName: 'Not downloaded' }
+            : item,
+        ),
+      )
+      setPhase('idle')
+      pushToast({
+        tone: 'success',
+        title: 'Build deleted',
+        description: `${build.season.label} and its archive were removed from this PC.`,
+      })
+    } catch (error) {
+      pushToast({
+        tone: 'error',
+        title: 'Could not delete this build',
+        description: error instanceof Error ? error.message : 'Unknown error.',
+      })
+    } finally {
+      setDeletingId(null)
+    }
+  }, [activeBuild, deletingId, installed, pushToast])
+
   // settings tab: point the selected build at a different folder
   const handleBrowseFolder = useCallback(async () => {
     const build = activeBuild
@@ -622,10 +692,11 @@ export default function App() {
   useEffect(() => {
     if (!native || autoScanned.current) return
     autoScanned.current = true
-    let cancelled = false
 
+    // Do not cancel this result in StrictMode's development cleanup: the
+    // cleanup would otherwise discard the only automatic scan on startup.
     void scanInstalledBuilds().then((folders) => {
-      if (cancelled || folders.length === 0) return
+      if (folders.length === 0) return
       const known = new Set(
         builds.filter((item) => !item.placeholder).map((item) => item.path.toLowerCase()),
       )
@@ -639,10 +710,6 @@ export default function App() {
         description: `${fresh.length} installed build${fresh.length === 1 ? '' : 's'} matched to their chapter and season automatically.`,
       })
     })
-
-    return () => {
-      cancelled = true
-    }
   }, [native, builds, mergeScannedBuilds, pushToast])
 
   const handleLogout = useCallback(async () => {
@@ -686,6 +753,12 @@ export default function App() {
               : 'missing'
 
   const accent = activeBuild?.season.accent ?? { from: '#7c8cff', to: '#a855f7', glow: '#7c8cff' }
+  const activeDownloadSize = activeKey ? (manifest?.seasons[activeKey]?.sizeBytes ?? null) : null
+  const canDeleteActive = Boolean(
+    activeBuild &&
+      installed[activeBuild.id] &&
+      /vaulted launcher[\\/]+builds[\\/]/i.test(activeBuild.path),
+  )
 
   if (!session) {
     return (
@@ -782,11 +855,15 @@ export default function App() {
                 activeNow={activeKey ? Math.max(0, (activeCounts[activeKey] ?? 0) - 1) : null}
                 account={account}
                 sourceKeys={sourceKeys}
+                downloadSize={activeDownloadSize}
                 servers={activeBuild ? (manifest?.seasons[artKeyFor(activeBuild.season) ?? '']?.servers ?? []) : []}
                 installed={installed}
+                canDelete={canDeleteActive}
+                deleting={deletingId === activeBuild?.id}
                 onLogout={() => void handleLogout()}
                 onPrimary={handlePrimary}
                 onCancelDownload={handleCancelDownload}
+                onDelete={handleDeleteBuild}
                 onChangeBuild={() => setDrawerOpen(true)}
                 onAddBuild={() => setDialogOpen(true)}
               />
@@ -799,6 +876,7 @@ export default function App() {
                 installed={installed}
                 activeCounts={activeCounts}
                 sourceKeys={sourceKeys}
+                sourceSizes={sourceSizes}
                 onSelect={handleSelect}
                 onAdd={() => setDialogOpen(true)}
               />
@@ -821,6 +899,7 @@ export default function App() {
         activeId={activeBuild?.id ?? null}
         installed={installed}
         sourceKeys={sourceKeys}
+        sourceSizes={sourceSizes}
         onClose={() => setDrawerOpen(false)}
         activeCounts={activeCounts}
         onSelect={handleSelect}

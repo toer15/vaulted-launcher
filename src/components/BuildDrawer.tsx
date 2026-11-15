@@ -10,6 +10,7 @@ interface BuildDrawerProps {
   installed: Record<string, boolean>
   activeCounts: Record<string, number>
   sourceKeys?: Set<string>
+  sourceSizes?: Record<string, number>
   onClose: () => void
   onSelect: (id: string) => void
   onAdd: () => void
@@ -22,6 +23,7 @@ export function BuildDrawer({
   installed,
   activeCounts,
   sourceKeys,
+  sourceSizes,
   onClose,
   onSelect,
   onAdd,
@@ -75,6 +77,7 @@ export function BuildDrawer({
             installed={installed}
             activeCounts={activeCounts}
             sourceKeys={sourceKeys}
+            sourceSizes={sourceSizes}
             onSelect={(id) => {
               onSelect(id)
               onClose()

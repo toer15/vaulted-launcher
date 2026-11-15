@@ -196,6 +196,8 @@ export interface BuildSource {
   url: string
   version?: string
   sha256?: string
+  /** archive size in bytes, used by the library download labels */
+  sizeBytes?: number
   servers?: Array<{ name: string; url: string }>
   /** extra seasons can declare their own chapter/season metadata */
   chapter?: number

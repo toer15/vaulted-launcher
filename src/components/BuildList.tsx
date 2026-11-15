@@ -2,6 +2,7 @@ import { Fragment } from 'react'
 import { Check, FolderPlus } from 'lucide-react'
 import { artFor, artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
+import { formatDownloadSize } from '../lib/downloadSize'
 import type { Build } from '../types'
 
 interface BuildListProps {
@@ -13,11 +14,13 @@ interface BuildListProps {
   activeCounts?: Record<string, number>
   /** season keys that have a download source in the manifest */
   sourceKeys?: Set<string>
+  /** season key -> archive size in bytes */
+  sourceSizes?: Record<string, number>
   onSelect: (id: string) => void
   onAdd: () => void
 }
 
-export function BuildList({ builds, activeId, installed, activeCounts, sourceKeys, onSelect, onAdd }: BuildListProps) {
+export function BuildList({ builds, activeId, installed, activeCounts, sourceKeys, sourceSizes, onSelect, onAdd }: BuildListProps) {
   if (builds.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-line px-4 py-10 text-center">
@@ -40,8 +43,11 @@ export function BuildList({ builds, activeId, installed, activeCounts, sourceKey
       {builds.map((build, index) => {
         const active = build.id === activeId
         const art = artFor(build.season)
-        const online = Math.max(0, (activeCounts?.[artKeyFor(build.season) ?? ''] ?? 0) - (active ? 1 : 0))
+        const sourceKey = artKeyFor(build.season)
+        const online = Math.max(0, (activeCounts?.[sourceKey ?? ''] ?? 0) - (active ? 1 : 0))
         const chapterChanged = index === 0 || builds[index - 1].season.chapter !== build.season.chapter
+        const hasSource = Boolean(sourceKey && sourceKeys?.has(sourceKey))
+        const sizeLabel = sourceKey && sourceSizes?.[sourceKey] ? formatDownloadSize(sourceSizes[sourceKey]) : null
 
         return (
           <Fragment key={build.id}>
@@ -99,16 +105,13 @@ export function BuildList({ builds, activeId, installed, activeCounts, sourceKey
                         missing
                       </span>
                     )}
-                    {(() => {
-                      const key = artKeyFor(build.season)
-                      const hasSource = Boolean(key && sourceKeys?.has(key))
-                      if (installed?.[build.id]) return null
-                      return hasSource ? (
+                    {!installed?.[build.id] &&
+                      (hasSource ? (
                         <span
-                          title="Download available for this season"
+                          title={sizeLabel ? `${sizeLabel} download` : 'Download available for this season'}
                           className="shrink-0 rounded bg-emerald-400/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-emerald-300"
                         >
-                          downloadable
+                          {sizeLabel ?? 'downloadable'}
                         </span>
                       ) : (
                         <span
@@ -117,8 +120,7 @@ export function BuildList({ builds, activeId, installed, activeCounts, sourceKey
                         >
                           no download
                         </span>
-                      )
-                    })()}
+                      ))}
                     {online > 0 && (
                       <span
                         title="Players in this season right now"
@@ -128,8 +130,9 @@ export function BuildList({ builds, activeId, installed, activeCounts, sourceKey
                       </span>
                     )}
                   </span>
-                  <span className="mt-0.5 block truncate font-mono text-[11px] text-fog" title={build.path}>
+                  <span className="mt-0.5 block truncate font-mono text-[11px] text-fog" title={build.path || 'Not downloaded'}>
                     {build.folderName}
+                    {!installed?.[build.id] && hasSource && ` · ${sizeLabel ?? 'size unavailable'}`}
                   </span>
                 </span>
               </button>

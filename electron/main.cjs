@@ -25,6 +25,20 @@ const downloads = new Map()
 /** buildId -> running archive extraction process */
 const extractions = new Map()
 
+/**
+ * Direct client launch flags. Without these the old clients hand off to the
+ * installed Epic Games Launcher instead of booting the selected build.
+ */
+const FORTNITE_LAUNCH_ARGS = [
+  '-epicapp=Fortnite',
+  '-epicenv=Prod',
+  '-epicportal',
+  '-epiclocale=en-us',
+  '-epicsandboxid=fn',
+  '-NOSSLPINNING',
+  '-skippatchcheck',
+]
+
 /** pending automatic update install */
 let autoInstallTimer = null
 
@@ -150,7 +164,7 @@ function assertBuild(payload) {
 }
 
 function findExecutable(root, depth = 0) {
-  if (depth > 6) return null
+  if (depth > 8) return null
 
   let entries
   try {
@@ -188,6 +202,9 @@ function folderForExecutable(executable) {
 function scanForBuilds() {
   const home = os.homedir()
   const roots = [
+    // VAULTED's own downloads are the most important and can be buried a few
+    // folders deep, so do not let a large D:\ scan exhaust the budget first.
+    path.join(app.getPath('userData'), 'builds'),
     path.join(home, 'Downloads'),
     path.join(home, 'Desktop'),
     path.join(home, 'Documents'),
@@ -200,7 +217,6 @@ function scanForBuilds() {
     'E:\\Fortnite',
     'D:\\',
     'E:\\',
-    path.join(app.getPath('userData'), 'builds'),
   ]
 
   const found = []
@@ -208,7 +224,7 @@ function scanForBuilds() {
   let budget = 6000
 
   const walk = (dir, depth) => {
-    if (budget <= 0 || depth > 5) return
+    if (budget <= 0 || depth > 8) return
 
     let entries
     try {
@@ -735,6 +751,30 @@ function registerIpc() {
 
   ipcMain.handle('arc:download-build', (_event, payload) => downloadBuild(payload))
 
+  ipcMain.handle('arc:delete-build', async (_event, payload) => {
+    const id = typeof payload?.id === 'string' ? payload.id : ''
+    if (!id || typeof payload?.path !== 'string' || !payload.path) {
+      return { deleted: false, managed: false }
+    }
+    if (running.has(id) || downloads.has(id)) return { deleted: false, managed: true, running: true }
+
+    const root = path.resolve(buildsRoot())
+    const target = path.resolve(payload.path)
+    const relative = path.relative(root, target)
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
+      return { deleted: false, managed: false }
+    }
+
+    // A download owns the whole top-level key folder (archive + extracted
+    // client), so deleting a nested executable also removes the archive.
+    const topLevel = relative.split(path.sep)[0]
+    const managedFolder = path.join(root, topLevel)
+    if (!managedFolder || path.dirname(managedFolder) !== root) return { deleted: false, managed: false }
+
+    await fs.promises.rm(managedFolder, { recursive: true, force: true, maxRetries: 3, retryDelay: 250 })
+    return { deleted: true, managed: true }
+  })
+
   ipcMain.handle('arc:scan-builds', () => scanForBuilds())
 
   // the readable copy of the session for synchronous boot
@@ -770,7 +810,7 @@ function registerIpc() {
     assertBuild(payload)
 
     const id = typeof payload.id === 'string' ? payload.id : null
-    const child = spawn(payload.executable, [], {
+    const child = spawn(payload.executable, FORTNITE_LAUNCH_ARGS, {
       cwd: payload.path,
       detached: true,
       stdio: 'ignore',
