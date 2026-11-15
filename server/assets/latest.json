@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.33",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.33/VAULTED-Launcher-1.0.33-Setup.exe",
+  "version": "1.0.34",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.34/VAULTED-Launcher-1.0.34-Setup.exe",
   "notes": "The hidden game server and local matchmaking now read the playlist selected in Fortnite and host that exact mode instead of always defaulting to Solos. Switching modes while the launcher is open restarts the hidden host before a session is assigned. Includes the modern EOS login and D3D11 launch fixes."
 }

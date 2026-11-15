@@ -568,11 +568,13 @@ function writeGameServerState(ready, playlist) {
   try {
     const file = gameServerStatePath()
     fs.mkdirSync(path.dirname(file), { recursive: true })
+    const temporary = `${file}.tmp`
     fs.writeFileSync(
-      file,
+      temporary,
       JSON.stringify({ ready: Boolean(ready), playlist: playlist || null, updatedAt: new Date().toISOString() }),
       'utf8',
     )
+    fs.renameSync(temporary, file)
   } catch (error) {
     console.warn(`[VAULTED] Could not update the game-server state: ${error.message}`)
   }

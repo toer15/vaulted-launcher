@@ -42,8 +42,9 @@ function hostReadyForSelectedPlaylist() {
   let state
   try {
     state = JSON.parse(fs.readFileSync(gameStateFile, 'utf8'))
-  } catch {
-    return true
+  } catch (error) {
+    // Missing state is the legacy fallback; a half-written file must wait.
+    return error?.code === 'ENOENT'
   }
   if (!state || typeof state !== 'object') return true
   if (state.ready !== true) return false
