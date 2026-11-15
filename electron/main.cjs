@@ -751,7 +751,13 @@ function fortniteLaunchArgs(payload, options = {}) {
     '-AUTH_TYPE=epic',
     '-log',
   ]
-  if (eos) args.push('-nouac', '-nocodeguards')
+  if (eos) {
+    args.push('-nouac', '-nocodeguards')
+    // Chapter 4+ EOS builds ship without the D3D12 shader archive. D3D11 uses
+    // the cooked shader library inside the paks and reaches the lobby instead
+    // of dying in the preload screen with MissingRequiredShadersError.
+    args.push('-d3d11')
+  }
   if (options.host) {
     // Magnesium's AutoHosting countdown lives in its ImGui window. A null RHI
     // never initialises that window, so the host must keep a real renderer and
@@ -1998,7 +2004,19 @@ function registerIpc() {
       send('arc:launch-status', { id: id ?? undefined, message: 'Preparing the private server…' })
       await ensureLocalBackend(payload.username)
       await ensureLocalMatchmaker()
-      await ensureGameServer(payload)
+      try {
+        await ensureGameServer(payload)
+      } catch (error) {
+        // Some modern EOS builds never expose Magnesium's local listen server.
+        // A missing optional host must not prevent the player client from
+        // starting, signing in, and reaching the lobby.
+        console.warn(`[VAULTED] Local game server unavailable: ${error instanceof Error ? error.message : error}`)
+        send('arc:launch-status', {
+          id: id ?? undefined,
+          message: 'Local game server unavailable — starting Fortnite…',
+        })
+        await stopGameServer()
+      }
 
       send('arc:launch-status', { id: id ?? undefined, message: 'Starting Fortnite…' })
       const launched = await launchInjectedGame(payload)

@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.30",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.30/VAULTED-Launcher-1.0.30-Setup.exe",
-  "notes": "Every chapter and season now starts local matchmaking from the normal Play button too, not only from the online-server menu. The local game host keeps its renderer open so Magnesium AutoHosting can start every playlist, waits for the correct build's login instead of another Fortnite log, and the chosen launcher username is used in-game."
+  "version": "1.0.31",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.31/VAULTED-Launcher-1.0.31-Setup.exe",
+  "notes": "Modern EOS seasons now launch with the D3D11 shader path, so Chapter 4+ builds reach EOS login and the lobby instead of stopping at MissingRequiredShadersError. If a modern build cannot start Magnesium's optional local host, VAULTED still launches the player client instead of failing the whole launch."
 }
