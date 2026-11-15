@@ -61,7 +61,7 @@ export function LockerModal({ owned, equipped, onEquip, onClose }: LockerModalPr
               <p className="mt-1 text-[11px] leading-relaxed text-[#8eabbf]">
                 {owned.length} item{owned.length === 1 ? '' : 's'} owned · {equippedCount} slot{equippedCount === 1 ? '' : 's'} equipped
                 <span className="mx-1.5 text-[#4e6d82]">·</span>
-                <span className="text-emerald-300">Active in every chapter and season</span>
+                <span className="text-emerald-300">Saved in every chapter and season</span>
               </p>
             </div>
             <button
@@ -168,7 +168,7 @@ export function LockerModal({ owned, equipped, onEquip, onClose }: LockerModalPr
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#213e51] bg-[#081722]/90 px-5 py-3 text-[9.5px] text-[#6e8b9d]">
           <span className="inline-flex items-center gap-1.5">
             <Sparkles className="h-3 w-3 text-[#e2b85a]" />
-            Your equipped loadout follows you into every chapter and season.
+            Your owned collection follows you into every chapter and season.
           </span>
           <span className="font-mono text-[9px] text-[#516f83]">VAULTED // ACCOUNT COLLECTION</span>
         </div>

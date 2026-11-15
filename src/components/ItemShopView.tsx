@@ -163,8 +163,8 @@ export function ItemShopView({
     if (result === 'bought') {
       pushToast({
         tone: 'success',
-        title: 'Added to your collection',
-        description: `${item.name} is equipped across every chapter and season.`,
+        title: 'Added to your Fortnite locker',
+        description: `${item.name} is now owned on your account in every chapter and season.`,
       })
     } else if (result === 'insufficient') {
       pushToast({
@@ -354,7 +354,7 @@ export function ItemShopView({
                 <Sparkles className="h-3 w-3 text-[#e4b85b]" />
                 {holiday
                   ? `${holiday.name} stock only. Item art © Epic Games.`
-                  : 'Item art © Epic Games. Purchases stay equipped across every chapter and season.'}
+                  : 'Item art © Epic Games. Purchases are added to your account locker across every chapter and season.'}
               </span>
               <span className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-[#516f83]">00:00 UTC reset</span>
             </div>
@@ -504,7 +504,7 @@ export function ItemShopView({
             <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-[#1e3a4b] bg-[#081722]/80 px-3 py-2.5 text-[9.5px] text-[#6e8b9d]">
               <span className="inline-flex items-center gap-1.5">
                 <Sparkles className="h-3 w-3 text-[#e2b85a]" />
-                {owned.length} item{owned.length === 1 ? '' : 's'} in your locker · account-wide
+                {owned.length} item{owned.length === 1 ? '' : 's'} in your Fortnite locker · account-wide
               </span>
               <span className="font-mono text-[9px] text-[#516f83]">VAULTED // STORE</span>
             </div>

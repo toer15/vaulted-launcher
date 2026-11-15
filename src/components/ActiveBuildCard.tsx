@@ -1,15 +1,11 @@
-import { useEffect, useState } from 'react'
 import {
   ArrowLeftRight,
   Ban,
   Check,
-  ChevronDown,
   CircleCheck,
   Download,
   FolderPlus,
-  Globe,
   Loader2,
-  Lock,
   Play,
   ShieldCheck,
   Sparkles,
@@ -33,14 +29,11 @@ interface ActiveBuildCardProps {
   account: Account
   sourceKeys?: Set<string>
   downloadSize?: number | null
-  servers?: Array<{ name: string; url: string }>
   installed?: Record<string, boolean>
   canDelete?: boolean
   deleting?: boolean
-  selectedServerUrl?: string | null
   launchStage?: string | null
   verify?: { phase: 'running' | 'done'; report?: BuildVerifyReport; error?: string } | null
-  onLaunchOnline?: (server: { name: string; url: string }) => void
   onVerify?: () => void
   onLogout: () => void
   onPrimary: () => void
@@ -79,14 +72,11 @@ export function ActiveBuildCard({
   account,
   sourceKeys,
   downloadSize,
-  servers,
   installed,
   canDelete,
   deleting,
-  selectedServerUrl,
   launchStage,
   verify,
-  onLaunchOnline,
   onVerify,
   onLogout,
   onPrimary,
@@ -95,21 +85,6 @@ export function ActiveBuildCard({
   onChangeBuild,
   onAddBuild,
 }: ActiveBuildCardProps) {
-  const [onlineOpen, setOnlineOpen] = useState(false)
-
-  useEffect(() => {
-    setOnlineOpen(false)
-  }, [build?.id])
-
-  useEffect(() => {
-    if (!onlineOpen) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOnlineOpen(false)
-    }
-    document.addEventListener('keydown', onKeyDown)
-    return () => document.removeEventListener('keydown', onKeyDown)
-  }, [onlineOpen])
-
   if (!build) {
     return (
       <section className="relative flex min-h-[460px] flex-col items-center justify-center overflow-hidden rounded-3xl border border-dashed border-line bg-panel/50 px-8 py-16 text-center">
@@ -223,7 +198,7 @@ export function ActiveBuildCard({
         : download?.phase === 'verifying'
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
-    ready: 'Ready when you are — client installed.',
+    ready: 'Ready — starts this season’s match server and opens Fortnite.',
     launching: launchStage ?? 'Fortnite is starting. Have fun.',
     running: 'Fortnite is running. Have fun.',
     error: 'Could not start the client. Check the build path and try again.',
@@ -241,7 +216,7 @@ export function ActiveBuildCard({
               className="h-1.5 w-1.5 rounded-full"
               style={{ background: season.accent.glow, boxShadow: `0 0 12px ${season.accent.glow}` }}
             />
-            {season.short}
+Season · {season.short}
           </span>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -410,7 +385,6 @@ export function ActiveBuildCard({
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation()
-                        setOnlineOpen(false)
                         if (!busy && !(state === 'missing' && !hasDownloadSource)) onPrimary()
                       }}
                       disabled={busy || (state === 'missing' && !hasDownloadSource)}
@@ -424,40 +398,6 @@ export function ActiveBuildCard({
                       <span className="relative">{primary.label}</span>
                     </button>
 
-                    {servers && servers.length > 0 && (
-                      <>
-                        <span className="w-px self-stretch bg-white/20" aria-hidden />
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            if (!isInstalled) return
-                            setOnlineOpen((current) => !current)
-                          }}
-                          disabled={busy || !isInstalled}
-                          aria-expanded={isInstalled && onlineOpen}
-                          aria-label={
-                            isInstalled
-                              ? `Community servers for ${season.label}`
-                              : `Community servers for ${season.label} (locked until this build is installed)`
-                          }
-                          title={isInstalled ? undefined : 'Install this build to use online servers'}
-                          className={cx(
-                            'inline-flex items-center gap-1.5 px-3 text-[10.5px] font-bold uppercase tracking-[0.14em] transition-colors duration-200',
-                            !isInstalled
-                              ? 'cursor-not-allowed bg-black/10 text-white/55'
-                              : 'text-white/90 hover:bg-white/10',
-                            busy && 'cursor-progress opacity-70',
-                          )}
-                        >
-                          {isInstalled ? <Globe className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
-                          Online
-                          {isInstalled && (
-                            <ChevronDown className={cx('h-3.5 w-3.5 transition-transform', onlineOpen && 'rotate-180')} />
-                          )}
-                        </button>
-                      </>
-                    )}
                   </div>
 
                   {state === 'downloading' && (
@@ -522,55 +462,6 @@ export function ActiveBuildCard({
                   >
                     <ArrowLeftRight className="h-3.5 w-3.5" /> Change build
                   </button>
-
-                  {servers && servers.length > 0 && onlineOpen && isInstalled && (
-                    <>
-                      <button
-                        type="button"
-                        aria-label="Close online servers"
-                        tabIndex={-1}
-                        onClick={() => setOnlineOpen(false)}
-                        className="fixed inset-0 z-40 cursor-default"
-                      />
-                      <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-white/10 bg-ink/95 p-1.5 shadow-[0_24px_60px_-18px_rgba(0,0,0,0.95)] backdrop-blur-xl">
-                        <p className="px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-fog">
-                          {season.short} · launch online
-                        </p>
-                        {servers.map((server) => {
-                          const selected = selectedServerUrl === server.url
-                          return (
-                            <button
-                              key={`${server.name}-${server.url}`}
-                              type="button"
-                              onClick={() => {
-                                setOnlineOpen(false)
-                                onLaunchOnline?.(server)
-                              }}
-                              title={`Launch ${season.label} with ${server.name}`}
-                              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors duration-150 hover:bg-white/[0.07]"
-                            >
-                              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">
-                                <Play className="h-3.5 w-3.5" />
-                              </span>
-                              <span className="min-w-0 flex-1">
-                                <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-mist">
-                                  {server.name}
-                                  {selected && <Check className="h-3 w-3 text-emerald-300" />}
-                                </span>
-                                <span className="block truncate font-mono text-[10.5px] text-fog">
-                                  {selected ? 'Selected · ' : ''}Launch installed client
-                                </span>
-                              </span>
-                              <Play className="h-3 w-3 shrink-0 text-fog" />
-                            </button>
-                          )
-                        })}
-                        <p className="px-3 pb-2 pt-1 text-[9.5px] leading-relaxed text-fog/70">
-                          Starts the downloaded {season.short} client. No website opens.
-                        </p>
-                      </div>
-                    </>
-                  )}
 
                   <span className="ml-auto hidden items-center gap-1 pr-2 text-[10.5px] text-fog/70 sm:flex">
                     <Sparkles className="h-3 w-3 text-amber-300/70" />

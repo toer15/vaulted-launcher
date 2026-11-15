@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react'
 import {
+  Globe,
   ArrowLeft,
   ArrowLeftRight,
   CloudDownload,
@@ -55,6 +57,29 @@ export function SettingsView({
   onRestartToUpdate,
 }: SettingsViewProps) {
   const art = build ? artFor(build.season) : null
+  const [publicAddress, setPublicAddress] = useState('')
+  const [publicNote, setPublicNote] = useState<string | null>(null)
+
+  useEffect(() => {
+    void window.arc?.getPublicAddress?.()
+      .then((value) => setPublicAddress(value || ''))
+      .catch(() => {})
+  }, [])
+
+  const savePublicAddress = async () => {
+    const result = await window.arc?.setPublicAddress?.(publicAddress)
+    if (!result) return
+    if (!result.ok) {
+      setPublicNote(result.error || 'Could not save that address.')
+      return
+    }
+    setPublicAddress(result.value ?? '')
+    setPublicNote(
+      result.value
+        ? `Lobbies will publish ${result.value}. Forward TCP and UDP 7777 to this PC.`
+        : 'Cleared — lobbies use automatic UPnP/NAT-PMP again.',
+    )
+  }
 
   return (
     <section className="animate-fade-up rounded-3xl border border-line bg-panel/60 p-5 backdrop-blur-sm sm:p-7">
@@ -217,6 +242,42 @@ export function SettingsView({
         </div>
       </section>
 
+      {/* online hosting */}
+      <section className="mt-4 rounded-2xl border border-line bg-black/25">
+        <div className="flex items-center justify-between gap-2 border-b border-line/70 px-4 py-3">
+          <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-mist">Online hosting</h2>
+          <Globe className="h-3.5 w-3.5 text-sky-300" />
+        </div>
+        <div className="p-4">
+          <p className="text-[12px] leading-relaxed text-mist/85">
+            When you host, VAULTED opens UDP and TCP 7777 on your router with UPnP/NAT-PMP and lists the lobby for every
+            player. If your router has that disabled, forward 7777 to this PC and enter your public address below. A
+            playit.gg tunnel address works here too.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <input
+              value={publicAddress}
+              onChange={(event) => setPublicAddress(event.target.value)}
+              placeholder="203.0.113.7:7777 (leave empty for automatic)"
+              spellCheck={false}
+              className="min-w-0 flex-1 rounded-xl border border-line bg-black/30 px-3 py-2 text-[12.5px] text-mist outline-none transition-colors placeholder:text-fog/60 focus:border-arc/60"
+            />
+            <button
+              type="button"
+              onClick={() => void savePublicAddress()}
+              className="rounded-xl border border-arc/45 bg-arc/15 px-3.5 py-2 text-[12px] font-semibold text-mist transition-colors hover:bg-arc/25 hover:text-white"
+            >
+              Save address
+            </button>
+          </div>
+          {publicNote && <p className="mt-2 text-[11.5px] leading-relaxed text-emerald-300">{publicNote}</p>}
+          <p className="mt-2 text-[11px] leading-relaxed text-fog">
+            Your next hosted lobby shows an <span className="text-emerald-300">Internet</span> badge in Friends → Open
+            lobbies once the address is reachable. Without it, friends on the same WiFi can still join.
+          </p>
+        </div>
+      </section>
+
       {/* updates */}
       <section className="mt-4 rounded-2xl border border-line bg-black/25">
         <div className="flex items-center justify-between gap-2 border-b border-line/70 px-4 py-3">
@@ -283,7 +344,7 @@ export function SettingsView({
             <p className="text-[12px] text-mist">VAULTED {appVersion} — Fortnite Build Launcher</p>
             <p className="mt-0.5 text-[11px] text-fog">Signed in as {accountName}</p>
             <p className="mt-1 text-[11.5px] leading-relaxed text-fog">
-              Every chapter and season since 2017, mapped from build version numbers. Season key art © Epic Games.
+              Every chapter and season since 2017, mapped from build version numbers. Authentic season cover art © Epic Games.
             </p>
           </div>
         </div>

@@ -1,5 +1,5 @@
 import { cx } from '../lib/cx'
-import { artFor } from '../lib/art'
+import { seasonImageFor } from '../lib/art'
 import type { SeasonInfo } from '../types'
 
 interface BuildArtProps {
@@ -10,12 +10,13 @@ interface BuildArtProps {
 }
 
 /**
- * Renders the bundled key art for the selected chapter/season. When no image
- * exists for a version, it falls back to generated chapter-colour artwork.
+ * Renders the season's official cover art on the launcher card — the same
+ * artwork that season used on its promotional card. The artwork is bundled, so
+ * every season shows the right cover at every launch.
  */
 export function BuildArt({ season, className, compact = false }: BuildArtProps) {
   const { from, to, glow } = season.accent
-  const art = artFor(season)
+  const art = seasonImageFor(season)
 
   if (art) {
     return (
@@ -26,14 +27,21 @@ export function BuildArt({ season, className, compact = false }: BuildArtProps) 
           draggable={false}
           className={cx(
             'absolute inset-0 h-full w-full object-cover',
-            compact ? 'object-center' : 'object-[center_35%]',
+            'object-center',
           )}
         />
-        {/* scrims keep the headline legible over busy key art */}
-        <div className="absolute inset-0 bg-gradient-to-r from-[#05060a]/95 via-[#05060a]/60 to-[#05060a]/10" />
-        <div className="absolute inset-0 bg-gradient-to-t from-panel via-panel/30 to-transparent" />
-        <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-[#05060a]/70 to-transparent" />
-        <div className="absolute inset-0 grain opacity-25" />
+        {/* keep the headline legible without burying the real lobby scene */}
+        {!compact && (
+          <>
+            <div className="absolute inset-0 bg-gradient-to-r from-[#05060a]/90 via-[#05060a]/48 to-[#05060a]/5" />
+            <div className="absolute inset-0 bg-gradient-to-t from-panel via-panel/22 to-transparent" />
+            <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-[#05060a]/60 to-transparent" />
+            <div className="absolute inset-0 grain opacity-20" />
+          </>
+        )}
+        {compact && (
+          <div className="absolute inset-0 bg-gradient-to-t from-black/50 via-transparent to-transparent" />
+        )}
       </div>
     )
   }

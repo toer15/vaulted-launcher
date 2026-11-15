@@ -142,6 +142,38 @@ internal static class VaultedInjector
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenProcess(uint access, bool inherit, int processId);
 
+    private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int command);
+
+    /** Keep the spare listen-server client off the desktop without stopping its renderer. */
+    private static void HideWindowsForProcess(int processId)
+    {
+        var callback = new EnumWindowsProc((hWnd, lParam) =>
+        {
+            uint owner;
+            GetWindowThreadProcessId(hWnd, out owner);
+            if (owner == (uint)processId && IsWindowVisible(hWnd)) ShowWindow(hWnd, 0);
+            return true;
+        });
+
+        while (true)
+        {
+            EnumWindows(callback, IntPtr.Zero);
+            Thread.Sleep(250);
+        }
+    }
+
     private const uint PROCESS_CREATE_THREAD = 0x0002;
     private const uint PROCESS_VM_OPERATION = 0x0008;
     private const uint PROCESS_VM_WRITE = 0x0020;
@@ -246,10 +278,17 @@ internal static class VaultedInjector
 
         var auxiliaries = new List<string>();
         var gameArguments = new List<string>();
+        bool hideWindow = false;
         int index = 3;
 
-        while (index < args.Length && args[index] == "--aux")
+        while (index < args.Length && (args[index] == "--aux" || args[index] == "--hide-window"))
         {
+            if (args[index] == "--hide-window")
+            {
+                hideWindow = true;
+                index++;
+                continue;
+            }
             if (index + 1 >= args.Length) return Fail("Missing path after --aux.");
             auxiliaries.Add(args[index + 1]);
             index += 2;
@@ -378,6 +417,13 @@ internal static class VaultedInjector
                 {
                     TerminateProcess(process.hProcess, 1);
                     return Fail("ResumeThread failed: " + Marshal.GetLastWin32Error());
+                }
+
+                if (hideWindow)
+                {
+                    var hideThread = new Thread(() => HideWindowsForProcess(process.dwProcessId));
+                    hideThread.IsBackground = true;
+                    hideThread.Start();
                 }
 
                 Console.WriteLine("PID=" + process.dwProcessId);

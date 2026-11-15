@@ -1,6 +1,6 @@
 {
   "_format": "Map a season key (chapter-season, e.g. ch1-s3) to that season's archive. Keys: url (required, direct zip/http link), version (e.g. 3.6), sha256 (optional), and for seasons newer than the app: chapter, season, label, short, era.",
-  "updatedAt": "2026-11-15T04:46:14.998Z",
+  "updatedAt": "2026-11-15T07:16:20.582Z",
   "seasons": {
     "ch2-s2": {
       "url": "https://cdn.cbn.lol/12.41",
@@ -108,7 +108,7 @@
       "sizeBytes": 14723153985
     },
     "ch1-s7": {
-      "url": "https://builds.rebootfn.org/windows-7.40.rar",
+      "url": "https://archive.org/download/fn-v7-archive/builds%2F7.40-CL-5046157.7z",
       "version": "7.40",
       "servers": [
         {
@@ -120,7 +120,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 15500000000
+      "sizeBytes": 15211195887
     },
     "ch1-s8": {
       "url": "https://archive.org/download/Fortnite-8.40-CL-6005771.zip/8.40-CL-6005771.zip",

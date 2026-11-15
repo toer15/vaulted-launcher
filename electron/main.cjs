@@ -36,7 +36,7 @@ const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}/`
 const BACKEND_START_TIMEOUT = 60_000
 const MATCHMAKER_PORT = 3552
 const MATCHMAKER_URL = `http://127.0.0.1:${MATCHMAKER_PORT}`
-const MATCHMAKER_PROTOCOL = 2
+const MATCHMAKER_PROTOCOL = 3
 const GAME_SERVER_PORT = 7777
 const BACKEND_PASSWORD = 'Rebooted'
 const LEGACY_FLTOKEN = '3db3ba5dcbd2e16703f3978d'
@@ -50,10 +50,14 @@ let backendStartPromise = null
 let backendReady = false
 let backendUsername = ''
 let matchmakerStartPromise = null
+let gameServerReadyPromise = null
 /** { child, pid, injectorPid, buildId, dll, payload } for the local listen server */
 let gameServerState = null
 let gameServerStarting = false
 let gameServerPlaylist = null
+let gameServerWatchdog = null
+let gameServerRestartTimer = null
+let gameServerStopping = false
 let playlistSyncPromise = null
 let playlistWatcher = null
 
@@ -82,6 +86,40 @@ function writeSessionFile(value) {
     if (!safeStorage.isEncryptionAvailable()) return false
     fs.mkdirSync(path.dirname(sessionFilePath()), { recursive: true })
     fs.writeFileSync(sessionFilePath(), safeStorage.encryptString(String(value)), { mode: 0o600 })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function accountSessionPath() {
+  return path.join(app.getPath('userData'), 'account-session.json')
+}
+
+/** Signed-in account token; survives reinstalling the launcher. */
+function readAccountSession() {
+  try {
+    const raw = fs.readFileSync(accountSessionPath(), 'utf8')
+    return raw.trim() || null
+  } catch {
+    return null
+  }
+}
+
+function writeAccountSession(value) {
+  try {
+    const file = accountSessionPath()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, String(value), { mode: 0o600 })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function clearAccountSession() {
+  try {
+    fs.rmSync(accountSessionPath(), { force: true })
     return true
   } catch {
     return false
@@ -368,6 +406,10 @@ function patchBackendRuntime(paths) {
     'api/controllers/MatchMakingController.js',
     'api/controllers/AuthController.js',
     'config/matchmakingRoutes.js',
+    'config/vaultedFriendsRoutes.js',
+    'api/controllers/VaultedFriendsController.js',
+    'profile.js',
+    'vaulted-inventory.cjs',
   ]
   for (const relative of files) {
     const source = path.join(patchRoot, relative)
@@ -424,9 +466,38 @@ async function waitForPort(port, timeoutMs) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await portOpen(port)) return true
-    await delay(1000)
+    await delay(250)
   }
   return portOpen(port)
+}
+
+/** Fortnite's listen server binds UDP 7777; net.connect only sees TCP. */
+function udpPortBound(port) {
+  return new Promise((resolve) => {
+    execFile('netstat', ['-ano', '-p', 'udp'], { windowsHide: true }, (error, stdout) => {
+      if (error || !stdout) return resolve(false)
+      for (const line of String(stdout).split(/\r?\n/)) {
+        const columns = line.trim().split(/\s+/)
+        if (columns.length < 4 || columns[0].toUpperCase() !== 'UDP') continue
+        if (columns[1].endsWith(`:${port}`)) return resolve(true)
+      }
+      resolve(false)
+    })
+  })
+}
+
+async function gameServerPortOpen() {
+  const [tcp, udp] = await Promise.all([portOpen(GAME_SERVER_PORT), udpPortBound(GAME_SERVER_PORT)])
+  return tcp || udp
+}
+
+async function waitForGameServerPort(timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await gameServerPortOpen()) return true
+    await delay(200)
+  }
+  return gameServerPortOpen()
 }
 
 function processAlive(pid) {
@@ -563,6 +634,124 @@ function gameServerStatePath() {
   return path.join(app.getPath('userData'), 'game-server-state.json')
 }
 
+function joinTargetPath() {
+  return path.join(app.getPath('userData'), 'vaulted-join.json')
+}
+
+function publicAddressPath() {
+  return path.join(app.getPath('userData'), 'public-address.json')
+}
+
+/** A forwarded host:port (or playit.gg tunnel) chosen by the player wins. */
+function readPublicOverride() {
+  try {
+    const value = JSON.parse(fs.readFileSync(publicAddressPath(), 'utf8'))
+    if (value && typeof value.address === 'string' && value.address.trim()) {
+      return { address: value.address.trim(), port: Number(value.port) || GAME_SERVER_PORT }
+    }
+  } catch {
+    /* automatic mapping */
+  }
+  return null
+}
+
+function setPublicOverride(value) {
+  const raw = String(value || '').trim()
+  if (!raw) {
+    try {
+      fs.rmSync(publicAddressPath(), { force: true })
+    } catch {
+      /* nothing stored */
+    }
+    return { ok: true, value: null }
+  }
+  if (!/^[a-zA-Z0-9.-]{1,63}:\d{2,5}$/.test(raw)) {
+    return { ok: false, error: 'Use host:port, for example 203.0.113.7:7777' }
+  }
+  const [address, portText] = raw.split(':')
+  try {
+    fs.mkdirSync(path.dirname(publicAddressPath()), { recursive: true })
+    fs.writeFileSync(publicAddressPath(), JSON.stringify({ address, port: Number(portText) }), 'utf8')
+    return { ok: true, value: raw }
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : 'Could not save that address.' }
+  }
+}
+
+function portmapper() {
+  try {
+    return require(path.join(runtimeRoot(), 'portmap.cjs'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The address friends should use. A manual forward is checked first, then
+ * UPnP/NAT-PMP, then plain LAN so same-WiFi play always keeps working.
+ */
+async function resolvePublicAddress() {
+  const manual = readPublicOverride()
+  if (manual) return { ...manual, public: true, method: 'manual' }
+  const mapper = portmapper()
+  if (mapper) {
+    try {
+      const mapped = await mapper.mapPublicPort(GAME_SERVER_PORT)
+      if (mapped?.address) {
+        return { address: mapped.address, port: GAME_SERVER_PORT, public: true, method: mapped.method }
+      }
+    } catch (error) {
+      console.warn(`[VAULTED] Could not open the game port: ${error instanceof Error ? error.message : error}`)
+    }
+  }
+  const lan = lanAddress()
+  return lan ? { address: lan, port: GAME_SERVER_PORT, public: false, method: 'lan' } : null
+}
+
+/** Tells the backend + matchmaker to send this client to a friend's lobby. */
+function writeJoinTarget(host, port) {
+  try {
+    const file = joinTargetPath()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify({ host, port, at: new Date().toISOString() }), 'utf8')
+  } catch (error) {
+    console.warn(`[VAULTED] Could not write the join target: ${error.message}`)
+  }
+}
+
+function clearJoinTarget() {
+  try {
+    fs.rmSync(joinTargetPath(), { force: true })
+  } catch {
+    /* nothing to clear */
+  }
+}
+
+function joinTargetFromPayload(payload) {
+  const host = typeof payload?.joinHost === 'string' ? payload.joinHost.trim() : ''
+  if (!host) return null
+  const port = Number(payload?.joinPort) || GAME_SERVER_PORT
+  return { host, port }
+}
+
+function lanAddress() {
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const address of list || []) {
+      if (address.family === 'IPv4' && !address.internal) return address.address
+    }
+  }
+  return null
+}
+
+function readGameServerState() {
+  try {
+    const value = JSON.parse(fs.readFileSync(gameServerStatePath(), 'utf8'))
+    return value && typeof value === 'object' ? value : null
+  } catch {
+    return null
+  }
+}
+
 /** Share the host's active playlist with the standalone matchmaker process. */
 function writeGameServerState(ready, playlist) {
   try {
@@ -627,6 +816,7 @@ async function ensureLocalMatchmaker() {
           VAULTED_GAME_PORT: String(GAME_SERVER_PORT),
           VAULTED_GAME_HOST: '127.0.0.1',
           VAULTED_GAME_STATE_FILE: gameServerStatePath(),
+          VAULTED_JOIN_FILE: joinTargetPath(),
         },
       })
     } finally {
@@ -638,7 +828,7 @@ async function ensureLocalMatchmaker() {
     const deadline = Date.now() + 10_000
     while (Date.now() < deadline) {
       if (await matchmakerResponds()) return
-      await delay(300)
+      await delay(120)
     }
     throw new Error('The local matchmaker did not start. Check the matchmaker log.')
   })().finally(() => {
@@ -646,6 +836,44 @@ async function ensureLocalMatchmaker() {
   })
 
   return matchmakerStartPromise
+}
+
+/**
+ * Writes the launcher's owned cosmetics into the private server's athena
+ * profile. The backend also re-applies the sidecar list on every profile read,
+ * so a later lobby save cannot erase a purchase.
+ */
+let inventorySyncChain = Promise.resolve()
+
+function privateInventoryModule() {
+  const file = path.join(runtimeRoot(), 'neonite-patch', 'vaulted-inventory.cjs')
+  if (!fs.existsSync(file)) throw new Error('The in-game inventory bridge is missing. Reinstall VAULTED.')
+  return require(file)
+}
+
+async function syncVaultedInventoryNow(payload) {
+  if (typeof payload?.username !== 'string' || !payload.username.trim()) {
+    return { synced: false, reason: 'no-account' }
+  }
+
+  const username = normalizeUsername(payload.username)
+  const paths = backendPaths()
+  if (!fs.existsSync(paths.app)) {
+    return { synced: false, reason: 'private-server-not-installed' }
+  }
+
+  const inventory = privateInventoryModule()
+  const result = inventory.sync(paths.cwd, username, {
+    items: payload.items,
+    equipped: payload.equipped,
+  })
+  return { synced: true, ...result }
+}
+
+function syncVaultedInventory(payload) {
+  const task = inventorySyncChain.catch(() => {}).then(() => syncVaultedInventoryNow(payload))
+  inventorySyncChain = task.catch(() => {})
+  return task
 }
 
 async function ensureLocalBackend(username) {
@@ -664,8 +892,8 @@ async function ensureLocalBackend(username) {
     // Neonite listener so the patched files are loaded for this launch.
     if (await backendResponds()) {
       await stopOwnedListener(BACKEND_PORT, 'app.js')
-      for (let attempt = 0; attempt < 20 && (await portOpen(BACKEND_PORT)); attempt += 1) {
-        await delay(250)
+      for (let attempt = 0; attempt < 40 && (await portOpen(BACKEND_PORT)); attempt += 1) {
+        await delay(120)
       }
     }
     if (await portOpen(BACKEND_PORT)) {
@@ -684,7 +912,7 @@ async function ensureLocalBackend(username) {
         detached: true,
         windowsHide: true,
         stdio: ['ignore', fd, fd],
-        env: { ...process.env, NODE_ENV: 'production' },
+        env: { ...process.env, NODE_ENV: 'production', VAULTED_JOIN_FILE: joinTargetPath() },
       })
     } finally {
       fs.closeSync(fd)
@@ -786,10 +1014,10 @@ function fortniteLaunchArgs(payload, options = {}) {
     args.push('-d3d11')
   }
   if (options.host) {
-    // Magnesium's AutoHosting countdown lives in its ImGui window. A null RHI
-    // never initialises that window, so the host must keep a real renderer and
-    // run in a small windowed mode instead.
-    args.push('-nosplash', '-nosound', '-windowed', '-ResX=640', '-ResY=360')
+    // The bundled server is headless: it has no ImGui window and starts its
+    // listen server without a Start click. Null RHI keeps the spare host client
+    // invisible as well, so only the player's own Fortnite window is shown.
+    args.push('-nosplash', '-nosound', '-nullrhi')
   }
   return args
 }
@@ -813,6 +1041,7 @@ function launchInjectedGame(payload, options = {}) {
     for (const bootstrapper of suspendedBootstrappers(payload.executable)) {
       injectorArgs.push('--aux', bootstrapper)
     }
+    if (options.host) injectorArgs.push('--hide-window')
     injectorArgs.push('--', ...fortniteLaunchArgs(payload, options))
 
     const child = spawn(injector, injectorArgs, {
@@ -897,12 +1126,12 @@ function injectDll(pid, dllPath) {
 }
 
 function gameServerDll() {
-  const candidate = path.join(runtimeRoot(), 'Magnesium.dll')
+  const candidate = path.join(runtimeRoot(), 'VAULTED-Server.dll')
   if (fs.existsSync(candidate)) return candidate
   throw new Error('The local game server DLL is missing from this installation. Reinstall VAULTED.')
 }
 
-/** Magnesium names its saved profile after the detected game version. */
+/** The game server names its saved profile after the detected game version. */
 function fortniteVersionKey(payload) {
   const text = [payload?.version, payload?.path, payload?.executable].filter(Boolean).join(' ')
   const match = String(text).match(/(?:^|[^\d])(\d{1,2})\.(\d{1,2})(?:[^\d]|$)/)
@@ -911,7 +1140,7 @@ function fortniteVersionKey(payload) {
   const minor = Number(match[2])
   if (!Number.isInteger(major) || !Number.isInteger(minor)) return null
   if (major < 1 || major > 44 || minor < 0 || minor > 99) return null
-  // Magnesium formats its profile key as a fixed two-decimal version.
+  // The server formats its profile key as a fixed two-decimal version.
   return `fn_${major}.${String(minor).padEnd(2, '0')}`
 }
 
@@ -950,6 +1179,11 @@ function playlistPaths() {
 function canonicalPlaylistName(value) {
   const raw = String(value || '').trim().replace(/^"|"$/g, '').replace(/[^a-z0-9_]/gi, '')
   if (!raw) return DEFAULT_PLAYLIST
+  // The backend defaults every fresh profile to Papaya (Party Royale). Its
+  // playlist has a party-bus flight that is over in a few seconds, so a BR
+  // round started from it skips the real Battle Bus. The launcher only offers
+  // Battle Royale modes, so treat that stock default as Solos.
+  if (raw.toLowerCase() === 'playlist_papaya') return DEFAULT_PLAYLIST
   const candidate = /^playlist_/i.test(raw) ? raw : `Playlist_${raw}`
   const paths = playlistPaths()
   const exact = Object.keys(paths).find((key) => key.toLowerCase() === candidate.toLowerCase())
@@ -962,7 +1196,7 @@ function playlistAssetPath(playlist) {
   return paths[name] || `/Game/Athena/Playlists/${name}.${name}`
 }
 
-/** Magnesium's radio-button index; Custom is the safe index for new modes. */
+/** The server's playlist radio-button index; Custom is the safe index for new modes. */
 const PLAYLIST_SELECTION_INDEX = {
   playlist_defaultsolo: 0,
   playlist_defaultduo: 1,
@@ -993,7 +1227,7 @@ function playlistSelectionIndex(playlist) {
 /**
  * The bundled game server has a Start Match button. AutoHosting lets the host
  * start its listen server without a second click. The selected playlist must
- * be written into the same profile, otherwise Magnesium always falls back to
+ * be written into the same profile, otherwise the server always falls back to
  * Solos even though the player queued for a different mode.
  */
 function configureAutoHost(payload, selectedPlaylist = readSelectedPlaylist()) {
@@ -1001,7 +1235,7 @@ function configureAutoHost(payload, selectedPlaylist = readSelectedPlaylist()) {
   if (!profile) return false
 
   const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local')
-  const directory = path.join(localAppData, 'Magnesium')
+  const directory = path.join(localAppData, 'VAULTED')
   const settingsPath = path.join(directory, 'auto_hosting.json')
 
   let document = { schema_version: 1, profiles: {} }
@@ -1016,7 +1250,7 @@ function configureAutoHost(payload, selectedPlaylist = readSelectedPlaylist()) {
 
   const previous = document.profiles[profile] && typeof document.profiles[profile] === 'object' ? document.profiles[profile] : {}
   const playlist = canonicalPlaylistName(selectedPlaylist)
-  // Magnesium reads restore data from the profile's "preferences" object. A
+  // The server reads restore data from the profile's "preferences" object. A
   // top-level selection is ignored, and save_settings must be true for the
   // host to apply it before starting a match.
   const preferences = previous.preferences && typeof previous.preferences === 'object' && !Array.isArray(previous.preferences) ? { ...previous.preferences } : {}
@@ -1104,7 +1338,7 @@ function logBelongsToBuild(file, expectedExecutable) {
 }
 
 /** Wait for the host client to finish its private-server login. */
-async function waitForFortniteLogin(startedAt, pid, timeoutMs = 60_000, expectedExecutable = '') {
+async function waitForFortniteLogin(startedAt, pid, timeoutMs = 60_000, expectedExecutable = '', hostMarker = '') {
   const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local')
   const logDirectory = path.join(localAppData, 'FortniteGame', 'Saved', 'Logs')
   const deadline = Date.now() + timeoutMs
@@ -1112,8 +1346,16 @@ async function waitForFortniteLogin(startedAt, pid, timeoutMs = 60_000, expected
   while (Date.now() < deadline) {
     if (pid && !processAlive(pid)) return false
     try {
+      // Only the live log belongs to this host. Previous sessions leave
+      // FortniteGame-backup-*.log files with completed login lines; matching
+      // one of those injects the server before the new host is ready.
+      // The visible client can start while the host is still signing in. The
+      // second client rotates FortniteGame.log to a backup and the host keeps
+      // appending to that renamed file, so both names are read here.
+      // Fortnite writes the second concurrent client to FortniteGame_2.log, so
+      // every client log in this directory has to be considered.
       const logs = fs.readdirSync(logDirectory)
-        .filter((name) => /^FortniteGame.*\.log$/i.test(name))
+        .filter((name) => /^FortniteGame(?:_\d+)?(?:-backup-[^/\\]*)?\.log$/i.test(name))
         .map((name) => {
           const file = path.join(logDirectory, name)
           return { file, stat: fs.statSync(file) }
@@ -1125,6 +1367,9 @@ async function waitForFortniteLogin(startedAt, pid, timeoutMs = 60_000, expected
         // The official client writes to FortniteGame.log too. Never let its
         // previous "(Completed)" line make us inject into an unready host.
         if (!logBelongsToBuild(file, expectedExecutable)) continue
+        // Only the hidden host carries the headless flags. The player's own
+        // client log must never be mistaken for the host's login.
+        if (hostMarker && !logHeadHas(file, hostMarker)) continue
         const text = fs.readFileSync(file, 'utf8')
         if (/UOnlineAccountCommon::ContinueLoggingIn/i.test(text) && /\(Completed\)/i.test(text)) {
           return true
@@ -1133,44 +1378,120 @@ async function waitForFortniteLogin(startedAt, pid, timeoutMs = 60_000, expected
     } catch {
       /* the host is still creating its log file */
     }
-    await delay(500)
+    await delay(200)
   }
   return false
 }
 
+/** Read the first block of a log and look for a launch flag. */
+function logHeadHas(file, marker) {
+  try {
+    const fd = fs.openSync(file, 'r')
+    try {
+      const head = Buffer.alloc(64 * 1024)
+      const read = fs.readSync(fd, head, 0, head.length, 0)
+      return head.subarray(0, read).toString('utf8').toLowerCase().includes(marker.toLowerCase())
+    } finally {
+      fs.closeSync(fd)
+    }
+  } catch {
+    return false
+  }
+}
+
 async function stopGameServer() {
+  gameServerStopping = true
+  if (gameServerWatchdog) {
+    clearInterval(gameServerWatchdog)
+    gameServerWatchdog = null
+  }
+  if (gameServerRestartTimer) {
+    clearTimeout(gameServerRestartTimer)
+    gameServerRestartTimer = null
+  }
   const state = gameServerState
   gameServerState = null
   gameServerPlaylist = null
+  gameServerReadyPromise = null
   writeGameServerState(false, null)
   if (state?.injectorPid && state.injectorPid !== state.pid) await killProcessTree(state.injectorPid)
   if (state?.pid) await killProcessTree(state.pid)
+  gameServerStopping = false
+}
+
+/**
+ * The hidden host exits when a match finishes. Start another one for the
+ * selected playlist while the player stays in the lobby, so the next PLAY
+ * does not wait on a queue that has no game server behind it. Clients are
+ * preserved: only the server process is replaced.
+ */
+function scheduleGameServerRestart(payload) {
+  if (!payload || gameServerStopping || gameServerRestartTimer) return
+  if (running.size === 0) return
+  gameServerRestartTimer = setTimeout(() => {
+    gameServerRestartTimer = null
+    if (gameServerStopping || gameServerState || gameServerStarting || running.size === 0) return
+    void (async () => {
+      if (await gameServerPortOpen()) return
+      try {
+        send('arc:launch-status', { id: payload.id, message: 'Restarting the local game server…' })
+        await ensureGameServer(payload, { preserveClients: true })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn(`[VAULTED] Could not restart the local game server: ${message}`)
+      }
+    })()
+  }, 2500)
+  gameServerRestartTimer.unref?.()
 }
 
 /**
  * Starts a hidden second client and turns it into the local listen server by
- * injecting Magnesium after its login. Matchmaking then assigns the player
- * client to 127.0.0.1:7777.
+ * injecting the headless server after its login. Matchmaking then assigns the
+ * player client to 127.0.0.1:7777.
  */
-async function ensureGameServer(payload) {
+async function ensureGameServer(payload, options = {}) {
   if (gameServerStarting) return { reused: false, busy: true }
   gameServerStarting = true
   try {
-    return await startGameServer(payload)
+    return await startGameServer(payload, options)
   } finally {
     gameServerStarting = false
   }
 }
 
-async function startGameServer(payload) {
+async function startGameServer(payload, options = {}) {
   const selectedPlaylist = readSelectedPlaylist()
-  if (await portOpen(GAME_SERVER_PORT)) {
-    writeGameServerState(true, null)
-    return { reused: true }
+  if (await gameServerPortOpen()) {
+    // A previous host can still own the port after a launcher restart. It is
+    // only safe to reuse when its written state matches the selected playlist;
+    // the matchmaker must never assign a Solos world to a No Build queue.
+    const previous = readGameServerState()
+    const previousPlaylist = previous?.playlist ? canonicalPlaylistName(previous.playlist) : null
+    if (previous?.ready === true && previousPlaylist === selectedPlaylist) {
+      writeGameServerState(true, previousPlaylist)
+      return { reused: true }
+    }
   }
   if (gameServerState) await stopGameServer()
 
-  const dll = gameServerDll(payload)
+  // A client left behind by a previous launcher session keeps the game's
+  // single-instance lock and silently prevents the hidden host from opening
+  // port 7777. That is what leaves the in-game queue pinging forever. Only
+  // clients launched by VAULTED carry -AUTH_LOGIN, so the official client is
+  // never touched.
+  send('arc:launch-status', { id: payload?.id, message: 'Clearing the previous Fortnite session…' })
+  if (!options.preserveClients) await stopStaleVaultedClients()
+  for (let attempt = 0; attempt < 12 && (await gameServerPortOpen()); attempt += 1) {
+    await delay(400)
+  }
+  if (await gameServerPortOpen()) {
+    throw new Error(
+      'Port 7777 is already used by another program. Close any other Fortnite client or server and try again.',
+    )
+  }
+
+  const dll = gameServerDll()
   const hostUsername = `${normalizeUsername(payload.username)}Host`.slice(0, 24)
   configureAutoHost(payload, selectedPlaylist)
   writeGameServerState(false, selectedPlaylist)
@@ -1192,17 +1513,22 @@ async function startGameServer(payload) {
   }
   gameServerState = state
   gameServerPlaylist = selectedPlaylist
-  launched.child.on('exit', () => {
-    if (gameServerState === state) {
-      gameServerState = null
-      gameServerPlaylist = null
-      writeGameServerState(false, null)
-    }
-  })
+  if (gameServerWatchdog) clearInterval(gameServerWatchdog)
+  gameServerWatchdog = setInterval(() => {
+    if (gameServerState !== state) return
+    if (processAlive(state.pid)) return
+    clearInterval(gameServerWatchdog)
+    gameServerWatchdog = null
+    gameServerState = null
+    gameServerPlaylist = null
+    writeGameServerState(false, null)
+    scheduleGameServerRestart(state.payload)
+  }, 5000)
+  gameServerWatchdog.unref?.()
 
   try {
     send('arc:launch-status', { id: payload?.id, message: 'Waiting for the game server to log in…' })
-    const loggedIn = await waitForFortniteLogin(hostStartedAt, state.pid, 60_000, payload.executable)
+    const loggedIn = await waitForFortniteLogin(hostStartedAt, state.pid, 50_000, payload.executable, '-nullrhi')
     if (!processAlive(state.pid)) {
       throw new Error('The local game server closed before it finished loading. Close any other running Fortnite client and try again.')
     }
@@ -1219,12 +1545,33 @@ async function startGameServer(payload) {
     }
     await injectDll(state.pid, dll)
 
-    if (!(await waitForPort(GAME_SERVER_PORT, 90_000))) {
-      throw new Error('The local game server did not open port 7777. Close any other running Fortnite client and try again.')
-    }
-    writeGameServerState(true, selectedPlaylist)
-    send('arc:launch-status', { id: payload?.id, message: 'Local game server is ready.' })
+    // The host still needs a few seconds to open its listen port. Return now so
+    // the visible client can boot in parallel with that wait instead of after
+    // it; the caller awaits ready() through awaitGameServerReady().
+    const ready = (async () => {
+      if (!(await waitForGameServerPort(75_000))) {
+        throw new Error('The local game server did not open port 7777. Close any other running Fortnite client and try again.')
+      }
+      writeGameServerState(true, selectedPlaylist)
+      send('arc:launch-status', { id: payload?.id, message: 'Local game server is ready.' })
+    })()
+    ready.catch(() => {})
+    gameServerReadyPromise = ready
     return { reused: false }
+  } catch (error) {
+    gameServerReadyPromise = null
+    await stopGameServer()
+    throw error
+  }
+}
+
+/** Wait for the listen port that the host opens after the server DLL loads. */
+async function awaitGameServerReady() {
+  const ready = gameServerReadyPromise
+  gameServerReadyPromise = null
+  if (!ready) return
+  try {
+    await ready
   } catch (error) {
     await stopGameServer()
     throw error
@@ -1245,6 +1592,60 @@ function killProcessTree(pid) {
       resolve()
     }
   })
+}
+
+/**
+ * Close a Fortnite client left behind by an earlier VAULTED run. Such a client
+ * holds the single-instance mutex, so the hidden host exits before the server
+ * can open its port and the player sits in an empty matchmaking queue forever.
+ * Only VAULTED launches contain -AUTH_LOGIN; an official Epic client is left
+ * alone.
+ */
+async function stopStaleVaultedClients() {
+  if (process.platform !== 'win32') return
+  // The PowerShell query below costs a second or more. Almost every launch has
+  // no Fortnite client open at all, so check that with a fast tasklist first.
+  const anyFortnite = await new Promise((resolve) => {
+    execFile(
+      'tasklist',
+      ['/FI', 'IMAGENAME eq FortniteClient-Win64-Shipping.exe', '/NH', '/FO', 'CSV'],
+      { windowsHide: true, timeout: 8000 },
+      (error, stdout) => {
+        if (error || !stdout) return resolve(false)
+        resolve(/FortniteClient-Win64-Shipping\.exe/i.test(String(stdout)))
+      },
+    )
+  })
+  if (!anyFortnite) return
+  const pids = await new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "Get-CimInstance Win32_Process -Filter \"Name='FortniteClient-Win64-Shipping.exe'\" | Where-Object { $_.CommandLine -match '-AUTH_LOGIN=' } | ForEach-Object { $_.ProcessId }",
+      ],
+      { windowsHide: true, timeout: 12_000 },
+      (error, stdout) => {
+        if (error || !stdout) return resolve([])
+        resolve(
+          String(stdout)
+            .split(/\r?\n/)
+            .map((value) => Number(value.trim()))
+            .filter((value) => Number.isInteger(value) && value > 0),
+        )
+      },
+    )
+  })
+
+  for (const pid of pids) {
+    await killProcessTree(pid)
+  }
+  if (pids.length > 0) {
+    // Give Windows time to release the mutex and the listen port.
+    await delay(1200)
+  }
 }
 
 /** Normalize a manifest checksum, rejecting anything that is not real SHA-256. */
@@ -2146,6 +2547,9 @@ function registerIpc() {
     event.returnValue = readSessionFile()
   })
   ipcMain.handle('arc:save-session', (_event, value) => writeSessionFile(value))
+  ipcMain.handle('arc:account-session-read', () => readAccountSession())
+  ipcMain.handle('arc:account-session-save', (_event, value) => writeAccountSession(value))
+  ipcMain.handle('arc:account-session-clear', () => clearAccountSession())
   ipcMain.handle('arc:clear-session', () => {
     clearSessionFile()
     return true
@@ -2170,47 +2574,103 @@ function registerIpc() {
     return { cancelled: true }
   })
 
+  ipcMain.handle('arc:sync-inventory', async (_event, payload) => {
+    try {
+      return await syncVaultedInventory(payload)
+    } catch (error) {
+      console.warn(`[VAULTED] Could not sync the in-game inventory: ${error instanceof Error ? error.message : error}`)
+      return { synced: false, error: error instanceof Error ? error.message : 'The in-game inventory could not be updated.' }
+    }
+  })
+
   ipcMain.handle('arc:launch-build', async (_event, payload) => {
     assertBuild(payload)
 
     const id = typeof payload.id === 'string' ? payload.id : null
+    const join = joinTargetFromPayload(payload)
     let injector = null
     let gamePid = null
+    let gameServerReady = false
+    let matchmakingReady = false
 
     try {
       send('arc:launch-status', { id: id ?? undefined, message: 'Preparing the private server…' })
+      if (join) writeJoinTarget(join.host, join.port)
+      else clearJoinTarget()
       await ensureLocalBackend(payload.username)
-      await ensureLocalMatchmaker()
+      if (payload.inventory) {
+        try {
+          await syncVaultedInventory({ username: payload.username, ...payload.inventory })
+        } catch (error) {
+          console.warn(`[VAULTED] Could not sync the in-game inventory: ${error instanceof Error ? error.message : error}`)
+        }
+      }
+      // The matchmaker only hands out the host once port 7777 exists, so it can
+      // be running long before the host is. Starting it first means an early
+      // Play click in game queues instead of erroring.
       try {
-        await ensureGameServer(payload)
+        await ensureLocalMatchmaker()
+        matchmakingReady = true
       } catch (error) {
-        // Some modern EOS builds never expose Magnesium's local listen server.
-        // A missing optional host must not prevent the player client from
-        // starting, signing in, and reaching the lobby.
-        console.warn(`[VAULTED] Local game server unavailable: ${error instanceof Error ? error.message : error}`)
-        send('arc:launch-status', {
-          id: id ?? undefined,
-          message: 'Local game server unavailable — starting Fortnite…',
-        })
-        await stopGameServer()
+        console.warn(`[VAULTED] Local matchmaker unavailable: ${error instanceof Error ? error.message : error}`)
       }
 
-      send('arc:launch-status', { id: id ?? undefined, message: 'Starting Fortnite…' })
-      const launched = await launchInjectedGame(payload)
-      injector = launched.child
-      gamePid = launched.pid
-
-      if (id) {
+      const registerPlayer = (launched) => {
+        injector = launched.child
+        gamePid = launched.pid
+        if (!id) return
         running.set(id, { pid: gamePid, injectorPid: injector.pid ?? null })
         injector.on('exit', () => {
           running.delete(id)
           send('arc:build-exited', { id })
-          if (running.size === 0 && gameServerState) void stopGameServer()
+          if (running.size === 0) {
+            clearJoinTarget()
+            if (gameServerState) void stopGameServer()
+            else void stopStaleVaultedClients()
+          }
         })
       }
 
+      let serverSpawned = false
+      if (!join) {
+        try {
+          await ensureGameServer(payload)
+          serverSpawned = true
+        } catch (error) {
+          // Some modern EOS builds never expose the local listen server.
+          // Do not leave a live matchmaker behind in that case: the client would
+          // reach the lobby, queue, and ping an empty matchmaker forever.
+          console.warn(`[VAULTED] Local game server unavailable: ${error instanceof Error ? error.message : error}`)
+          await stopGameServer()
+          await stopOwnedListener(MATCHMAKER_PORT, 'matchmaker.cjs')
+          send('arc:launch-status', {
+            id: id ?? undefined,
+            message: 'Game server unavailable — opening the lobby only.',
+          })
+        }
+      } else {
+        send('arc:launch-status', {
+          id: id ?? undefined,
+          message: `Joining ${join.host}:${join.port}…`,
+        })
+      }
+
+      send('arc:launch-status', { id: id ?? undefined, message: 'Starting Fortnite…' })
+      const launched = await launchInjectedGame(payload)
+      registerPlayer(launched)
+
+      if (serverSpawned) {
+        await awaitGameServerReady()
+        gameServerReady = true
+      }
+
       send('arc:launch-status', { id: id ?? undefined, message: 'Signing in to the private server…' })
-      return { pid: gamePid, privateServer: true }
+      return {
+        pid: gamePid,
+        privateServer: gameServerReady,
+        matchmaking: matchmakingReady,
+        joined: join ? `${join.host}:${join.port}` : null,
+      }
     } catch (error) {
       if (gamePid) await killProcessTree(gamePid)
       if (injector?.pid) await killProcessTree(injector.pid)
@@ -2228,9 +2688,21 @@ function registerIpc() {
     await killProcessTree(entry.pid)
 
     running.delete(id)
-    if (running.size === 0 && gameServerState) await stopGameServer()
+    if (running.size === 0) {
+      clearJoinTarget()
+      if (gameServerState) await stopGameServer()
+      else await stopStaleVaultedClients()
+    }
     return { closed: true }
   })
+
+  ipcMain.handle('arc:lan-ip', () => lanAddress())
+  ipcMain.handle('arc:public-address', () => resolvePublicAddress())
+  ipcMain.handle('arc:get-public-address', () => {
+    const manual = readPublicOverride()
+    return manual ? `${manual.address}:${manual.port}` : ''
+  })
+  ipcMain.handle('arc:set-public-address', (_event, value) => setPublicOverride(value))
 
   ipcMain.handle('arc:pick-folder', async () => {
     const parent = mainWindow ?? undefined
@@ -2375,6 +2847,11 @@ app.whenReady().then(() => {
   registerIpc()
   createWindow()
   startPlaylistWatcher()
+
+  // Warm the local matchmaker while the user is still choosing a season, so a
+  // Start click does not pay for process startup. It waits for port 7777 on its
+  // own, so running it before the host exists is safe.
+  void ensureLocalMatchmaker().catch(() => {})
 
   // check on launch and every 30 minutes; downloads install themselves
   if (!DEV && !SMOKE) {

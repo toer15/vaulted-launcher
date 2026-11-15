@@ -1,6 +1,6 @@
 import { Fragment } from 'react'
 import { Check, FolderPlus } from 'lucide-react'
-import { artFor, artKeyFor } from '../lib/art'
+import { artKeyFor, seasonImageFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { formatDownloadSize } from '../lib/downloadSize'
 import type { Build } from '../types'
@@ -42,7 +42,7 @@ export function BuildList({ builds, activeId, installed, activeCounts, sourceKey
     <div className="space-y-1.5">
       {builds.map((build, index) => {
         const active = build.id === activeId
-        const art = artFor(build.season)
+        const art = seasonImageFor(build.season)
         const sourceKey = artKeyFor(build.season)
         const online = Math.max(0, (activeCounts?.[sourceKey ?? ''] ?? 0) - (active ? 1 : 0))
         const chapterChanged = index === 0 || builds[index - 1].season.chapter !== build.season.chapter
@@ -85,7 +85,7 @@ export function BuildList({ builds, activeId, installed, activeCounts, sourceKey
                   ) : (
                     <span className="absolute inset-0 opacity-30 grain" aria-hidden />
                   )}
-                  <span className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
+                  <span className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent" />
                   {build.version && (
                     <span className="relative rounded bg-black/75 px-1 py-px font-mono text-[9px] font-semibold leading-tight text-white">
                       {build.version}

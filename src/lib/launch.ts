@@ -1,4 +1,23 @@
-import type { Build, BuildVerifyReport } from '../types'
+import type { Build, BuildVerifyReport, ShopEquipped, ShopItemType } from '../types'
+
+export interface InventoryItem {
+  id: string
+  type: ShopItemType
+}
+
+export interface InventoryPayload {
+  items: InventoryItem[]
+  equipped?: ShopEquipped
+}
+
+export interface InventorySyncResult {
+  synced: boolean
+  added?: number
+  owned?: number
+  accountId?: string
+  reason?: string
+  error?: string
+}
 
 export interface LaunchPayload {
   id?: string
@@ -7,6 +26,11 @@ export interface LaunchPayload {
   version: string
   /** private-server account name shown in Fortnite */
   username?: string
+  /** the account's owned shop items, written into the in-game athena profile */
+  inventory?: InventoryPayload
+  /** set to join a friend's lobby instead of starting a local host */
+  joinHost?: string
+  joinPort?: number
 }
 
 export interface WindowControls {
@@ -39,8 +63,25 @@ export interface DownloadResult {
  */
 export interface LauncherBridge {
   platform?: string
-  launchBuild(payload: LaunchPayload): Promise<{ pid: number | null }>
+  launchBuild(payload: LaunchPayload): Promise<{
+    pid: number | null
+    privateServer?: boolean
+    matchmaking?: boolean
+    joined?: string | null
+  }>
+  lanIp?(): Promise<string | null>
+  /** where friends should connect: public mapping when available, otherwise LAN */
+  publicAddress?(): Promise<{ address: string; port: number; public: boolean; method: string } | null>
+  getPublicAddress?(): Promise<string>
+  setPublicAddress?(value: string): Promise<{ ok: boolean; error?: string; value?: string | null }>
   closeBuild?(payload: { id: string }): Promise<{ closed: boolean }>
+  syncInventory?(payload: InventoryPayload & { username: string }): Promise<InventorySyncResult>
+  /** persisted account session so reinstalling keeps the player signed in */
+  accountSession?: {
+    read(): Promise<string | null>
+    save(value: string): Promise<boolean>
+    clear(): Promise<boolean>
+  }
   checkBuilds?(builds: Array<{ id: string; executable: string }>): Promise<Record<string, boolean>>
   downloadBuild?(payload: { id: string; key: string; url: string; sha256?: string }): Promise<DownloadResult>
   deleteBuild?(payload: { id: string; path: string }): Promise<{ deleted: boolean; managed: boolean; running?: boolean }>
@@ -90,7 +131,12 @@ function cleanIpcError(error: unknown): Error {
   return new Error(cleaned || 'Something went wrong.')
 }
 
-export async function launchBuild(build: Build, username?: string): Promise<{ pid: number | null }> {
+export async function launchBuild(
+  build: Build,
+  username?: string,
+  inventory?: InventoryPayload,
+  join?: { host: string; port: number },
+): Promise<{ pid: number | null; privateServer?: boolean; matchmaking?: boolean; joined?: string | null }> {
   if (!hasNativeBridge()) {
     throw new Error('Launching needs the desktop app — run "npm run app".')
   }
@@ -102,9 +148,34 @@ export async function launchBuild(build: Build, username?: string): Promise<{ pi
       executable: build.executable,
       version: build.version,
       username,
+      inventory,
+      joinHost: join?.host,
+      joinPort: join?.port,
     })
   } catch (error) {
     throw cleanIpcError(error)
+  }
+}
+
+/**
+ * Mirrors the account's owned shop items into the private server profile. This
+ * is intentionally best-effort outside the desktop shell; the launch payload
+ * performs the same sync again before the client starts.
+ */
+export async function syncVaultedInventory(
+  payload: InventoryPayload & { username?: string },
+): Promise<InventorySyncResult> {
+  if (!payload.username || typeof window === 'undefined' || !window.arc?.syncInventory) {
+    return { synced: false, reason: 'desktop-only' }
+  }
+  try {
+    return await window.arc.syncInventory({
+      username: payload.username,
+      items: payload.items,
+      equipped: payload.equipped,
+    })
+  } catch (error) {
+    return { synced: false, error: cleanIpcError(error).message }
   }
 }
 

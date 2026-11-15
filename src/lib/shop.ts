@@ -69,6 +69,21 @@ export const SHOP_CATALOG: ShopItem[] = (() => {
   return merged
 })()
 
+export const SHOP_ITEM_BY_ID = new Map(SHOP_CATALOG.map((item) => [item.id, item]))
+
+/** Convert stored shop IDs into the compact list sent to the game profile. */
+export function inventoryItemsFor(ids: string[]): Array<{ id: string; type: ShopItemType }> {
+  const seen = new Set<string>()
+  const items: Array<{ id: string; type: ShopItemType }> = []
+  for (const id of ids) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    const item = SHOP_ITEM_BY_ID.get(id)
+    if (item) items.push({ id: item.id, type: item.type })
+  }
+  return items
+}
+
 const SHOP_ART = import.meta.glob('../assets/shop/*.png', {
   eager: true,
   import: 'default',

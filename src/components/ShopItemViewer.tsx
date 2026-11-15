@@ -265,7 +265,7 @@ export function ShopItemViewer({ item, holiday, owned, equipped, canAfford, onBu
                 )}
               </button>
               <p className="mt-2.5 text-center text-[9px] leading-relaxed text-[#5f8093]">
-                Saved to your account locker and active across every chapter and season.
+                Added to your Fortnite locker and available across every chapter and season.
               </p>
             </div>
           </div>

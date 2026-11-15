@@ -9,6 +9,20 @@ const GAME_HOST = process.env.VAULTED_GAME_HOST || '127.0.0.1';
 const GAME_PORT = Number(process.env.VAULTED_GAME_PORT || 7777);
 const MATCHMAKER_URL = process.env.VAULTED_MATCHMAKER_URL || 'ws://127.0.0.1:3552';
 const DEFAULT_PLAYLIST = 'Playlist_DefaultSolo';
+const JOIN_FILE = process.env.VAULTED_JOIN_FILE || path.join(__dirname, '..', '..', 'vaulted-join.json');
+
+/** The launcher writes this file while joining a friend's lobby. */
+function joinTarget() {
+  try {
+    const value = JSON.parse(fs.readFileSync(JOIN_FILE, 'utf8'));
+    if (value && typeof value.host === 'string' && value.host.trim()) {
+      return { host: value.host.trim(), port: Number(value.port) || GAME_PORT };
+    }
+  } catch (error) {
+    /* hosting locally */
+  }
+  return null;
+}
 
 /** Read the playlist the frontend currently has selected. */
 function selectedPlaylistName() {
@@ -146,15 +160,18 @@ module.exports = {
     const buildUniqueId = req.cookies?.currentbuildUniqueId || req.cookies?.NetCL || currentBuildUniqueId || '0';
     const sessionId = req.params.sessionId;
     const ownerId = randomId().toUpperCase();
-    const serverAddress = `${GAME_HOST}:${GAME_PORT}`;
+    const join = joinTarget();
+    const host = join ? join.host : GAME_HOST;
+    const port = join ? join.port : GAME_PORT;
+    const serverAddress = `${host}:${port}`;
 
     res.json({
       id: sessionId,
       ownerId,
       ownerName: '[DS]fortnite-liveeugcec1c2e30ubrcore0a-z8hj-1968',
       serverName: '[DS]fortnite-liveeugcec1c2e30ubrcore0a-z8hj-1968',
-      serverAddress: GAME_HOST,
-      serverPort: GAME_PORT,
+      serverAddress: host,
+      serverPort: port,
       maxPublicPlayers: 220,
       openPublicPlayers: 175,
       maxPrivatePlayers: 0,

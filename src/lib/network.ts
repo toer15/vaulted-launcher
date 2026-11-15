@@ -291,10 +291,12 @@ export async function fetchManifest(): Promise<BuildManifest> {
     if (!data || typeof data !== 'object' || typeof data.seasons !== 'object' || data.seasons === null) {
       throw apiError('Build sources are in an unexpected format.')
     }
-    // merge with the bundled default so sources are never lost
+    // The bundled sources ship with the app and are the verified set, so they
+    // win for every season the app already knows. A remote manifest can still
+    // add seasons that were released after this build.
     const merged: BuildManifest = {
       ...data,
-      seasons: { ...(defaultBuilds as BuildManifest).seasons, ...data.seasons },
+      seasons: { ...data.seasons, ...(defaultBuilds as BuildManifest).seasons },
     }
     return merged
   } catch (error) {

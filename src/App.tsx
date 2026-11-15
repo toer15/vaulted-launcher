@@ -3,12 +3,14 @@ import { ActiveBuildCard } from './components/ActiveBuildCard'
 import { AddBuildDialog } from './components/AddBuildDialog'
 import { AuthScreen } from './components/AuthScreen'
 import { BuildDrawer } from './components/BuildDrawer'
+import { FriendsView } from './components/FriendsView'
 import { ItemShopView } from './components/ItemShopView'
 import { LibraryRail } from './components/LibraryRail'
 import { SettingsView } from './components/SettingsView'
 import { ToastStack } from './components/Toast'
 import { TopBar } from './components/TopBar'
 import { artKeyFor } from './lib/art'
+import { fetchFriends, publishSession, stopHosting } from './lib/friends'
 import {
   canDownloadBuilds,
   cancelDownload,
@@ -42,7 +44,7 @@ import defaultBuilds from './assets/builds.json'
 import { buildForSeason, ensureAllSeasons, seedBuilds, sortBuilds } from './lib/sampleBuilds'
 import { loadState, saveState, uid } from './lib/storage'
 import { useItemShop } from './lib/useItemShop'
-import { SHOP_CATALOG } from './lib/shop'
+import { inventoryItemsFor, SHOP_CATALOG } from './lib/shop'
 import type {
   Account,
   Build,
@@ -55,7 +57,7 @@ import type {
 } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.34'
+const APP_VERSION = '1.0.46'
 const TOAST_TTL = 4200
 
 interface VerifyJob {
@@ -79,10 +81,8 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
-  const [view, setView] = useState<'home' | 'shop' | 'settings'>('home')
-  const [serverByBuild, setServerByBuild] = useState<Record<string, string>>(
-    () => loadState()?.serverByBuild ?? {},
-  )
+  const [view, setView] = useState<'home' | 'shop' | 'settings' | 'friends'>('home')
+  const [friendRequests, setFriendRequests] = useState(0)
   const [verifyJob, setVerifyJob] = useState<VerifyJob | null>(null)
   const [launchStage, setLaunchStage] = useState<string | null>(null)
 
@@ -99,6 +99,13 @@ export default function App() {
     url?: string
   }>({ state: 'idle' })
   const [updateReady, setUpdateReady] = useState(false)
+  const [hostedLobby, setHostedLobby] = useState<{
+    address: string
+    port: number
+    buildId: string
+    label: string
+    public: boolean
+  } | null>(null)
 
   const native = useMemo(() => hasNativeBridge(), [])
   const shop = useItemShop({
@@ -107,6 +114,7 @@ export default function App() {
     activeId,
     runningId,
     accountId: session?.user.id,
+    username: session?.user.username,
     token: session?.token,
   })
 
@@ -281,8 +289,8 @@ export default function App() {
   }, [builds, activeId])
 
   useEffect(() => {
-    saveState({ builds, activeId, serverByBuild })
-  }, [builds, activeId, serverByBuild])
+    saveState({ builds, activeId })
+  }, [builds, activeId])
 
   // a verification result belongs to the build that was checked
   useEffect(() => {
@@ -515,7 +523,7 @@ export default function App() {
   )
 
   const startBuild = useCallback(
-    async (build: Build, onlineServer?: { name: string; url: string }) => {
+    async (build: Build, join?: { host: string; port: number }) => {
       if (downloads[build.id] || phase === 'launching') return
 
       if (runningId === build.id) {
@@ -537,23 +545,61 @@ export default function App() {
         return
       }
 
-      // installed -> start the bundled private server, then launch the client
-      // with the redirected login. Online is a launch profile, never a browser
-      // handoff.
+      // installed -> start the bundled match server, then launch the client
+      // straight into the game. There is no browser or server picker.
       setPhase('launching')
       setLaunchStage('Preparing the private server…')
       try {
-        await launchBuild(build, session?.user.username)
+        const launched = await launchBuild(
+          build,
+          session?.user.username,
+          {
+            items: inventoryItemsFor(shop.owned),
+            equipped: shop.equipped,
+          },
+          join,
+        )
         setRunningId(build.id)
         setPhase('running')
         setLaunchStage(null)
         shop.sets.recordLaunch(build.id)
+        if (join) {
+          setHostedLobby(null)
+          void stopHosting().catch(() => {})
+        } else {
+          void (async () => {
+            try {
+              const endpoint = await window.arc?.publicAddress?.()
+              if (!endpoint) return
+              setHostedLobby({
+                address: endpoint.address,
+                port: endpoint.port,
+                buildId: build.id,
+                label: build.season.label,
+                public: endpoint.public,
+              })
+              await publishSession(`${endpoint.address}:${endpoint.port}`, {
+                buildId: build.id,
+                label: build.season.label,
+                public: endpoint.public,
+              })
+            } catch {
+              /* friends can still join by IP if the relay is offline */
+            }
+          })()
+        }
         pushToast({
-          tone: 'success',
-          title: 'Fortnite is starting. Have fun.',
-          description: onlineServer
-            ? `${build.season.label} · ${onlineServer.name} · v${build.version}`
-            : `${build.season.label} · v${build.version}`,
+          tone: launched.privateServer === false ? 'info' : 'success',
+          title: join
+            ? `Joining ${join.host}`
+            : launched.privateServer === false
+              ? 'Opening the lobby only'
+              : 'Fortnite is starting. Have fun.',
+          description: join
+            ? `${build.season.label} · your client is pointed at ${join.host}:${join.port}`
+            : launched.privateServer === false
+              ? `${build.season.label} · no match server available for this build — no queue was started.`
+              : `${build.season.label} · v${build.version} · your lobby is listed for everyone in Open lobbies.`,
         })
       } catch (error) {
         setPhase('error')
@@ -565,17 +611,7 @@ export default function App() {
         })
       }
     },
-    [downloads, phase, installed, requestDownload, pushToast, runningId, session?.user.username, shop.sets],
-  )
-
-  const handleLaunchOnline = useCallback(
-    (server: { name: string; url: string }) => {
-      const build = activeBuild
-      if (!build) return
-      setServerByBuild((prev) => ({ ...prev, [build.id]: server.url }))
-      void startBuild(build, server)
-    },
-    [activeBuild, startBuild],
+    [downloads, phase, installed, requestDownload, pushToast, runningId, session?.user.username, shop.sets, shop.owned, shop.equipped],
   )
 
   const handlePrimary = useCallback(async () => {
@@ -588,6 +624,7 @@ export default function App() {
         const closed = await closeBuildProcess(build.id)
         setRunningId(null)
         setPhase('idle')
+        void stopHosting().catch(() => {})
         pushToast({
           tone: closed ? 'info' : 'error',
           title: closed ? 'Fortnite closed' : 'Could not close Fortnite',
@@ -629,6 +666,77 @@ export default function App() {
       void startBuild(build)
     },
     [builds, pushToast, runningId, startBuild],
+  )
+
+  // Keep the lobby listed while the host is up; the relay drops entries it has
+  // not heard from for two minutes.
+  useEffect(() => {
+    if (!hostedLobby) return
+    let closed = false
+    const publish = async () => {
+      if (closed) return
+      try {
+        await publishSession(`${hostedLobby.address}:${hostedLobby.port}`, {
+          buildId: hostedLobby.buildId,
+          label: hostedLobby.label,
+          public: hostedLobby.public,
+        })
+      } catch {
+        /* offline — the next tick retries */
+      }
+    }
+    publish()
+    const timer = window.setInterval(() => void publish(), 45_000)
+    return () => {
+      closed = true
+      window.clearInterval(timer)
+    }
+  }, [hostedLobby])
+
+  useEffect(() => {
+    if (!runningId) setHostedLobby(null)
+  }, [runningId])
+
+  const handleJoinFriend = useCallback(
+    (address: string, buildId: string | null, label: string | null) => {
+      const build =
+        builds.find((candidate) => candidate.id === buildId) ??
+        (label ? builds.find((candidate) => candidate.season.label.toLowerCase() === label.toLowerCase()) : undefined) ??
+        activeBuild
+      if (!build) {
+        pushToast({
+          tone: 'info',
+          title: 'Pick a build first',
+          description: 'Choose the chapter and season you want to play, then press Join again.',
+        })
+        return
+      }
+      if (!installed[build.id]) {
+        setActiveId(build.id)
+        setView('home')
+        pushToast({
+          tone: 'info',
+          title: `Download ${build.season.label} first`,
+          description: 'That lobby runs a build this PC has not downloaded yet — press Start to get it.',
+        })
+        return
+      }
+      if (runningId && runningId !== build.id) {
+        pushToast({
+          tone: 'info',
+          title: 'Close the running build first',
+          description: 'Only one Fortnite client can run at a time.',
+        })
+        return
+      }
+      const [host, portText] = address.split(':')
+      const port = Number(portText) || 7777
+      if (!host) return
+      setActiveId(build.id)
+      setView('home')
+      void startBuild(build, { host, port })
+    },
+    [activeBuild, builds, installed, pushToast, runningId, startBuild],
   )
 
   const handleCancelDownload = useCallback(() => {
@@ -893,6 +1001,24 @@ export default function App() {
       /vaulted launcher[\\/]+builds[\\/]/i.test(activeBuild.path),
   )
 
+  useEffect(() => {
+    if (!session) return
+    let cancelled = false
+    const refresh = () => {
+      fetchFriends()
+        .then((summary) => {
+          if (!cancelled) setFriendRequests(summary.incoming.length)
+        })
+        .catch(() => {})
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 15000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [session, account.username])
+
   if (!session) {
     return (
       <AuthScreen
@@ -933,9 +1059,12 @@ export default function App() {
           native={native}
           settingsActive={view === 'settings'}
           shopActive={view === 'shop'}
+          friendsActive={view === 'friends'}
+          friendRequests={friendRequests}
           onOpenLibrary={() => setDrawerOpen(true)}
           onOpenSettings={() => setView((current) => (current === 'settings' ? 'home' : 'settings'))}
           onOpenShop={() => setView((current) => (current === 'shop' ? 'home' : 'shop'))}
+          onOpenFriends={() => setView((current) => (current === 'friends' ? 'home' : 'friends'))}
         />
 
         <main className="mt-5 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 sm:mt-6">
@@ -961,6 +1090,13 @@ export default function App() {
               updateReady={updateReady}
               onCheckUpdates={() => void checkForUpdates()}
               onRestartToUpdate={() => void window.arc?.installUpdate?.()}
+            />
+          ) : view === 'friends' ? (
+            <FriendsView
+              username={account.username}
+              onBack={() => setView('home')}
+              onSummary={(summary) => setFriendRequests(summary?.incoming.length ?? 0)}
+              onJoin={handleJoinFriend}
             />
           ) : view === 'shop' ? (
             <ItemShopView
@@ -991,14 +1127,11 @@ export default function App() {
                 account={account}
                 sourceKeys={sourceKeys}
                 downloadSize={activeDownloadSize}
-                servers={activeBuild ? (manifest?.seasons[artKeyFor(activeBuild.season) ?? '']?.servers ?? []) : []}
                 installed={installed}
                 canDelete={canDeleteActive}
                 deleting={deletingId === activeBuild?.id}
-                selectedServerUrl={activeBuild ? serverByBuild[activeBuild.id] ?? null : null}
                 launchStage={launchStage}
                 verify={verifyJob?.id === activeBuild?.id ? verifyJob : null}
-                onLaunchOnline={handleLaunchOnline}
                 onVerify={() => void handleVerifyBuild()}
                 onLogout={() => void handleLogout()}
                 onPrimary={handlePrimary}
@@ -1026,7 +1159,7 @@ export default function App() {
         </main>
 
         <footer className="mt-6 flex flex-wrap items-center justify-between gap-2 border-t border-line/60 pt-4 text-[11px] text-fog/80">
-          <p>VAULTED v{APP_VERSION} — every season since 2017 · key art © Epic Games</p>
+          <p>VAULTED v{APP_VERSION} — every season since 2017 · lobby art © Epic Games</p>
           <p className="font-mono">
             {builds.length} build{builds.length === 1 ? '' : 's'} indexed
           </p>

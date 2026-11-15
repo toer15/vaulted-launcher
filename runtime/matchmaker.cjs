@@ -3,15 +3,16 @@
 const http = require('node:http')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
-const net = require('node:net')
 const path = require('node:path')
 
-const matchmakerVersion = 2
+const matchmakerVersion = 3
 const matchmakerPort = Number(process.env.VAULTED_MATCHMAKER_PORT || 3552)
 const gamePort = Number(process.env.VAULTED_GAME_PORT || 7777)
 const gameHost = process.env.VAULTED_GAME_HOST || '127.0.0.1'
 const gameStateFile = process.env.VAULTED_GAME_STATE_FILE ||
   (process.env.APPDATA ? path.join(process.env.APPDATA, 'VAULTED Launcher', 'game-server-state.json') : '')
+const joinFile = process.env.VAULTED_JOIN_FILE || ''
+const activeClients = new Set()
 
 function log(message) {
   console.log(`[VAULTED-MM] ${new Date().toISOString()} ${message}`)
@@ -34,6 +35,20 @@ function selectedPlaylistName() {
   } catch {
     return null
   }
+}
+
+/** Set while the launcher is joining a friend's lobby instead of hosting one. */
+function joinTarget() {
+  if (!joinFile) return null
+  try {
+    const value = JSON.parse(fs.readFileSync(joinFile, 'utf8'))
+    if (value && typeof value.host === 'string' && value.host.trim()) {
+      return { host: value.host.trim(), port: Number(value.port) || gamePort }
+    }
+  } catch (error) {
+    /* no join in progress */
+  }
+  return null
 }
 
 /** Never assign a session until the hidden host is running the selected mode. */
@@ -83,12 +98,26 @@ function websocketClient(socket) {
   let buffer = Buffer.alloc(0)
   let closed = false
   let ready = false
+  let announced = false
   const timers = []
 
+  let cancelled = false
   const close = () => {
     closed = true
     for (const timer of timers) clearInterval(timer)
     if (!socket.destroyed) socket.destroy()
+  }
+
+  function cancel() {
+    if (closed || cancelled) return
+    cancelled = true
+    announced = true
+    for (const timer of timers) clearInterval(timer)
+    sendStatus('Cancelled')
+    log('queue cancelled; told the client to return to the lobby')
+    // Keep the socket up briefly so the client can process the status; it
+    // closes it itself when it returns to the frontend.
+    schedule(5000, () => close())
   }
 
   function schedule(delay, callback) {
@@ -105,17 +134,37 @@ function websocketClient(socket) {
     })
   }
 
+  function shutdown() {
+    if (socket.destroyed) return
+    try {
+      socket.write(frame('', 0x8))
+    } catch {
+      /* already gone */
+    }
+    setTimeout(() => {
+      if (!socket.destroyed) socket.end()
+    }, 80)
+  }
+
   function finishMatch() {
-    if (closed) return
-    const matchId = randomId().toUpperCase()
-    const sessionId = randomId().toUpperCase()
-    sendStatus('SessionAssignment', { matchId })
-    schedule(1200, () => {
+    if (closed || cancelled) return
+    const matchId = crypto.randomUUID().toUpperCase()
+    const sessionId = crypto.randomUUID().toUpperCase()
+    sendStatus('SessionAssignment', { matchId, sessionId })
+    schedule(900, () => {
       sendJson(socket, {
         name: 'Play',
-        payload: { matchId, sessionId, joinDelaySec: 1 },
+        payload: { matchId, sessionId, joinDelaySec: 1, serverAddress: gameHost, serverPort: gamePort },
       })
       log(`assigned ${sessionId}`)
+      // The 1.10 client only starts the join when the matchmaking connection
+      // drops. A clean WebSocket close frame is reported as ServiceError, so
+      // the socket is destroyed instead; that is what makes it finalize and
+      // travel to the assigned server.
+      schedule(2200, () => {
+        log('dropping matchmaking socket so the client starts the join')
+        close()
+      })
     })
   }
 
@@ -125,35 +174,50 @@ function websocketClient(socket) {
     log('client connected')
 
     sendStatus('Connecting')
-    schedule(500, () => sendStatus('Waiting', { totalPlayers: 1, connectedPlayers: 1 }))
+    schedule(500, () =>
+      sendStatus('Waiting', { totalPlayers: 1, connectedPlayers: 1, estimatedWaitSec: 2 }),
+    )
     schedule(1500, () =>
       sendStatus('Queued', {
         ticketId: randomId(),
-        queuedPlayers: 0,
-        estimatedWaitSec: 0,
+        queuedPlayers: 1,
+        estimatedWaitSec: 2,
         status: {},
       }),
     )
 
-    let announced = false
+    let waitingOnStateSince = 0
+    // The host writes game-server-state.json when its selected mode is loaded.
+    // Probing TCP 7777 was wrong: UE listens on UDP, so the queue never left
+    // "Waiting for server" even though the host was ready.
     const probe = () => {
-      if (closed || announced) return
-      const socketTest = net.connect({ host: gameHost, port: gamePort })
-      socketTest.setTimeout(700)
-      socketTest.once('connect', () => {
-        socketTest.destroy()
-        if (!hostReadyForSelectedPlaylist()) return
+      if (closed || cancelled || announced) return
+      const join = joinTarget()
+      if (join) {
         announced = true
-        log('game server is listening; assigning session')
+        log(`joining ${join.host}:${join.port}; skipping the local host probe`)
         finishMatch()
-      })
-      socketTest.once('timeout', () => socketTest.destroy())
-      socketTest.once('error', () => socketTest.destroy())
+        return
+      }
+      if (!hostReadyForSelectedPlaylist()) {
+        if (!waitingOnStateSince) {
+          waitingOnStateSince = Date.now()
+          log('hidden host is not ready for the selected playlist yet')
+        }
+        return
+      }
+      announced = true
+      log('hidden host is ready for the selected playlist; assigning session')
+      finishMatch()
     }
 
-    probe()
-    const interval = setInterval(probe, 2000)
-    timers.push(interval)
+    // Start looking for the host only after the client has entered Queued;
+    // assigning earlier skipped the queue and made CANCEL useless.
+    schedule(1650, () => {
+      probe()
+      const interval = setInterval(probe, 1000)
+      timers.push(interval)
+    })
   }
 
   function handleFrame(parsed) {
@@ -169,7 +233,11 @@ function websocketClient(socket) {
       const text = parsed.payload.toString('utf8')
       try {
         const message = JSON.parse(text)
-        log(`client message: ${message.name || message.type || 'unknown'}`)
+        const name = String(message.name || message.type || 'unknown')
+        log(`client message: ${name} ${text.slice(0, 300)}`)
+        if (/cancel|leave|abort/i.test(name)) {
+          cancel()
+        }
       } catch {
         log(`client message: ${text.slice(0, 200)}`)
       }
@@ -227,8 +295,11 @@ function websocketClient(socket) {
   socket.on('close', () => {
     closed = true
     for (const timer of timers) clearInterval(timer)
+    activeClients.delete(api)
   })
 
+  const api = { close, cancel, get cancelled() { return cancelled } }
+  activeClients.add(api)
   begin()
 }
 
@@ -236,6 +307,18 @@ const server = http.createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
     res.end(JSON.stringify({ ok: true, service: 'vaulted-matchmaker', version: matchmakerVersion, gamePort }))
+    return
+  }
+  if (req.url === '/cancel' && (req.method === 'POST' || req.method === 'GET')) {
+    let cancelled = 0
+    for (const client of activeClients) {
+      if (client.cancelled) continue
+      client.cancel()
+      cancelled += 1
+    }
+    log(`cancel endpoint cancelled ${cancelled} queue(s)`)
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+    res.end(JSON.stringify({ ok: true, cancelled }))
     return
   }
   res.writeHead(404)

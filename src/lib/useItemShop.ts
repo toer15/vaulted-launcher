@@ -5,12 +5,14 @@ import {
   createShopState,
   dayKey,
   getDailyShop,
+  inventoryItemsFor,
   loadShopState,
   saveShopState,
   SHOP_CATALOG,
   type ShopChallengeId,
 } from './shop'
 import { fetchInventory, saveInventory } from './network'
+import { syncVaultedInventory } from './launch'
 import type { Build, ShopEquipped, ShopItemType, ShopState } from '../types'
 
 export type PurchaseResult = 'bought' | 'owned' | 'insufficient' | 'missing'
@@ -23,6 +25,7 @@ interface UseItemShopOptions {
   activeId: string | null
   runningId: string | null
   accountId?: string | null
+  username?: string
   token?: string
 }
 
@@ -32,6 +35,7 @@ export function useItemShop({
   activeId,
   runningId,
   accountId,
+  username,
   token,
 }: UseItemShopOptions) {
   const [day, setDay] = useState(() => dayKey())
@@ -133,6 +137,21 @@ export function useItemShop({
     }, 650)
     return () => window.clearTimeout(timer)
   }, [token, remoteReady, state.owned, state.equipped])
+
+  // Mirror the same collection into the private server's athena profile. The
+  // sidecar is re-applied by the backend on every profile read, so cosmetics
+  // survive lobby saves and are present in every chapter and season.
+  useEffect(() => {
+    if (!username) return
+    const timer = window.setTimeout(() => {
+      void syncVaultedInventory({
+        username,
+        items: inventoryItemsFor(state.owned),
+        equipped: state.equipped,
+      })
+    }, 650)
+    return () => window.clearTimeout(timer)
+  }, [username, state.owned, state.equipped])
 
   // Count play time while the selected challenge build is running. The main
   // process owns the actual client; this is the visible session clock and it

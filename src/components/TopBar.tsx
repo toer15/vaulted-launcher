@@ -1,4 +1,4 @@
-import { LayoutGrid, Radio, Settings2, Sparkles, Store } from 'lucide-react'
+import { LayoutGrid, Radio, Settings2, Sparkles, Store, Users } from 'lucide-react'
 import brandIcon from '../assets/brand-icon.png'
 import { AccountChip } from './AccountChip'
 import { WindowControls } from './WindowControls'
@@ -15,9 +15,12 @@ interface TopBarProps {
   native: boolean
   settingsActive: boolean
   shopActive: boolean
+  friendsActive: boolean
+  friendRequests: number
   onOpenLibrary: () => void
   onOpenSettings: () => void
   onOpenShop: () => void
+  onOpenFriends: () => void
   onLogout: () => void
 }
 
@@ -29,9 +32,12 @@ export function TopBar({
   native,
   settingsActive,
   shopActive,
+  friendsActive,
+  friendRequests,
   onOpenLibrary,
   onOpenSettings,
   onOpenShop,
+  onOpenFriends,
   onLogout,
 }: TopBarProps) {
   return (
@@ -90,6 +96,29 @@ export function TopBar({
         >
           <Store className="h-4 w-4" />
           <span className="hidden sm:inline">Item Shop</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenFriends}
+          aria-pressed={friendsActive}
+          title="Friends"
+          className={cx(
+            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300',
+            friendsActive
+              ? 'border-arc/50 bg-arc/15 text-white'
+              : 'border-line bg-panel/70 text-fog hover:border-arc/45 hover:bg-panel-hi hover:text-mist',
+          )}
+        >
+          <span className="relative">
+            <Users className="h-4 w-4" />
+            {friendRequests > 0 && (
+              <span className="absolute -right-2 -top-2 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">
+                {friendRequests}
+              </span>
+            )}
+          </span>
+          <span className="hidden sm:inline">Friends</span>
         </button>
 
         <button
