@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld('arc', {
   setPublicAddress: (value) => ipcRenderer.invoke('arc:set-public-address', value),
   scanBuilds: () => ipcRenderer.invoke('arc:scan-builds'),
   checkUpdates: () => ipcRenderer.invoke('arc:check-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('arc:download-update'),
   installUpdate: () => ipcRenderer.invoke('arc:install-update'),
   onUpdateAvailable: (callback) => subscribe('arc:update-available', callback),
   onUpdateDownloaded: (callback) => subscribe('arc:update-downloaded', callback),
