@@ -66,3 +66,39 @@ export interface ToastMessage {
   description?: string
   tone: 'success' | 'info' | 'error'
 }
+
+export type ShopItemType = 'outfit' | 'emote' | 'pickaxe' | 'glider' | 'backpack'
+export type ShopRarity = 'uncommon' | 'rare' | 'epic' | 'legendary'
+
+export interface ShopItem {
+  id: string
+  slug: string
+  name: string
+  type: ShopItemType
+  rarity: ShopRarity
+  price: number
+  season: string
+}
+
+export interface ShopProgress {
+  /** UTC day this progress belongs to */
+  day: string
+  /** season/chapter the player chose for today's challenges */
+  buildId: string | null
+  launches: number
+  playSeconds: number
+  claimed: string[]
+}
+
+export interface ShopState {
+  version: 1
+  vbucks: number
+  owned: string[]
+  progress: ShopProgress
+}
+
+export interface ShopDay {
+  day: string
+  featured: ShopItem[]
+  daily: ShopItem[]
+}

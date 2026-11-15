@@ -1,4 +1,4 @@
-import { LayoutGrid, Radio, Settings2, Sparkles } from 'lucide-react'
+import { LayoutGrid, Radio, Settings2, Sparkles, Store } from 'lucide-react'
 import brandIcon from '../assets/brand-icon.png'
 import { AccountChip } from './AccountChip'
 import { WindowControls } from './WindowControls'
@@ -14,8 +14,10 @@ interface TopBarProps {
   buildCount: number
   native: boolean
   settingsActive: boolean
+  shopActive: boolean
   onOpenLibrary: () => void
   onOpenSettings: () => void
+  onOpenShop: () => void
   onLogout: () => void
 }
 
@@ -26,8 +28,10 @@ export function TopBar({
   buildCount,
   native,
   settingsActive,
+  shopActive,
   onOpenLibrary,
   onOpenSettings,
+  onOpenShop,
   onLogout,
 }: TopBarProps) {
   return (
@@ -71,6 +75,22 @@ export function TopBar({
           <Radio className="h-3 w-3" />
           {native ? 'Bridge connected' : 'Local mode'}
         </span>
+
+        <button
+          type="button"
+          onClick={onOpenShop}
+          aria-pressed={shopActive}
+          title="Item Shop"
+          className={cx(
+            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300',
+            shopActive
+              ? 'border-[#e2b85a]/50 bg-[#e2b85a]/15 text-[#ffe8a8]'
+              : 'border-line bg-panel/70 text-fog hover:border-[#e2b85a]/45 hover:bg-panel-hi hover:text-mist',
+          )}
+        >
+          <Store className="h-4 w-4" />
+          <span className="hidden sm:inline">Item Shop</span>
+        </button>
 
         <button
           type="button"

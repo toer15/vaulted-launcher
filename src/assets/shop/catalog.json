@@ -1,0 +1,290 @@
+[
+  {
+    "id": "CID_028_Athena_Commando_F",
+    "slug": "renegade-raider",
+    "name": "Renegade Raider",
+    "type": "outfit",
+    "rarity": "rare",
+    "price": 1200,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "CID_017_Athena_Commando_M",
+    "slug": "aerial-assault-trooper",
+    "name": "Aerial Assault Trooper",
+    "type": "outfit",
+    "rarity": "rare",
+    "price": 1200,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "CID_030_Athena_Commando_M_Halloween",
+    "slug": "skull-trooper",
+    "name": "Skull Trooper",
+    "type": "outfit",
+    "rarity": "epic",
+    "price": 1500,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "CID_029_Athena_Commando_F_Halloween",
+    "slug": "ghoul-trooper",
+    "name": "Ghoul Trooper",
+    "type": "outfit",
+    "rarity": "epic",
+    "price": 1500,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "CID_035_Athena_Commando_M_Medieval",
+    "slug": "black-knight",
+    "name": "Black Knight",
+    "type": "outfit",
+    "rarity": "legendary",
+    "price": 2000,
+    "season": "Chapter 1 · Season 2"
+  },
+  {
+    "id": "CID_034_Athena_Commando_F_Medieval",
+    "slug": "red-knight",
+    "name": "Red Knight",
+    "type": "outfit",
+    "rarity": "legendary",
+    "price": 2000,
+    "season": "Chapter 1 · Season 2"
+  },
+  {
+    "id": "CID_161_Athena_Commando_M_Drift",
+    "slug": "drift",
+    "name": "Drift",
+    "type": "outfit",
+    "rarity": "legendary",
+    "price": 2000,
+    "season": "Chapter 1 · Season 5"
+  },
+  {
+    "id": "CID_416_Athena_Commando_M_AssassinSuit",
+    "slug": "john-wick",
+    "name": "John Wick",
+    "type": "outfit",
+    "rarity": "legendary",
+    "price": 2000,
+    "season": "Chapter 1 · Season 9"
+  },
+  {
+    "id": "CID_031_Athena_Commando_M_Retro",
+    "slug": "raptor",
+    "name": "Raptor",
+    "type": "outfit",
+    "rarity": "legendary",
+    "price": 2000,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "CID_044_Athena_Commando_F_SciPop",
+    "slug": "brite-bomber",
+    "name": "Brite Bomber",
+    "type": "outfit",
+    "rarity": "rare",
+    "price": 1200,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "CID_069_Athena_Commando_F_PinkBear",
+    "slug": "cuddle-team-leader",
+    "name": "Cuddle Team Leader",
+    "type": "outfit",
+    "rarity": "legendary",
+    "price": 2000,
+    "season": "Chapter 1 · Season 2"
+  },
+  {
+    "id": "CID_315_Athena_Commando_M_TeriyakiFish",
+    "slug": "fishstick",
+    "name": "Fishstick",
+    "type": "outfit",
+    "rarity": "rare",
+    "price": 1200,
+    "season": "Chapter 1 · Season 7"
+  },
+  {
+    "id": "CID_349_Athena_Commando_M_Banana",
+    "slug": "peely",
+    "name": "Peely",
+    "type": "outfit",
+    "rarity": "epic",
+    "price": 1500,
+    "season": "Chapter 1 · Season 8"
+  },
+  {
+    "id": "CID_694_Athena_Commando_M_CatBurglar",
+    "slug": "midas",
+    "name": "Midas",
+    "type": "outfit",
+    "rarity": "legendary",
+    "price": 2000,
+    "season": "Chapter 2 · Season 2"
+  },
+  {
+    "id": "CID_102_Athena_Commando_M_Raven",
+    "slug": "raven",
+    "name": "Raven",
+    "type": "outfit",
+    "rarity": "legendary",
+    "price": 2000,
+    "season": "Chapter 1 · Season 3"
+  },
+  {
+    "id": "CID_109_Athena_Commando_M_Pizza",
+    "slug": "tomatohead",
+    "name": "Tomatohead",
+    "type": "outfit",
+    "rarity": "epic",
+    "price": 1500,
+    "season": "Chapter 1 · Season 3"
+  },
+  {
+    "id": "EID_Floss",
+    "slug": "floss",
+    "name": "Floss",
+    "type": "emote",
+    "rarity": "rare",
+    "price": 500,
+    "season": "Chapter 1 · Season 2"
+  },
+  {
+    "id": "EID_BestMates",
+    "slug": "best-mates",
+    "name": "Best Mates",
+    "type": "emote",
+    "rarity": "rare",
+    "price": 500,
+    "season": "Chapter 1 · Season 3"
+  },
+  {
+    "id": "EID_Fresh",
+    "slug": "fresh",
+    "name": "Fresh",
+    "type": "emote",
+    "rarity": "epic",
+    "price": 800,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "EID_ElectroShuffle",
+    "slug": "electro-shuffle",
+    "name": "Electro Shuffle",
+    "type": "emote",
+    "rarity": "epic",
+    "price": 800,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "EID_GoodVibes",
+    "slug": "orange-justice",
+    "name": "Orange Justice",
+    "type": "emote",
+    "rarity": "rare",
+    "price": 500,
+    "season": "Chapter 1 · Season 4"
+  },
+  {
+    "id": "EID_TakeTheL",
+    "slug": "take-the-l",
+    "name": "Take The L",
+    "type": "emote",
+    "rarity": "rare",
+    "price": 500,
+    "season": "Chapter 1 · Season 3"
+  },
+  {
+    "id": "HalloweenScythe",
+    "slug": "reaper",
+    "name": "Reaper",
+    "type": "pickaxe",
+    "rarity": "rare",
+    "price": 800,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "Pickaxe_ID_015_HolidayCandyCane",
+    "slug": "candy-axe",
+    "name": "Candy Axe",
+    "type": "pickaxe",
+    "rarity": "epic",
+    "price": 1200,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "Pickaxe_ID_029_Assassin",
+    "slug": "trusty-no-2",
+    "name": "Trusty No. 2",
+    "type": "pickaxe",
+    "rarity": "epic",
+    "price": 1200,
+    "season": "Chapter 1 · Season 3"
+  },
+  {
+    "id": "Pickaxe_ID_026_Brite",
+    "slug": "rainbow-smash",
+    "name": "Rainbow Smash",
+    "type": "pickaxe",
+    "rarity": "epic",
+    "price": 1200,
+    "season": "Chapter 1 · Season 3"
+  },
+  {
+    "id": "Glider_Warthog",
+    "slug": "mako",
+    "name": "Mako",
+    "type": "glider",
+    "rarity": "uncommon",
+    "price": 500,
+    "season": "Chapter 1 · Season 1"
+  },
+  {
+    "id": "Glider_ID_014_Dragon",
+    "slug": "royale-dragon",
+    "name": "Royale Dragon",
+    "type": "glider",
+    "rarity": "legendary",
+    "price": 1500,
+    "season": "Chapter 1 · Season 3"
+  },
+  {
+    "id": "Glider_ID_035_Candy",
+    "slug": "sugar-crash",
+    "name": "Sugar Crash",
+    "type": "glider",
+    "rarity": "rare",
+    "price": 800,
+    "season": "Chapter 1 · Season 4"
+  },
+  {
+    "id": "BID_004_BlackKnight",
+    "slug": "black-shield",
+    "name": "Black Shield",
+    "type": "backpack",
+    "rarity": "legendary",
+    "price": 1500,
+    "season": "Chapter 1 · Season 2"
+  },
+  {
+    "id": "BID_120_Werewolf",
+    "slug": "wolfpack",
+    "name": "Wolfpack",
+    "type": "backpack",
+    "rarity": "legendary",
+    "price": 1500,
+    "season": "Chapter 1 · Season 6"
+  },
+  {
+    "id": "BID_022_Cupid",
+    "slug": "love-wings",
+    "name": "Love Wings",
+    "type": "backpack",
+    "rarity": "legendary",
+    "price": 1500,
+    "season": "Chapter 1 · Season 3"
+  }
+]

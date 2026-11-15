@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.21",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.21/VAULTED-Launcher-1.0.21-Setup.exe",
-  "notes": "Installed builds now delete their downloaded ZIP, 7z or RAR archive after a confirmed install, so each season is stored only once. Archives are kept when installation fails or is cancelled."
+  "version": "1.0.22",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.22/VAULTED-Launcher-1.0.22-Setup.exe",
+  "notes": "The Item Shop is live: 32 classic outfits, emotes, harvesting tools, gliders and back blings rotate every 24 hours. Earn V-Bucks by launching and playing the season you choose, then build your collection."
 }

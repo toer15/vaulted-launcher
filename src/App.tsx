@@ -3,6 +3,7 @@ import { ActiveBuildCard } from './components/ActiveBuildCard'
 import { AddBuildDialog } from './components/AddBuildDialog'
 import { AuthScreen } from './components/AuthScreen'
 import { BuildDrawer } from './components/BuildDrawer'
+import { ItemShopView } from './components/ItemShopView'
 import { LibraryRail } from './components/LibraryRail'
 import { SettingsView } from './components/SettingsView'
 import { ToastStack } from './components/Toast'
@@ -38,10 +39,11 @@ import { accentForChapter, buildFromPath } from './lib/seasons'
 import defaultBuilds from './assets/builds.json'
 import { buildForSeason, ensureAllSeasons, seedBuilds, sortBuilds } from './lib/sampleBuilds'
 import { loadState, saveState, uid } from './lib/storage'
+import { useItemShop } from './lib/useItemShop'
 import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.21'
+const APP_VERSION = '1.0.22'
 const TOAST_TTL = 4200
 
 export default function App() {
@@ -57,7 +59,7 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
-  const [view, setView] = useState<'home' | 'settings'>('home')
+  const [view, setView] = useState<'home' | 'shop' | 'settings'>('home')
 
   const [session, setSession] = useState<RiftSession | null>(() => loadSession())
   const [manifest, setManifest] = useState<BuildManifest | null>(() => defaultBuilds as BuildManifest)
@@ -74,6 +76,7 @@ export default function App() {
   const [updateReady, setUpdateReady] = useState(false)
 
   const native = useMemo(() => hasNativeBridge(), [])
+  const shop = useItemShop({ builds, installed, activeId, runningId })
 
   // silent auto-update events from main process
   useEffect(() => {
@@ -438,6 +441,37 @@ export default function App() {
     [beginDownload, manifest, pushToast],
   )
 
+  const startBuild = useCallback(async (build: Build) => {
+    if (downloads[build.id] || phase === 'launching') return
+
+    // not on this PC -> download it
+    if (!installed[build.id]) {
+      requestDownload(build)
+      return
+    }
+
+    // installed -> launch
+    setPhase('launching')
+    try {
+      await launchBuild(build)
+      setRunningId(build.id)
+      setPhase('running')
+      shop.sets.recordLaunch(build.id)
+      pushToast({
+        tone: 'success',
+        title: 'Fortnite is starting. Have fun.',
+        description: `${build.season.label} · v${build.version}`,
+      })
+    } catch (error) {
+      setPhase('error')
+      pushToast({
+        tone: 'error',
+        title: 'Launch failed',
+        description: error instanceof Error ? error.message : 'The client could not be started.',
+      })
+    }
+  }, [downloads, phase, installed, requestDownload, pushToast, shop.sets])
+
   const handlePrimary = useCallback(async () => {
     const build = activeBuild
     if (!build) return
@@ -463,34 +497,33 @@ export default function App() {
       return
     }
 
-    if (downloads[build.id] || phase === 'launching') return
+    await startBuild(build)
+  }, [activeBuild, pushToast, runningId, startBuild])
 
-    // not on this PC -> download it
-    if (!installed[build.id]) {
-      requestDownload(build)
-      return
-    }
+  const handlePlayChallengeBuild = useCallback(
+    (buildId: string) => {
+      const build = builds.find((candidate) => candidate.id === buildId)
+      if (!build) return
+      setActiveId(build.id)
+      setView('home')
 
-    // installed -> launch
-    setPhase('launching')
-    try {
-      await launchBuild(build)
-      setRunningId(build.id)
-      setPhase('running')
-      pushToast({
-        tone: 'success',
-        title: 'Fortnite is starting. Have fun.',
-        description: `${build.season.label} · v${build.version}`,
-      })
-    } catch (error) {
-      setPhase('error')
-      pushToast({
-        tone: 'error',
-        title: 'Launch failed',
-        description: error instanceof Error ? error.message : 'The client could not be started.',
-      })
-    }
-  }, [activeBuild, runningId, downloads, phase, installed, requestDownload, pushToast])
+      if (runningId === build.id) {
+        pushToast({ tone: 'info', title: 'Already running', description: `${build.season.label} is open now.` })
+        return
+      }
+      if (runningId && runningId !== build.id) {
+        pushToast({
+          tone: 'info',
+          title: 'Close the running build first',
+          description: 'Only one Fortnite client can run at a time.',
+        })
+        return
+      }
+
+      void startBuild(build)
+    },
+    [builds, pushToast, runningId, startBuild],
+  )
 
   const handleCancelDownload = useCallback(() => {
     if (!activeBuild) return
@@ -693,8 +726,10 @@ export default function App() {
           buildCount={builds.length}
           native={native}
           settingsActive={view === 'settings'}
+          shopActive={view === 'shop'}
           onOpenLibrary={() => setDrawerOpen(true)}
           onOpenSettings={() => setView((current) => (current === 'settings' ? 'home' : 'settings'))}
+          onOpenShop={() => setView((current) => (current === 'shop' ? 'home' : 'shop'))}
         />
 
         <main className="mt-5 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 sm:mt-6">
@@ -720,6 +755,21 @@ export default function App() {
               updateReady={updateReady}
               onCheckUpdates={() => void checkForUpdates()}
               onRestartToUpdate={() => void window.arc?.installUpdate?.()}
+            />
+          ) : view === 'shop' ? (
+            <ItemShopView
+              shop={shop.shop}
+              vbucks={shop.vbucks}
+              owned={shop.owned}
+              progress={shop.progress}
+              challengeBuild={shop.challengeBuild}
+              builds={builds}
+              installed={installed}
+              onChallengeBuild={shop.sets.challengeBuild}
+              onClaim={shop.sets.claimTask}
+              onPurchase={shop.sets.purchase}
+              onPlayBuild={handlePlayChallengeBuild}
+              pushToast={pushToast}
             />
           ) : (
           <div className="grid min-h-0 flex-1 items-stretch gap-4 overflow-hidden lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-1 xl:gap-6 2xl:grid-cols-[minmax(0,1fr)_420px]">
