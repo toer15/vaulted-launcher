@@ -4,6 +4,7 @@ const http = require('node:http')
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
+const { execFile } = require('node:child_process')
 
 const matchmakerVersion = 3
 const matchmakerPort = Number(process.env.VAULTED_MATCHMAKER_PORT || 3552)
@@ -49,6 +50,25 @@ function joinTarget() {
     /* no join in progress */
   }
   return null
+}
+
+/** Fortnite's listen server binds UDP 7777; net.connect only sees TCP. */
+function udpPortBound(port, callback) {
+  execFile('netstat', ['-ano', '-p', 'udp'], { windowsHide: true }, (error, stdout) => {
+    if (error || !stdout) return callback(false)
+    for (const line of String(stdout).split(/\\r?\\n/)) {
+      const columns = line.trim().split(/\\s+/)
+      if (columns.length < 4 || columns[0].toUpperCase() !== 'UDP') continue
+      if (columns[1].endsWith(`:${port}`)) return callback(true)
+    }
+    callback(false)
+  })
+}
+
+/** Ready if the state file says so OR port 7777 is actually bound. */
+function gameServerReady(callback) {
+  if (hostReadyForSelectedPlaylist()) return callback(true)
+  udpPortBound(gamePort, (bound) => callback(bound))
 }
 
 /** Never assign a session until the hidden host is running the selected mode. */
@@ -199,21 +219,25 @@ function websocketClient(socket) {
         finishMatch()
         return
       }
-      if (!hostReadyForSelectedPlaylist()) {
-        if (!waitingOnStateSince) {
-          waitingOnStateSince = Date.now()
-          log('hidden host is not ready for the selected playlist yet')
+      gameServerReady((ready) => {
+        if (closed || cancelled || announced) return
+        if (!ready) {
+          if (!waitingOnStateSince) {
+            waitingOnStateSince = Date.now()
+            log('hidden host is not ready for the selected playlist yet')
+          }
+          if (Date.now() - waitingOnStateSince > 8000) {
+            log('host not ready after 8s; attempting join anyway')
+            announced = true
+            finishMatch()
+          }
+          return
         }
-        if (Date.now() - waitingOnStateSince > 8000) {
-          log('host not ready after 8s; attempting join anyway')
-          announced = true
-          finishMatch()
-        }
-        return
-      }
-      announced = true
-      log('hidden host is ready for the selected playlist; assigning session')
-      finishMatch()
+        announced = true
+        log('hidden host is ready; assigning session')
+        finishMatch()
+      })
+      return
     }
 
     // Start looking for the host only after the client has entered Queued;
