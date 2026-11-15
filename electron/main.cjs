@@ -1017,7 +1017,7 @@ function hasMobilePayload(root, depth = 0) {
 /** Some mirrors wrap the real game inside another .zip/.7z/.rar. */
 async function unpackNestedArchives(root, downloadedArchive, controller, id) {
   const archives = findNestedArchives(root).filter(
-    (candidate) => path.resolve(candidate) !== path.resolve(downloadedArchive),
+    (candidate) => path.resolve(candidate).toLowerCase() !== path.resolve(downloadedArchive).toLowerCase(),
   )
 
   for (const archive of archives) {
