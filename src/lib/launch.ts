@@ -5,6 +5,7 @@ export interface LaunchPayload {
   path: string
   executable: string
   version: string
+  online?: boolean
 }
 
 export interface WindowControls {
@@ -35,6 +36,9 @@ export interface DownloadResult {
 export interface LauncherBridge {
   platform?: string
   launchBuild(payload: LaunchPayload): Promise<{ pid: number | null }>
+  startBackend?(): Promise<{ running: boolean; pid?: number | null; error?: string }>
+  stopBackend?(): Promise<{ running: boolean }>
+  backendStatus?(): Promise<{ running: boolean; pid?: number | null }>
   closeBuild?(payload: { id: string }): Promise<{ closed: boolean }>
   checkBuilds?(builds: Array<{ id: string; executable: string }>): Promise<Record<string, boolean>>
   downloadBuild?(payload: { id: string; key: string; url: string }): Promise<DownloadResult>
@@ -82,7 +86,7 @@ function cleanIpcError(error: unknown): Error {
   return new Error(cleaned || 'Something went wrong.')
 }
 
-export async function launchBuild(build: Build): Promise<{ pid: number | null }> {
+export async function launchBuild(build: Build, options?: { online?: boolean }): Promise<{ pid: number | null }> {
   if (!hasNativeBridge()) {
     throw new Error('Launching needs the desktop app — run "npm run app".')
   }
@@ -93,9 +97,28 @@ export async function launchBuild(build: Build): Promise<{ pid: number | null }>
       path: build.path,
       executable: build.executable,
       version: build.version,
+      online: Boolean(options?.online),
     })
   } catch (error) {
     throw cleanIpcError(error)
+  }
+}
+
+export async function startBackend(): Promise<{ running: boolean; pid?: number | null; error?: string }> {
+  if (!window.arc?.startBackend) return { running: false, error: 'Backend control needs the desktop app.' }
+  try {
+    return await window.arc.startBackend()
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+export async function backendStatus(): Promise<{ running: boolean; pid?: number | null }> {
+  if (!window.arc?.backendStatus) return { running: false }
+  try {
+    return await window.arc.backendStatus()
+  } catch {
+    return { running: false }
   }
 }
 

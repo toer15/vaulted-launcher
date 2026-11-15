@@ -19,6 +19,77 @@ let mainWindow = null
 const running = new Map()
 /** buildId -> AbortController */
 const downloads = new Map()
+/** LawinServer backend process */
+let backendProcess = null
+let backendStarting = false
+
+function backendRoot() {
+  const candidates = [
+    process.env.VAULTED_BACKEND_PATH,
+    path.join(process.resourcesPath || '', 'backend'),
+    path.join(__dirname, '..', 'backend'),
+    'C:\\\\Users\\\\tommy\\\\OpenBot\\\\Shared\\\\lawinserver',
+  ].filter(Boolean)
+  for (const c of candidates) {
+    try {
+      if (c && fs.existsSync(path.join(c, 'index.js'))) return c
+    } catch { /* ignore */ }
+  }
+  return null
+}
+
+function backendStatus() {
+  if (backendProcess && !backendProcess.killed) return { running: true, pid: backendProcess.pid ?? null }
+  return { running: false, pid: null }
+}
+
+function startBackend() {
+  if (backendProcess && !backendProcess.killed) return Promise.resolve(backendStatus())
+  const root = backendRoot()
+  if (!root) return Promise.reject(new Error('Backend files not found. Install the backend folder next to the app.'))
+  if (backendStarting) return Promise.resolve(backendStatus())
+  backendStarting = true
+  return new Promise((resolve, reject) => {
+    try {
+      const child = spawn('node', ['index.js'], {
+        cwd: root,
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      child.unref()
+      child.on('exit', () => {
+        backendProcess = null
+        send('arc:backend-status', { running: false })
+      })
+      backendProcess = child
+      // give it a moment to bind
+      setTimeout(() => {
+        backendStarting = false
+        send('arc:backend-status', { running: true, pid: child.pid ?? null })
+        resolve({ running: true, pid: child.pid ?? null })
+      }, 1500)
+    } catch (error) {
+      backendStarting = false
+      reject(error)
+    }
+  })
+}
+
+function stopBackend() {
+  if (backendProcess?.pid) {
+    try {
+      if (process.platform === 'win32') {
+        execFile('taskkill', ['/PID', String(backendProcess.pid), '/T', '/F'], { windowsHide: true }, () => {})
+      } else {
+        backendProcess.kill('SIGTERM')
+      }
+    } catch { /* ignore */ }
+  }
+  backendProcess = null
+  send('arc:backend-status', { running: false })
+  return { running: false }
+}
 
 app.setName('VAULTED Launcher')
 app.setAppUserModelId('com.vaulted.launcher')
@@ -370,7 +441,71 @@ function registerIpc() {
     assertBuild(payload)
 
     const id = typeof payload.id === 'string' ? payload.id : null
-    const child = spawn(payload.executable, [], {
+    const online = Boolean(payload.online)
+
+    // online mode: make sure the LawinServer backend is running first
+    if (online) {
+      try {
+        await startBackend()
+      } catch (error) {
+        throw new Error(`Could not start the online backend: ${error && error.message ? error.message : error}`)
+      }
+
+      // write the backend redirect into the build's saved client config
+      try {
+        const savedDir = path.join(payload.path, 'FortniteGame', 'Saved', 'Config', 'WindowsClient')
+        fs.mkdirSync(savedDir, { recursive: true })
+        const iniPath = path.join(savedDir, 'DefaultEngine.ini')
+        const ini = [
+          '# VAULTED online redirect -> LawinServer (127.0.0.1:3551)',
+          '[OnlineSubsystemMcp]',
+          'bUsePartySystemV2=false',
+          'ServerAddress=http://127.0.0.1:3551',
+          'ServerPort=3551',
+          '',
+          '[OnlineSubsystemMcp.Xmpp]',
+          'bUseSSL=false',
+          'ServerAddr="ws://127.0.0.1"',
+          'ServerPort=80',
+          '',
+          '[OnlineSubsystemMcp.Xmpp Prod]',
+          'bUseSSL=false',
+          'ServerAddr="ws://127.0.0.1"',
+          'ServerPort=80',
+          '',
+          '[OnlineSubsystemMcp.OnlinePartySystemMcpAdapter]',
+          'bUsePartySystemV2=false',
+          '',
+          '[XMPP]',
+          'bEnableWebsockets=true',
+          '',
+          '[ConsoleVariables]',
+          'Fort.EnableHestiaBeauty=0',
+          '',
+        ].join('\\r\\n')
+        fs.writeFileSync(iniPath, ini, 'utf8')
+      } catch (error) {
+        // non-fatal: client may still boot with default config
+        smokeLog && (typeof smokeLog === 'function') && smokeLog('online ini write failed: ' + String(error && error.message ? error.message : error))
+      }
+    }
+
+    const args = online
+      ? [
+          '-AUTH_LOGIN=unused',
+          '-AUTH_PASSWORD=unused',
+          '-AUTH_TYPE=epic',
+          '-epicapp=Fortnite',
+          '-epicenv=Prod',
+          '-epiclocale=en-us',
+          '-epicportal',
+          '-noeac',
+          '-fromfl=be',
+          '-skippatchcheck',
+        ]
+      : []
+
+    const child = spawn(payload.executable, args, {
       cwd: payload.path,
       detached: true,
       stdio: 'ignore',
@@ -409,6 +544,16 @@ function registerIpc() {
     running.delete(id)
     return { closed: true }
   })
+
+  ipcMain.handle('arc:start-backend', async () => {
+    try {
+      return await startBackend()
+    } catch (error) {
+      return { running: false, error: String(error && error.message ? error.message : error) }
+    }
+  })
+  ipcMain.handle('arc:stop-backend', async () => stopBackend())
+  ipcMain.handle('arc:backend-status', async () => backendStatus())
 
   ipcMain.handle('arc:pick-folder', async () => {
     const parent = mainWindow ?? undefined

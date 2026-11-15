@@ -2,7 +2,7 @@
   "name": "vaulted-launcher",
   "productName": "VAULTED Launcher",
   "private": true,
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "VAULTED — Fortnite build launcher",
   "author": "VAULTED",
   "type": "module",
@@ -45,6 +45,13 @@
       "electron/**/*",
       "build/icon.ico",
       "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": ["**/*"]
+      }
     ],
     "asar": true,
     "win": {

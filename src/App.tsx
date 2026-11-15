@@ -17,6 +17,7 @@ import {
   launchBuild,
   pickBuildFolder,
   scanInstalledBuilds,
+  startBackend,
   startDownload,
   subscribeBuildExit,
   subscribeDownloadProgress,
@@ -40,7 +41,7 @@ import { loadState, saveState, uid } from './lib/storage'
 import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.7'
+const APP_VERSION = '1.0.8'
 const TOAST_TTL = 4200
 
 export default function App() {
@@ -467,6 +468,34 @@ export default function App() {
     }
   }, [activeBuild, runningId, downloads, phase, installed, requestDownload, pushToast])
 
+  const handlePlayOnline = useCallback(async () => {
+    const build = activeBuild
+    if (!build) return
+    if (!installed[build.id]) {
+      requestDownload(build)
+      return
+    }
+    setPhase('launching')
+    try {
+      await startBackend()
+      await launchBuild(build, { online: true })
+      setRunningId(build.id)
+      setPhase('running')
+      pushToast({
+        tone: 'success',
+        title: 'Fortnite is starting online.',
+        description: `${build.season.label} · v${build.version} — backend on 127.0.0.1:3551`,
+      })
+    } catch (error) {
+      setPhase('error')
+      pushToast({
+        tone: 'error',
+        title: 'Online launch failed',
+        description: error instanceof Error ? error.message : 'The client could not be started.',
+      })
+    }
+  }, [activeBuild, installed, requestDownload, pushToast])
+
   const handleCancelDownload = useCallback(() => {
     if (!activeBuild) return
     void cancelDownload(activeBuild.id)
@@ -714,6 +743,7 @@ export default function App() {
                 installed={installed}
                 onLogout={() => void handleLogout()}
                 onPrimary={handlePrimary}
+                onPlayOnline={() => void handlePlayOnline()}
                 onCancelDownload={handleCancelDownload}
                 onChangeBuild={() => setDrawerOpen(true)}
                 onAddBuild={() => setDialogOpen(true)}

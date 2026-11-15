@@ -15,6 +15,7 @@ import {
 import { AccountChip } from './AccountChip'
 import { BuildArt } from './BuildArt'
 import { artKeyFor } from '../lib/art'
+import { isOnlineSupported } from '../lib/online'
 import { cx } from '../lib/cx'
 import type { Account, Build, BuildState, DownloadState } from '../types'
 
@@ -30,6 +31,7 @@ interface ActiveBuildCardProps {
   installed?: Record<string, boolean>
   onLogout: () => void
   onPrimary: () => void
+  onPlayOnline?: () => void
   onCancelDownload: () => void
   onChangeBuild: () => void
   onAddBuild: () => void
@@ -51,10 +53,10 @@ export function ActiveBuildCard({
   activeNow,
   account,
   sourceKeys,
-  servers,
   installed,
   onLogout,
   onPrimary,
+  onPlayOnline,
   onCancelDownload,
   onChangeBuild,
   onAddBuild,
@@ -286,14 +288,12 @@ export function ActiveBuildCard({
                     <ArrowLeftRight className="h-3.5 w-3.5" /> Change build
                   </button>
 
-                  {servers && servers.length > 0 && installed?.[build.id] && (
+                  {installed?.[build.id] && isOnlineSupported(Number(build.version.split('.')[0])) && (
                     <button
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation()
-                        const url = servers[0].url
-                        if (window.arc?.openExternal) window.arc.openExternal(url)
-                        else window.open(url, '_blank')
+                        if (onPlayOnline) onPlayOnline()
                       }}
                       className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.08] px-3.5 py-3 text-[12.5px] font-medium text-emerald-200 transition-colors duration-200 hover:bg-emerald-400/15 hover:text-white"
                     >
