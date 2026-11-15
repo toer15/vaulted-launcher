@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Runtime.InteropServices;
@@ -12,6 +13,8 @@ internal static class VaultedInjector
     private const uint MEM_RELEASE = 0x00008000;
     private const uint PAGE_READWRITE = 0x04;
     private const uint INFINITE = 0xFFFFFFFF;
+    private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+    private const int JobObjectExtendedLimitInformation = 9;
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct STARTUPINFO
@@ -43,6 +46,42 @@ internal static class VaultedInjector
         public IntPtr hThread;
         public int dwProcessId;
         public int dwThreadId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
     }
 
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -91,6 +130,15 @@ internal static class VaultedInjector
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
 
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetInformationJobObject(IntPtr hJob, int infoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+
     private static string Quote(string value)
     {
         return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
@@ -102,118 +150,206 @@ internal static class VaultedInjector
         return 1;
     }
 
+    private static IntPtr CreateKillOnCloseJob()
+    {
+        IntPtr job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero) return IntPtr.Zero;
+
+        var limits = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        int length = Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION));
+        IntPtr buffer = Marshal.AllocHGlobal(length);
+        try
+        {
+            Marshal.StructureToPtr(limits, buffer, false);
+            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, buffer, (uint)length))
+            {
+                CloseHandle(job);
+                return IntPtr.Zero;
+            }
+            return job;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
     private static int Main(string[] args)
     {
         if (args.Length < 3)
         {
-            return Fail("Usage: VaultedInjector.exe <game.exe> <redirect.dll> <working-directory> [game args...]");
+            return Fail("Usage: VaultedInjector.exe <game.exe> <redirect.dll> <working-directory> [--aux <exe>]... [--] [game args...]");
         }
 
         string executable = args[0];
         string dllPath = args[1];
         string workingDirectory = args[2];
 
+        var auxiliaries = new List<string>();
+        var gameArguments = new List<string>();
+        int index = 3;
+
+        while (index < args.Length && args[index] == "--aux")
+        {
+            if (index + 1 >= args.Length) return Fail("Missing path after --aux.");
+            auxiliaries.Add(args[index + 1]);
+            index += 2;
+        }
+        if (index < args.Length && args[index] == "--") index++;
+        for (; index < args.Length; index++) gameArguments.Add(args[index]);
+
         var commandLine = new StringBuilder();
         commandLine.Append(Quote(executable));
-        for (int i = 3; i < args.Length; i++)
+        foreach (string argument in gameArguments)
         {
             commandLine.Append(' ');
-            commandLine.Append(Quote(args[i]));
+            commandLine.Append(Quote(argument));
         }
 
-        var startup = new STARTUPINFO();
-        startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+        IntPtr job = CreateKillOnCloseJob();
+        var auxiliaryProcesses = new List<PROCESS_INFORMATION>();
         PROCESS_INFORMATION process;
 
-        if (!CreateProcess(
-            executable,
-            commandLine,
-            IntPtr.Zero,
-            IntPtr.Zero,
-            false,
-            CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
-            IntPtr.Zero,
-            workingDirectory,
-            ref startup,
-            out process))
-        {
-            return Fail("CreateProcess failed: " + Marshal.GetLastWin32Error());
-        }
-
-        IntPtr remote = IntPtr.Zero;
-        IntPtr thread = IntPtr.Zero;
         try
         {
-            byte[] bytes = Encoding.Unicode.GetBytes(dllPath + "\0");
-            remote = VirtualAllocEx(process.hProcess, IntPtr.Zero, (UIntPtr)bytes.Length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-            if (remote == IntPtr.Zero)
+            // Newer clients refuse to run cleanly while their EAC/EOS bootstrapper
+            // starts a second copy of the game. Keep those bootstrappers suspended
+            // and launch the real client directly, the same way working OGFN
+            // launchers do. The job kills them if this injector ever disappears.
+            foreach (string auxiliary in auxiliaries)
             {
-                TerminateProcess(process.hProcess, 1);
-                return Fail("VirtualAllocEx failed: " + Marshal.GetLastWin32Error());
+                var auxiliaryStartup = new STARTUPINFO();
+                auxiliaryStartup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+                var auxiliaryCommand = new StringBuilder();
+                auxiliaryCommand.Append(Quote(auxiliary));
+
+                PROCESS_INFORMATION auxiliaryProcess;
+                if (!CreateProcess(
+                    auxiliary,
+                    auxiliaryCommand,
+                    IntPtr.Zero,
+                    IntPtr.Zero,
+                    false,
+                    CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                    IntPtr.Zero,
+                    workingDirectory,
+                    ref auxiliaryStartup,
+                    out auxiliaryProcess))
+                {
+                    Console.Error.WriteLine("AUX_FAILED=" + auxiliary + ": " + Marshal.GetLastWin32Error());
+                    continue;
+                }
+
+                auxiliaryProcesses.Add(auxiliaryProcess);
+                if (job != IntPtr.Zero) AssignProcessToJobObject(job, auxiliaryProcess.hProcess);
+                Console.WriteLine("AUX=" + auxiliaryProcess.dwProcessId);
             }
 
-            UIntPtr written;
-            if (!WriteProcessMemory(process.hProcess, remote, bytes, (UIntPtr)bytes.Length, out written))
+            var startup = new STARTUPINFO();
+            startup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+
+            if (!CreateProcess(
+                executable,
+                commandLine,
+                IntPtr.Zero,
+                IntPtr.Zero,
+                false,
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                IntPtr.Zero,
+                workingDirectory,
+                ref startup,
+                out process))
             {
-                TerminateProcess(process.hProcess, 1);
-                return Fail("WriteProcessMemory failed: " + Marshal.GetLastWin32Error());
+                return Fail("CreateProcess failed: " + Marshal.GetLastWin32Error());
             }
 
-            IntPtr kernel32 = GetModuleHandle("kernel32.dll");
-            IntPtr loadLibrary = GetProcAddress(kernel32, "LoadLibraryW");
-            if (loadLibrary == IntPtr.Zero)
+            IntPtr remote = IntPtr.Zero;
+            IntPtr thread = IntPtr.Zero;
+            try
             {
-                TerminateProcess(process.hProcess, 1);
-                return Fail("GetProcAddress(LoadLibraryW) failed: " + Marshal.GetLastWin32Error());
-            }
+                byte[] bytes = Encoding.Unicode.GetBytes(dllPath + "\0");
+                remote = VirtualAllocEx(process.hProcess, IntPtr.Zero, (UIntPtr)bytes.Length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+                if (remote == IntPtr.Zero)
+                {
+                    TerminateProcess(process.hProcess, 1);
+                    return Fail("VirtualAllocEx failed: " + Marshal.GetLastWin32Error());
+                }
 
-            uint threadId;
-            thread = CreateRemoteThread(process.hProcess, IntPtr.Zero, UIntPtr.Zero, loadLibrary, remote, 0, out threadId);
-            if (thread == IntPtr.Zero)
+                UIntPtr written;
+                if (!WriteProcessMemory(process.hProcess, remote, bytes, (UIntPtr)bytes.Length, out written))
+                {
+                    TerminateProcess(process.hProcess, 1);
+                    return Fail("WriteProcessMemory failed: " + Marshal.GetLastWin32Error());
+                }
+
+                IntPtr kernel32 = GetModuleHandle("kernel32.dll");
+                IntPtr loadLibrary = GetProcAddress(kernel32, "LoadLibraryW");
+                if (loadLibrary == IntPtr.Zero)
+                {
+                    TerminateProcess(process.hProcess, 1);
+                    return Fail("GetProcAddress(LoadLibraryW) failed: " + Marshal.GetLastWin32Error());
+                }
+
+                uint threadId;
+                thread = CreateRemoteThread(process.hProcess, IntPtr.Zero, UIntPtr.Zero, loadLibrary, remote, 0, out threadId);
+                if (thread == IntPtr.Zero)
+                {
+                    TerminateProcess(process.hProcess, 1);
+                    return Fail("CreateRemoteThread failed: " + Marshal.GetLastWin32Error());
+                }
+
+                if (WaitForSingleObject(thread, 15000) != 0)
+                {
+                    TerminateProcess(process.hProcess, 1);
+                    return Fail("The redirect DLL did not load in time.");
+                }
+
+                uint moduleHandle;
+                if (!GetExitCodeThread(thread, out moduleHandle) || moduleHandle == 0)
+                {
+                    TerminateProcess(process.hProcess, 1);
+                    return Fail("LoadLibraryW failed inside Fortnite.");
+                }
+
+                // Tellurium scans the client and installs its hooks from DllMain's
+                // worker thread. Give it a moment before the game starts.
+                Thread.Sleep(1200);
+
+                if (ResumeThread(process.hThread) == 0xFFFFFFFF)
+                {
+                    TerminateProcess(process.hProcess, 1);
+                    return Fail("ResumeThread failed: " + Marshal.GetLastWin32Error());
+                }
+
+                Console.WriteLine("PID=" + process.dwProcessId);
+                Console.WriteLine("INJECTED=1");
+                Console.Out.Flush();
+
+                WaitForSingleObject(process.hProcess, INFINITE);
+                return 0;
+            }
+            finally
             {
-                TerminateProcess(process.hProcess, 1);
-                return Fail("CreateRemoteThread failed: " + Marshal.GetLastWin32Error());
+                if (remote != IntPtr.Zero && process.hProcess != IntPtr.Zero)
+                {
+                    VirtualFreeEx(process.hProcess, remote, UIntPtr.Zero, MEM_RELEASE);
+                }
+                if (thread != IntPtr.Zero) CloseHandle(thread);
+                if (process.hThread != IntPtr.Zero) CloseHandle(process.hThread);
+                if (process.hProcess != IntPtr.Zero) CloseHandle(process.hProcess);
             }
-
-            if (WaitForSingleObject(thread, 15000) != 0)
-            {
-                TerminateProcess(process.hProcess, 1);
-                return Fail("The redirect DLL did not load in time.");
-            }
-
-            uint moduleHandle;
-            if (!GetExitCodeThread(thread, out moduleHandle) || moduleHandle == 0)
-            {
-                TerminateProcess(process.hProcess, 1);
-                return Fail("LoadLibraryW failed inside Fortnite.");
-            }
-
-            // Tellurium scans the client and installs its hooks from DllMain's
-            // worker thread. Give it a moment before the game starts.
-            Thread.Sleep(1200);
-
-            if (ResumeThread(process.hThread) == 0xFFFFFFFF)
-            {
-                TerminateProcess(process.hProcess, 1);
-                return Fail("ResumeThread failed: " + Marshal.GetLastWin32Error());
-            }
-
-            Console.WriteLine("PID=" + process.dwProcessId);
-            Console.WriteLine("INJECTED=1");
-            Console.Out.Flush();
-
-            WaitForSingleObject(process.hProcess, INFINITE);
-            return 0;
         }
         finally
         {
-            if (remote != IntPtr.Zero && process.hProcess != IntPtr.Zero)
+            foreach (var auxiliary in auxiliaryProcesses)
             {
-                VirtualFreeEx(process.hProcess, remote, UIntPtr.Zero, MEM_RELEASE);
+                TerminateProcess(auxiliary.hProcess, 0);
+                WaitForSingleObject(auxiliary.hProcess, 5000);
+                CloseHandle(auxiliary.hThread);
+                CloseHandle(auxiliary.hProcess);
             }
-            if (thread != IntPtr.Zero) CloseHandle(thread);
-            if (process.hThread != IntPtr.Zero) CloseHandle(process.hThread);
-            if (process.hProcess != IntPtr.Zero) CloseHandle(process.hProcess);
+            if (job != IntPtr.Zero) CloseHandle(job);
         }
     }
 }

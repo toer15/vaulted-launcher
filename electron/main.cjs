@@ -427,6 +427,38 @@ function usesEosAuth(payload) {
   }
 }
 
+/**
+ * Newer clients expect these bootstrappers to exist, but letting them run starts
+ * a second, anti-cheat-protected copy of the game. They are started suspended and
+ * killed when the real client exits, which is how OGFN launchers bypass EAC.
+ */
+function suspendedBootstrappers(executable) {
+  try {
+    const directory = path.dirname(executable)
+    return [
+      'FortniteLauncher.exe',
+      'FortniteClient-Win64-Shipping_EAC.exe',
+      'FortniteClient-Win64-Shipping_EAC_EOS.exe',
+    ]
+      .map((name) => path.join(directory, name))
+      .filter((candidate) => fs.existsSync(candidate))
+  } catch {
+    return []
+  }
+}
+
+/** The Aftermath crash handler shipped with some builds deadlocks the client. */
+function removeAftermathDlls(executable) {
+  const directory = path.dirname(executable)
+  for (const name of ['GFSDK_Aftermath_Lib.x64.dll', 'GFSDK_Aftermath_Lib.dll']) {
+    try {
+      fs.rmSync(path.join(directory, name), { force: true })
+    } catch {
+      /* locked or already gone */
+    }
+  }
+}
+
 function fortniteLaunchArgs(payload) {
   const username =
     String(payload.username || 'Player')
@@ -465,11 +497,20 @@ function launchInjectedGame(payload) {
     if (!fs.existsSync(dll)) return reject(new Error('The login redirect is missing from this installation. Reinstall VAULTED.'))
 
     const workingDirectory = path.dirname(payload.executable)
-    const child = spawn(
-      injector,
-      [payload.executable, dll, workingDirectory, ...fortniteLaunchArgs(payload)],
-      { cwd: workingDirectory, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] },
-    )
+    removeAftermathDlls(payload.executable)
+
+    const injectorArgs = [payload.executable, dll, workingDirectory]
+    for (const bootstrapper of suspendedBootstrappers(payload.executable)) {
+      injectorArgs.push('--aux', bootstrapper)
+    }
+    injectorArgs.push('--', ...fortniteLaunchArgs(payload))
+
+    const child = spawn(injector, injectorArgs, {
+      cwd: workingDirectory,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, OPENSSL_ia32cap: '~0x20000000' },
+    })
 
     let stdout = ''
     let stderr = ''

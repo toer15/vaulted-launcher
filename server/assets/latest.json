@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.26",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.26/VAULTED-Launcher-1.0.26-Setup.exe",
-  "notes": "Fortnite login now works on old builds. VAULTED starts its own local private server and injects the redirect before launch, so every season signs in with your VAULTED username instead of showing Login Failed. No website and no separate launcher setup required."
+  "version": "1.0.27",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.27/VAULTED-Launcher-1.0.27-Setup.exe",
+  "notes": "Modern EAC/EOS seasons now launch through the same private server. VAULTED keeps the anti-cheat bootstrappers suspended and injects the redirect into the real client before its first request, so every chapter signs in with your VAULTED username instead of showing Login Failed."
 }
