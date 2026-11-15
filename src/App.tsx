@@ -22,6 +22,7 @@ import {
   startDownload,
   subscribeBuildExit,
   subscribeDownloadProgress,
+  verifyBuildFiles,
 } from './lib/launch'
 import {
   clearSession,
@@ -41,11 +42,28 @@ import defaultBuilds from './assets/builds.json'
 import { buildForSeason, ensureAllSeasons, seedBuilds, sortBuilds } from './lib/sampleBuilds'
 import { loadState, saveState, uid } from './lib/storage'
 import { useItemShop } from './lib/useItemShop'
-import type { Account, Build, BuildState, DownloadState, LaunchPhase, SeasonInfo, ToastMessage } from './types'
+import { SHOP_CATALOG } from './lib/shop'
+import type {
+  Account,
+  Build,
+  BuildState,
+  BuildVerifyReport,
+  DownloadState,
+  LaunchPhase,
+  SeasonInfo,
+  ToastMessage,
+} from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.24'
+const APP_VERSION = '1.0.25'
 const TOAST_TTL = 4200
+
+interface VerifyJob {
+  id: string
+  phase: 'running' | 'done'
+  report?: BuildVerifyReport
+  error?: string
+}
 
 export default function App() {
   const [builds, setBuilds] = useState<Build[]>(() => {
@@ -62,6 +80,10 @@ export default function App() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
   const [view, setView] = useState<'home' | 'shop' | 'settings'>('home')
+  const [serverByBuild, setServerByBuild] = useState<Record<string, string>>(
+    () => loadState()?.serverByBuild ?? {},
+  )
+  const [verifyJob, setVerifyJob] = useState<VerifyJob | null>(null)
 
   const [session, setSession] = useState<RiftSession | null>(() => loadSession())
   const [manifest, setManifest] = useState<BuildManifest | null>(() => defaultBuilds as BuildManifest)
@@ -78,7 +100,14 @@ export default function App() {
   const [updateReady, setUpdateReady] = useState(false)
 
   const native = useMemo(() => hasNativeBridge(), [])
-  const shop = useItemShop({ builds, installed, activeId, runningId })
+  const shop = useItemShop({
+    builds,
+    installed,
+    activeId,
+    runningId,
+    accountId: session?.user.id,
+    token: session?.token,
+  })
 
   // silent auto-update events from main process
   useEffect(() => {
@@ -120,14 +149,17 @@ export default function App() {
 
   const account: Account = useMemo(() => {
     const username = session?.user.username ?? 'player'
+    const equippedOutfit = shop.equipped.outfit
+      ? SHOP_CATALOG.find((item) => item.id === shop.equipped.outfit)
+      : null
     return {
       username,
       initials: username.slice(0, 2).toUpperCase(),
-      outfit: PROFILE.outfit,
+      outfit: equippedOutfit?.name ?? PROFILE.outfit,
       level: PROFILE.level,
-      cosmetics: PROFILE.cosmetics,
+      cosmetics: PROFILE.cosmetics + shop.owned.length,
     }
-  }, [session])
+  }, [session, shop.equipped.outfit, shop.owned.length])
 
   const activeKey = activeBuild ? artKeyFor(activeBuild.season) : null
 
@@ -248,8 +280,13 @@ export default function App() {
   }, [builds, activeId])
 
   useEffect(() => {
-    saveState({ builds, activeId })
-  }, [builds, activeId])
+    saveState({ builds, activeId, serverByBuild })
+  }, [builds, activeId, serverByBuild])
+
+  // a verification result belongs to the build that was checked
+  useEffect(() => {
+    setVerifyJob(null)
+  }, [activeBuild?.id])
 
   // ask the main process which builds actually exist on disk
   useEffect(() => {
@@ -306,6 +343,7 @@ export default function App() {
   const handleSelect = useCallback((id: string) => {
     setActiveId(id)
     setPhase('idle')
+    setVerifyJob(null)
   }, [])
 
   const handleAdd = useCallback(
@@ -467,36 +505,65 @@ export default function App() {
     [beginDownload, manifest, pushToast],
   )
 
-  const startBuild = useCallback(async (build: Build) => {
-    if (downloads[build.id] || phase === 'launching') return
+  const startBuild = useCallback(
+    async (build: Build, onlineServer?: { name: string; url: string }) => {
+      if (downloads[build.id] || phase === 'launching') return
 
-    // not on this PC -> download it
-    if (!installed[build.id]) {
-      requestDownload(build)
-      return
-    }
+      if (runningId === build.id) {
+        pushToast({ tone: 'info', title: 'Already running', description: `${build.season.label} is open now.` })
+        return
+      }
+      if (runningId) {
+        pushToast({
+          tone: 'info',
+          title: 'Close the running build first',
+          description: 'Only one Fortnite client can run at a time.',
+        })
+        return
+      }
 
-    // installed -> launch
-    setPhase('launching')
-    try {
-      await launchBuild(build)
-      setRunningId(build.id)
-      setPhase('running')
-      shop.sets.recordLaunch(build.id)
-      pushToast({
-        tone: 'success',
-        title: 'Fortnite is starting. Have fun.',
-        description: `${build.season.label} · v${build.version}`,
-      })
-    } catch (error) {
-      setPhase('error')
-      pushToast({
-        tone: 'error',
-        title: 'Launch failed',
-        description: error instanceof Error ? error.message : 'The client could not be started.',
-      })
-    }
-  }, [downloads, phase, installed, requestDownload, pushToast, shop.sets])
+      // not on this PC -> download it
+      if (!installed[build.id]) {
+        requestDownload(build)
+        return
+      }
+
+      // installed -> launch the selected client directly. Online is a launch
+      // profile, never a browser handoff.
+      setPhase('launching')
+      try {
+        await launchBuild(build)
+        setRunningId(build.id)
+        setPhase('running')
+        shop.sets.recordLaunch(build.id)
+        pushToast({
+          tone: 'success',
+          title: 'Fortnite is starting. Have fun.',
+          description: onlineServer
+            ? `${build.season.label} · ${onlineServer.name} · v${build.version}`
+            : `${build.season.label} · v${build.version}`,
+        })
+      } catch (error) {
+        setPhase('error')
+        pushToast({
+          tone: 'error',
+          title: 'Launch failed',
+          description: error instanceof Error ? error.message : 'The client could not be started.',
+        })
+      }
+    },
+    [downloads, phase, installed, requestDownload, pushToast, runningId, shop.sets],
+  )
+
+  const handleLaunchOnline = useCallback(
+    (server: { name: string; url: string }) => {
+      const build = activeBuild
+      if (!build) return
+      setServerByBuild((prev) => ({ ...prev, [build.id]: server.url }))
+      void startBuild(build, server)
+    },
+    [activeBuild, startBuild],
+  )
 
   const handlePrimary = useCallback(async () => {
     const build = activeBuild
@@ -556,6 +623,58 @@ export default function App() {
     void cancelDownload(activeBuild.id)
   }, [activeBuild])
 
+  const handleVerifyBuild = useCallback(async () => {
+    const build = activeBuild
+    if (!build || !installed[build.id] || verifyJob?.phase === 'running') return
+    if (!/vaulted launcher[\\/]+builds[\\/]/i.test(build.path)) {
+      pushToast({
+        tone: 'info',
+        title: 'Verify is for VAULTED downloads',
+        description: 'Builds you added manually can still be launched from their folder.',
+      })
+      return
+    }
+
+    setVerifyJob({ id: build.id, phase: 'running' })
+    try {
+      const report = await verifyBuildFiles(build.id, build.path, build.executable)
+      if (report.running) {
+        setVerifyJob(null)
+        pushToast({
+          tone: 'info',
+          title: 'Close Fortnite first',
+          description: 'Verify files needs the client closed so every file can be read.',
+        })
+        return
+      }
+      setVerifyJob({ id: build.id, phase: 'done', report })
+      pushToast(
+        report.verified
+          ? {
+              tone: 'success',
+              title: 'All files verified',
+              description: `${report.files.toLocaleString()} files checked · no corruption found.`,
+            }
+          : {
+              tone: 'error',
+              title: 'Verification found problems',
+              description: `${report.issueCount} issue${report.issueCount === 1 ? '' : 's'} in this build. Review the report below.`,
+            },
+      )
+    } catch (error) {
+      setVerifyJob({
+        id: build.id,
+        phase: 'done',
+        error: error instanceof Error ? error.message : 'The build could not be verified.',
+      })
+      pushToast({
+        tone: 'error',
+        title: 'Verify failed',
+        description: error instanceof Error ? error.message : 'The build could not be verified.',
+      })
+    }
+  }, [activeBuild, installed, pushToast, verifyJob?.phase])
+
   const handleDeleteBuild = useCallback(async () => {
     const build = activeBuild
     if (!build || !installed[build.id] || deletingId) return
@@ -584,6 +703,7 @@ export default function App() {
         ),
       )
       setPhase('idle')
+      setVerifyJob(null)
       pushToast({
         tone: 'success',
         title: 'Build deleted',
@@ -835,6 +955,7 @@ export default function App() {
               catalogCount={shop.catalogCount}
               vbucks={shop.vbucks}
               owned={shop.owned}
+              equipped={shop.equipped}
               progress={shop.progress}
               challengeBuild={shop.challengeBuild}
               builds={builds}
@@ -842,6 +963,7 @@ export default function App() {
               onChallengeBuild={shop.sets.challengeBuild}
               onClaim={shop.sets.claimTask}
               onPurchase={shop.sets.purchase}
+              onEquip={shop.sets.equip}
               onPlayBuild={handlePlayChallengeBuild}
               pushToast={pushToast}
             />
@@ -860,6 +982,10 @@ export default function App() {
                 installed={installed}
                 canDelete={canDeleteActive}
                 deleting={deletingId === activeBuild?.id}
+                selectedServerUrl={activeBuild ? serverByBuild[activeBuild.id] ?? null : null}
+                verify={verifyJob?.id === activeBuild?.id ? verifyJob : null}
+                onLaunchOnline={handleLaunchOnline}
+                onVerify={() => void handleVerifyBuild()}
                 onLogout={() => void handleLogout()}
                 onPrimary={handlePrimary}
                 onCancelDownload={handleCancelDownload}

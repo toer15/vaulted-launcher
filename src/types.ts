@@ -87,6 +87,8 @@ export type ShopItemType =
   | 'aura'
   | 'banner'
 
+export type ShopEquipped = Record<ShopItemType, string | null>
+
 export type ShopRarity =
   | 'common'
   | 'uncommon'
@@ -143,7 +145,29 @@ export interface ShopState {
   version: 1
   vbucks: number
   owned: string[]
+  /** the cosmetic active in each slot, shared by every chapter and season */
+  equipped: ShopEquipped
   progress: ShopProgress
+}
+
+export interface BuildVerifyIssues {
+  missing: string[]
+  empty: string[]
+  unreadable: string[]
+  temp: string[]
+  corrupt: string[]
+}
+
+export interface BuildVerifyReport {
+  managed: boolean
+  running?: boolean
+  verified: boolean
+  files: number
+  bytes: number
+  paks: number
+  issueCount: number
+  issues: BuildVerifyIssues
+  elapsedMs: number
 }
 
 export interface ShopDay {

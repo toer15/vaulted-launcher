@@ -1,4 +1,4 @@
-import type { Build } from '../types'
+import type { Build, BuildVerifyReport } from '../types'
 
 export interface LaunchPayload {
   id?: string
@@ -41,6 +41,7 @@ export interface LauncherBridge {
   checkBuilds?(builds: Array<{ id: string; executable: string }>): Promise<Record<string, boolean>>
   downloadBuild?(payload: { id: string; key: string; url: string; sha256?: string }): Promise<DownloadResult>
   deleteBuild?(payload: { id: string; path: string }): Promise<{ deleted: boolean; managed: boolean; running?: boolean }>
+  verifyBuild?(payload: { id: string; path: string; executable: string }): Promise<BuildVerifyReport>
   cancelDownload?(payload: { id: string }): Promise<{ cancelled: boolean }>
   onDownloadProgress?(callback: (progress: DownloadProgress) => void): () => void
   onBuildExited?(callback: (payload: { id: string }) => void): () => void
@@ -137,6 +138,17 @@ export async function deleteBuild(id: string, path: string): Promise<{ deleted: 
   if (!window.arc?.deleteBuild) return { deleted: false, managed: false }
   try {
     return await window.arc.deleteBuild({ id, path })
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+export async function verifyBuildFiles(id: string, path: string, executable: string): Promise<BuildVerifyReport> {
+  if (!window.arc?.verifyBuild) {
+    throw new Error('Verify files needs the desktop app — run "npm run app".')
+  }
+  try {
+    return await window.arc.verifyBuild({ id, path, executable })
   } catch (error) {
     throw cleanIpcError(error)
   }

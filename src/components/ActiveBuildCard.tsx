@@ -4,6 +4,7 @@ import {
   Ban,
   Check,
   ChevronDown,
+  CircleCheck,
   Download,
   FolderPlus,
   Globe,
@@ -21,8 +22,7 @@ import { BuildArt } from './BuildArt'
 import { artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { formatDownloadSize } from '../lib/downloadSize'
-import { openExternal } from '../lib/network'
-import type { Account, Build, BuildState, DownloadState } from '../types'
+import type { Account, Build, BuildState, BuildVerifyReport, DownloadState } from '../types'
 
 interface ActiveBuildCardProps {
   build: Build | null
@@ -37,6 +37,10 @@ interface ActiveBuildCardProps {
   installed?: Record<string, boolean>
   canDelete?: boolean
   deleting?: boolean
+  selectedServerUrl?: string | null
+  verify?: { phase: 'running' | 'done'; report?: BuildVerifyReport; error?: string } | null
+  onLaunchOnline?: (server: { name: string; url: string }) => void
+  onVerify?: () => void
   onLogout: () => void
   onPrimary: () => void
   onCancelDownload: () => void
@@ -78,6 +82,10 @@ export function ActiveBuildCard({
   installed,
   canDelete,
   deleting,
+  selectedServerUrl,
+  verify,
+  onLaunchOnline,
+  onVerify,
   onLogout,
   onPrimary,
   onCancelDownload,
@@ -132,6 +140,17 @@ export function ActiveBuildCard({
   const etaLabel = download?.phase === 'downloading' ? formatEta(download.etaSeconds) : null
   const downloadSizeLabel = downloadSize ? formatDownloadSize(downloadSize) : null
   const showDelete = Boolean(canDelete && isInstalled && !busy && state !== 'running' && onDelete)
+  const showVerify = Boolean(canDelete && isInstalled && !busy && state !== 'running' && onVerify)
+  const verifyReport = verify?.report
+  const verifyIssues = verifyReport
+    ? [
+        ['Missing', verifyReport.issues.missing],
+        ['Empty files', verifyReport.issues.empty],
+        ['Unreadable', verifyReport.issues.unreadable],
+        ['Leftover temp files', verifyReport.issues.temp],
+        ['Corrupt PAK data', verifyReport.issues.corrupt],
+      ].filter((entry) => (entry[1] as string[]).length > 0)
+    : []
 
   const primary = {
     missing: hasDownloadSource
@@ -287,6 +306,73 @@ export function ActiveBuildCard({
             </div>
           )}
 
+          {verify && (
+            <div
+              className={cx(
+                'mb-3 rounded-2xl border px-3.5 py-3 text-[11.5px] leading-relaxed backdrop-blur',
+                verify.phase === 'running'
+                  ? 'border-arc/30 bg-arc/[0.08] text-mist'
+                  : verify.error || (verifyReport && !verifyReport.verified)
+                    ? 'border-rose-400/30 bg-rose-500/[0.08] text-rose-100'
+                    : 'border-emerald-400/30 bg-emerald-400/[0.07] text-emerald-100',
+              )}
+              role="status"
+              aria-live="polite"
+            >
+              <div className="flex items-start gap-2">
+                {verify.phase === 'running' ? (
+                  <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin text-arc" />
+                ) : verify.error || (verifyReport && !verifyReport.verified) ? (
+                  <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
+                ) : (
+                  <CircleCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold">
+                    {verify.phase === 'running'
+                      ? 'Scanning every file…'
+                      : verify.error
+                        ? 'Verify could not finish'
+                        : verifyReport?.verified
+                          ? 'All files verified — no corruption found'
+                          : `${verifyReport?.issueCount ?? 0} problem${verifyReport?.issueCount === 1 ? '' : 's'} found`}
+                  </p>
+                  {verify.phase === 'running' ? (
+                    <p className="mt-0.5 text-[10.5px] text-fog">
+                      Checking executables, PAK files, empty files and every folder in this install.
+                    </p>
+                  ) : verify.error ? (
+                    <p className="mt-0.5 text-[10.5px] text-rose-200/80">{verify.error}</p>
+                  ) : verifyReport ? (
+                    <>
+                      <p className="mt-0.5 font-mono text-[10px] text-fog">
+                        {verifyReport.files.toLocaleString()} files · {formatDownloadSize(verifyReport.bytes)} ·{' '}
+                        {verifyReport.paks.toLocaleString()} PAK files ·{' '}
+                        {(verifyReport.elapsedMs / 1000).toFixed(1)}s
+                      </p>
+                      {verifyIssues.length > 0 && (
+                        <div className="mt-2 max-h-28 space-y-1.5 overflow-y-auto pr-1">
+                          {verifyIssues.map(([label, paths]) => (
+                            <div key={String(label)}>
+                              <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-rose-300">
+                                {String(label)} · {(paths as string[]).length}
+                              </p>
+                              {(paths as string[]).slice(0, 6).map((path) => (
+                                <p key={path} className="truncate font-mono text-[9.5px] text-rose-100/75" title={path}>
+                                  {path}
+                                </p>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center gap-2 text-[12.5px]">
             {state === 'error' ? (
               <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-rose-300" />
@@ -386,6 +472,27 @@ export function ActiveBuildCard({
                     </button>
                   )}
 
+                  {showVerify && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onVerify?.()
+                      }}
+                      disabled={verify?.phase === 'running'}
+                      aria-label={`Verify ${season.label} files`}
+                      title={`Check ${season.label} for corrupted or missing files`}
+                      className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.07] px-3.5 py-3 text-[12.5px] font-semibold text-emerald-200 transition-all duration-200 hover:border-emerald-400/60 hover:bg-emerald-400/15 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                    >
+                      {verify?.phase === 'running' ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                      )}
+                      {verify?.phase === 'running' ? 'Verifying…' : 'Verify files'}
+                    </button>
+                  )}
+
                   {showDelete && (
                     <button
                       type="button"
@@ -425,29 +532,40 @@ export function ActiveBuildCard({
                       />
                       <div className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-2xl border border-white/10 bg-ink/95 p-1.5 shadow-[0_24px_60px_-18px_rgba(0,0,0,0.95)] backdrop-blur-xl">
                         <p className="px-3 pb-1.5 pt-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-fog">
-                          {season.short} · community servers
+                          {season.short} · launch online
                         </p>
-                        {servers.map((server) => (
-                          <button
-                            key={`${server.name}-${server.url}`}
-                            type="button"
-                            onClick={() => {
-                              setOnlineOpen(false)
-                              void openExternal(server.url)
-                            }}
-                            className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors duration-150 hover:bg-white/[0.07]"
-                          >
-                            <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">
-                              <Globe className="h-3.5 w-3.5" />
-                            </span>
-                            <span className="min-w-0">
-                              <span className="block text-[12.5px] font-semibold text-mist">{server.name}</span>
-                              <span className="block truncate font-mono text-[10.5px] text-fog">
-                                {server.url.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+                        {servers.map((server) => {
+                          const selected = selectedServerUrl === server.url
+                          return (
+                            <button
+                              key={`${server.name}-${server.url}`}
+                              type="button"
+                              onClick={() => {
+                                setOnlineOpen(false)
+                                onLaunchOnline?.(server)
+                              }}
+                              title={`Launch ${season.label} with ${server.name}`}
+                              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-colors duration-150 hover:bg-white/[0.07]"
+                            >
+                              <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-emerald-400/20 bg-emerald-400/10 text-emerald-300">
+                                <Play className="h-3.5 w-3.5" />
                               </span>
-                            </span>
-                          </button>
-                        ))}
+                              <span className="min-w-0 flex-1">
+                                <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-mist">
+                                  {server.name}
+                                  {selected && <Check className="h-3 w-3 text-emerald-300" />}
+                                </span>
+                                <span className="block truncate font-mono text-[10.5px] text-fog">
+                                  {selected ? 'Selected · ' : ''}Launch installed client
+                                </span>
+                              </span>
+                              <Play className="h-3 w-3 shrink-0 text-fog" />
+                            </button>
+                          )
+                        })}
+                        <p className="px-3 pb-2 pt-1 text-[9.5px] leading-relaxed text-fog/70">
+                          Starts the downloaded {season.short} client. No website opens.
+                        </p>
                       </div>
                     </>
                   )}

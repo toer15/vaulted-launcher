@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('arc', {
   checkBuilds: (builds) => ipcRenderer.invoke('arc:check-builds', builds),
   downloadBuild: (payload) => ipcRenderer.invoke('arc:download-build', payload),
   deleteBuild: (payload) => ipcRenderer.invoke('arc:delete-build', payload),
+  verifyBuild: (payload) => ipcRenderer.invoke('arc:verify-build', payload),
   cancelDownload: (payload) => ipcRenderer.invoke('arc:cancel-download', payload),
   onDownloadProgress: (callback) => subscribe('arc:download-progress', callback),
   onBuildExited: (callback) => subscribe('arc:build-exited', callback),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DAILY_CHALLENGES,
   challengeValue,
@@ -10,27 +10,50 @@ import {
   SHOP_CATALOG,
   type ShopChallengeId,
 } from './shop'
-import type { Build, ShopState } from '../types'
+import { fetchInventory, saveInventory } from './network'
+import type { Build, ShopEquipped, ShopItemType, ShopState } from '../types'
 
 export type PurchaseResult = 'bought' | 'owned' | 'insufficient' | 'missing'
 export type ClaimResult = 'claimed' | 'already' | 'incomplete' | 'unavailable'
+export type EquipResult = 'equipped' | 'not-owned' | 'missing'
 
 interface UseItemShopOptions {
   builds: Build[]
   installed: Record<string, boolean>
   activeId: string | null
   runningId: string | null
+  accountId?: string | null
+  token?: string
 }
 
-export function useItemShop({ builds, installed, activeId, runningId }: UseItemShopOptions) {
+export function useItemShop({
+  builds,
+  installed,
+  activeId,
+  runningId,
+  accountId,
+  token,
+}: UseItemShopOptions) {
   const [day, setDay] = useState(() => dayKey())
-  const [state, setState] = useState<ShopState>(() => loadShopState() ?? createShopState())
 
   const fallbackBuildId = useMemo(() => {
     const active = builds.find((build) => build.id === activeId)
     const installedBuild = builds.find((build) => installed[build.id])
     return (active ?? installedBuild ?? builds[0])?.id ?? null
   }, [activeId, builds, installed])
+
+  const [state, setState] = useState<ShopState>(
+    () => loadShopState(accountId) ?? createShopState(dayKey(), fallbackBuildId),
+  )
+  const [remoteReady, setRemoteReady] = useState(false)
+  const accountRef = useRef<string | null | undefined>(accountId)
+
+  // A different account must never inherit another player's collection.
+  useEffect(() => {
+    if (!accountId || accountRef.current === accountId) return
+    accountRef.current = accountId
+    setState(loadShopState(accountId) ?? createShopState(dayKey(), fallbackBuildId))
+  }, [accountId, fallbackBuildId])
 
   // roll the shop and today's challenge sheet over at 00:00 UTC
   useEffect(() => {
@@ -66,8 +89,50 @@ export function useItemShop({ builds, installed, activeId, runningId }: UseItemS
   }, [builds, fallbackBuildId])
 
   useEffect(() => {
-    saveShopState(state)
-  }, [state])
+    saveShopState(state, accountId)
+  }, [state, accountId])
+
+  // Pull the account collection once per session. Local purchases made while
+  // that request is in flight are preserved by merging both sides.
+  useEffect(() => {
+    let cancelled = false
+    setRemoteReady(false)
+    if (!token) {
+      setRemoteReady(true)
+      return
+    }
+
+    void fetchInventory(token)
+      .then((remote) => {
+        if (cancelled) return
+        setState((prev) => {
+          const owned = [...new Set([...prev.owned, ...remote.owned])]
+          const equipped: ShopEquipped = { ...prev.equipped }
+          for (const [type, itemId] of Object.entries(remote.equipped)) {
+            if (itemId && owned.includes(itemId)) equipped[type as ShopItemType] = itemId
+          }
+          return { ...prev, owned, equipped }
+        })
+        setRemoteReady(true)
+      })
+      .catch(() => {
+        if (!cancelled) setRemoteReady(true)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [token])
+
+  // Debounced write-behind keeps the account copy current after every purchase
+  // or equip without sending a request on challenge-progress ticks.
+  useEffect(() => {
+    if (!token || !remoteReady) return
+    const timer = window.setTimeout(() => {
+      void saveInventory(token, state.owned, state.equipped).catch(() => {})
+    }, 650)
+    return () => window.clearTimeout(timer)
+  }, [token, remoteReady, state.owned, state.equipped])
 
   // Count play time while the selected challenge build is running. The main
   // process owns the actual client; this is the visible session clock and it
@@ -151,11 +216,28 @@ export function useItemShop({ builds, installed, activeId, runningId }: UseItemS
           ...prev,
           vbucks: prev.vbucks - item.price,
           owned: [...prev.owned, itemId],
+          // A new purchase is immediately active in its slot, so the same
+          // cosmetic is present on every chapter and season with no re-equip.
+          equipped: { ...prev.equipped, [item.type]: itemId },
         }
       })
       return 'bought'
     },
     [state],
+  )
+
+  const equip = useCallback(
+    (itemId: string): EquipResult => {
+      const item = SHOP_CATALOG.find((candidate) => candidate.id === itemId)
+      if (!item) return 'missing'
+      if (!state.owned.includes(itemId)) return 'not-owned'
+      setState((prev) => {
+        if (!prev.owned.includes(itemId)) return prev
+        return { ...prev, equipped: { ...prev.equipped, [item.type]: itemId } }
+      })
+      return 'equipped'
+    },
+    [state.owned],
   )
 
   const challengeBuild = useMemo(
@@ -171,6 +253,7 @@ export function useItemShop({ builds, installed, activeId, runningId }: UseItemS
     catalogCount: SHOP_CATALOG.length,
     vbucks: state.vbucks,
     owned: state.owned,
+    equipped: state.equipped,
     progress: state.progress,
     challengeBuild,
     sets: {
@@ -178,6 +261,7 @@ export function useItemShop({ builds, installed, activeId, runningId }: UseItemS
       recordLaunch,
       claimTask,
       purchase,
+      equip,
     },
   }
 }

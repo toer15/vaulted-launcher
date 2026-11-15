@@ -738,6 +738,186 @@ async function downloadBuild(payload) {
   }
 }
 
+const VERIFY_MAX_FILES = 250000
+const VERIFY_TEMP_RE = /\.(part|tmp|temp|crdownload|download|!ut|aria2)$/i
+
+function emptyVerifyReport() {
+  return {
+    managed: true,
+    verified: false,
+    files: 0,
+    bytes: 0,
+    paks: 0,
+    issueCount: 0,
+    issues: { missing: [], empty: [], unreadable: [], temp: [], corrupt: [] },
+    elapsedMs: 0,
+  }
+}
+
+function addVerifyIssue(report, kind, message) {
+  report.issueCount += 1
+  if (report.issues[kind] && report.issues[kind].length < 15) report.issues[kind].push(message)
+}
+
+/** Read a few small samples so a multi-gigabyte PAK is not loaded into RAM. */
+async function sampleFile(filePath, size) {
+  const handle = await fs.promises.open(filePath, 'r')
+  try {
+    const length = Math.min(512, Math.max(1, size))
+    const positions = [0]
+    if (size > length) positions.push(Math.max(0, Math.floor(size / 2) - Math.floor(length / 2)))
+    if (size > length * 2) positions.push(size - length)
+
+    const buffers = []
+    for (const position of positions) {
+      const buffer = Buffer.alloc(length)
+      const result = await handle.read(buffer, 0, length, position)
+      if (result.bytesRead > 0) buffers.push(buffer.subarray(0, result.bytesRead))
+    }
+    return Buffer.concat(buffers)
+  } finally {
+    await handle.close()
+  }
+}
+
+/**
+ * Validates a VAULTED-managed install without modifying it. Every file is
+ * checked for existence/readability, zero-byte truncation and leftovers from
+ * interrupted downloads; executables and PAK headers get an additional sanity
+ * read so a half-written client is reported instead of silently launched.
+ */
+async function verifyBuild(payload) {
+  const id = typeof payload?.id === 'string' ? payload.id : ''
+  const startedAt = Date.now()
+  const report = emptyVerifyReport()
+
+  if (!id || typeof payload?.path !== 'string' || !payload.path || typeof payload?.executable !== 'string') {
+    return { ...report, managed: false }
+  }
+
+  const root = path.resolve(buildsRoot())
+  const target = path.resolve(payload.path)
+  const relativeTarget = path.relative(root, target)
+  if (!relativeTarget || relativeTarget.startsWith('..') || path.isAbsolute(relativeTarget)) {
+    return { ...report, managed: false }
+  }
+  if (running.has(id) || downloads.has(id)) {
+    return { ...report, running: true }
+  }
+
+  const executable = path.resolve(payload.executable)
+  const relativeExecutable = path.relative(target, executable)
+  const executableIsInside = Boolean(relativeExecutable) && !relativeExecutable.startsWith('..') && !path.isAbsolute(relativeExecutable)
+  const paksDir = path.join(folderForExecutable(executable), 'FortniteGame', 'Content', 'Paks')
+  let executableStat = null
+
+  if (!executableIsInside || !fs.existsSync(executable)) {
+    addVerifyIssue(report, 'missing', relativeExecutable || path.basename(executable) || 'client executable')
+  } else {
+    try {
+      executableStat = await fs.promises.stat(executable)
+      if (executableStat.size === 0) addVerifyIssue(report, 'empty', relativeExecutable)
+      if (executableStat.size > 1) {
+        const header = await sampleFile(executable, 2)
+        if (header.length < 2 || header[0] !== 0x4d || header[1] !== 0x5a) {
+          addVerifyIssue(report, 'corrupt', `${relativeExecutable} (not a Windows executable)`)
+        }
+      }
+    } catch {
+      addVerifyIssue(report, 'unreadable', relativeExecutable)
+    }
+  }
+
+  if (!fs.existsSync(paksDir)) {
+    addVerifyIssue(report, 'missing', 'FortniteGame/Content/Paks')
+  }
+
+  const stack = [target]
+  let stoppedAtLimit = false
+
+  while (stack.length > 0 && !stoppedAtLimit) {
+    const current = stack.pop()
+    let entries
+    try {
+      entries = await fs.promises.readdir(current, { withFileTypes: true })
+    } catch {
+      addVerifyIssue(report, 'unreadable', path.relative(target, current) || '.')
+      continue
+    }
+
+    for (const entry of entries) {
+      if (report.files >= VERIFY_MAX_FILES) {
+        stoppedAtLimit = true
+        break
+      }
+
+      const full = path.join(current, entry.name)
+      const relative = path.relative(target, full)
+
+      if (entry.isSymbolicLink()) {
+        addVerifyIssue(report, 'corrupt', `${relative} (symbolic link)`)
+        continue
+      }
+      if (entry.isDirectory()) {
+        stack.push(full)
+        continue
+      }
+      if (!entry.isFile()) continue
+
+      report.files += 1
+      const lowerName = entry.name.toLowerCase()
+      if (VERIFY_TEMP_RE.test(entry.name)) addVerifyIssue(report, 'temp', relative)
+
+      let stat
+      try {
+        stat = await fs.promises.stat(full)
+      } catch {
+        addVerifyIssue(report, 'unreadable', relative)
+        continue
+      }
+
+      report.bytes += stat.size
+      if (stat.size === 0) {
+        addVerifyIssue(report, 'empty', relative)
+        continue
+      }
+
+      try {
+        await fs.promises.access(full, fs.constants.R_OK)
+      } catch {
+        addVerifyIssue(report, 'unreadable', relative)
+        continue
+      }
+
+      if (lowerName.endsWith('.pak')) {
+        const normalizedPaks = path.resolve(paksDir).toLowerCase()
+        if (full.toLowerCase().startsWith(`${normalizedPaks}${path.sep}`)) report.paks += 1
+        if (stat.size < 1024) {
+          addVerifyIssue(report, 'corrupt', `${relative} (PAK is too small)`)
+          continue
+        }
+        try {
+          const sample = await sampleFile(full, stat.size)
+          if (sample.length === 0 || sample.every((byte) => byte === 0)) {
+            addVerifyIssue(report, 'corrupt', `${relative} (empty PAK data)`)
+          }
+        } catch {
+          addVerifyIssue(report, 'unreadable', relative)
+        }
+      }
+    }
+  }
+
+  if (stoppedAtLimit) addVerifyIssue(report, 'corrupt', `Scan stopped after ${VERIFY_MAX_FILES.toLocaleString()} files.`)
+  if (report.paks === 0 && fs.existsSync(paksDir)) {
+    addVerifyIssue(report, 'missing', 'FortniteGame/Content/Paks has no PAK files')
+  }
+
+  report.verified = report.issueCount === 0
+  report.elapsedMs = Date.now() - startedAt
+  return report
+}
+
 function registerIpc() {
   ipcMain.handle('arc:check-builds', (_event, builds) => {
     /** @type {Record<string, boolean>} */
@@ -774,6 +954,8 @@ function registerIpc() {
     await fs.promises.rm(managedFolder, { recursive: true, force: true, maxRetries: 3, retryDelay: 250 })
     return { deleted: true, managed: true }
   })
+
+  ipcMain.handle('arc:verify-build', (_event, payload) => verifyBuild(payload))
 
   ipcMain.handle('arc:scan-builds', () => scanForBuilds())
 

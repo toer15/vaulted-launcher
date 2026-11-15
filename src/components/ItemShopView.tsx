@@ -43,9 +43,10 @@ import {
   type ShopChallengeId,
 } from '../lib/shop'
 import { cx } from '../lib/cx'
-import type { ClaimResult, PurchaseResult } from '../lib/useItemShop'
+import type { ClaimResult, EquipResult, PurchaseResult } from '../lib/useItemShop'
+import { LockerModal } from './LockerModal'
 import { ShopItemViewer } from './ShopItemViewer'
-import type { Build, ShopDay, ShopItem, ShopItemType, ShopProgress, ToastMessage } from '../types'
+import type { Build, ShopDay, ShopEquipped, ShopItem, ShopItemType, ShopProgress, ToastMessage } from '../types'
 
 const TYPE_ICONS: Record<ShopItemType, LucideIcon> = {
   outfit: Shirt,
@@ -73,6 +74,7 @@ interface ItemShopViewProps {
   catalogCount: number
   vbucks: number
   owned: string[]
+  equipped: ShopEquipped
   progress: ShopProgress
   challengeBuild: Build | null
   builds: Build[]
@@ -80,6 +82,7 @@ interface ItemShopViewProps {
   onChallengeBuild: (buildId: string) => void
   onClaim: (id: ShopChallengeId) => ClaimResult
   onPurchase: (id: string) => PurchaseResult
+  onEquip: (id: string) => EquipResult
   onPlayBuild: (buildId: string) => void
   pushToast: (toast: Omit<ToastMessage, 'id'>) => void
 }
@@ -118,6 +121,7 @@ export function ItemShopView({
   catalogCount,
   vbucks,
   owned,
+  equipped,
   progress,
   challengeBuild,
   builds,
@@ -125,11 +129,13 @@ export function ItemShopView({
   onChallengeBuild,
   onClaim,
   onPurchase,
+  onEquip,
   onPlayBuild,
   pushToast,
 }: ItemShopViewProps) {
   const [now, setNow] = useState(() => new Date())
   const [selected, setSelected] = useState<ShopItem | null>(null)
+  const [lockerOpen, setLockerOpen] = useState(false)
   const sectionRef = useRef<HTMLElement>(null)
   const ownedSet = useMemo(() => new Set(owned), [owned])
   const closeViewer = useCallback(() => setSelected(null), [])
@@ -158,7 +164,7 @@ export function ItemShopView({
       pushToast({
         tone: 'success',
         title: 'Added to your collection',
-        description: `${item.name} · ${formatVbucks(item.price)} V-Bucks`,
+        description: `${item.name} is equipped across every chapter and season.`,
       })
     } else if (result === 'insufficient') {
       pushToast({
@@ -168,6 +174,19 @@ export function ItemShopView({
       })
     } else if (result === 'owned') {
       pushToast({ tone: 'info', title: 'Already owned', description: `${item.name} is already in your collection.` })
+    }
+  }
+
+  const equip = (item: ShopItem) => {
+    const result = onEquip(item.id)
+    if (result === 'equipped') {
+      pushToast({
+        tone: 'success',
+        title: 'Equipped',
+        description: `${item.name} is active in every chapter and season.`,
+      })
+    } else if (result === 'not-owned') {
+      pushToast({ tone: 'error', title: 'Not in your collection', description: 'Buy this item before equipping it.' })
     }
   }
 
@@ -255,6 +274,15 @@ export function ItemShopView({
                 {owned.length} <span className="text-[#627e91]">/ {formatVbucks(catalogCount)}</span>
               </span>
             </div>
+            <button
+              type="button"
+              onClick={() => setLockerOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-[#63bdd9]/35 bg-[#63bdd9]/[0.08] px-3 py-2.5 text-[10px] font-bold uppercase tracking-[0.12em] text-[#bdeaf5] transition-colors hover:border-[#63bdd9]/70 hover:bg-[#63bdd9]/15 hover:text-white"
+              title="Open your account locker"
+            >
+              <Shirt className="h-3.5 w-3.5" /> Locker
+              <span className="rounded-md bg-[#63bdd9]/15 px-1.5 py-0.5 font-mono text-[9px] text-[#d7f5fc]">{owned.length}</span>
+            </button>
             <div className="inline-flex items-center gap-1 rounded-xl border border-[#2a465d] bg-[#0c1b28]/90 p-1" aria-label="Shop scroll controls">
               <button
                 type="button"
@@ -324,7 +352,9 @@ export function ItemShopView({
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#1c3547] bg-[#081722]/80 px-3 py-2.5 text-[10.5px] leading-relaxed text-[#6e8b9d]">
               <span className="inline-flex items-center gap-1.5">
                 <Sparkles className="h-3 w-3 text-[#e4b85b]" />
-                {holiday ? `${holiday.name} stock only. Item art © Epic Games.` : 'Item art © Epic Games. Purchases stay in your VAULTED collection.'}
+                {holiday
+                  ? `${holiday.name} stock only. Item art © Epic Games.`
+                  : 'Item art © Epic Games. Purchases stay equipped across every chapter and season.'}
               </span>
               <span className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-[#516f83]">00:00 UTC reset</span>
             </div>
@@ -474,7 +504,7 @@ export function ItemShopView({
             <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-[#1e3a4b] bg-[#081722]/80 px-3 py-2.5 text-[9.5px] text-[#6e8b9d]">
               <span className="inline-flex items-center gap-1.5">
                 <Sparkles className="h-3 w-3 text-[#e2b85a]" />
-                {owned.length} item{owned.length === 1 ? '' : 's'} in your locker
+                {owned.length} item{owned.length === 1 ? '' : 's'} in your locker · account-wide
               </span>
               <span className="font-mono text-[9px] text-[#516f83]">VAULTED // STORE</span>
             </div>
@@ -487,9 +517,20 @@ export function ItemShopView({
           item={selected}
           holiday={holiday}
           owned={ownedSet.has(selected.id)}
+          equipped={equipped[selected.type] === selected.id}
           canAfford={vbucks >= selected.price}
           onBuy={() => buy(selected)}
+          onEquip={() => equip(selected)}
           onClose={closeViewer}
+        />
+      )}
+
+      {lockerOpen && (
+        <LockerModal
+          owned={owned}
+          equipped={equipped}
+          onEquip={equip}
+          onClose={() => setLockerOpen(false)}
         />
       )}
     </section>

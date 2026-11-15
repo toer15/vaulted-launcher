@@ -1,11 +1,41 @@
 import catalogData from '../assets/shop/catalog.json'
 import fullCatalogData from '../assets/shop/catalog.full.json'
 import { getActiveHoliday, getHolidayItems, holidayShopInfo } from './holidays'
-import type { ShopDay, ShopHoliday, ShopItem, ShopItemType, ShopProgress, ShopRarity, ShopState } from '../types'
+import type { ShopDay, ShopEquipped, ShopHoliday, ShopItem, ShopItemType, ShopProgress, ShopRarity, ShopState } from '../types'
 
 export const SHOP_STORAGE_KEY = 'vaulted.item-shop.v1'
+const SHOP_OWNER_KEY = 'vaulted.item-shop.owner'
 export const STARTING_VBUCKS = 1200
 export const DAY_MS = 24 * 60 * 60 * 1000
+
+const EQUIPPED_TYPES: ShopItemType[] = [
+  'outfit',
+  'backpack',
+  'pickaxe',
+  'glider',
+  'emote',
+  'wrap',
+  'contrail',
+  'spray',
+  'emoji',
+  'loadingscreen',
+  'music',
+  'toy',
+  'pet',
+  'petcarrier',
+  'sidekick',
+  'shoe',
+  'aura',
+  'banner',
+]
+
+export function emptyEquipped(): ShopEquipped {
+  return Object.fromEntries(EQUIPPED_TYPES.map((type) => [type, null])) as ShopEquipped
+}
+
+function shopStorageKey(accountId?: string | null): string {
+  return accountId ? `${SHOP_STORAGE_KEY}.account.${accountId}` : SHOP_STORAGE_KEY
+}
 
 const CLASSIC_CATALOG = catalogData as ShopItem[]
 const FULL_CATALOG = fullCatalogData as unknown as ShopItem[]
@@ -234,13 +264,23 @@ export function createShopState(day = dayKey(), buildId: string | null = null): 
     version: 1,
     vbucks: STARTING_VBUCKS,
     owned: [],
+    equipped: emptyEquipped(),
     progress: { day, buildId, launches: 0, playSeconds: 0, claimed: [] },
   }
 }
 
-export function loadShopState(): ShopState | null {
+/**
+ * Purchases are scoped to the signed-in account. The old unscoped key is
+ * adopted once by the first account that opens this build, so an upgrade never
+ * loses an existing collection while a second account starts clean.
+ */
+export function loadShopState(accountId?: string | null): ShopState | null {
   try {
-    const raw = localStorage.getItem(SHOP_STORAGE_KEY)
+    let raw = accountId ? localStorage.getItem(shopStorageKey(accountId)) : localStorage.getItem(SHOP_STORAGE_KEY)
+    if (!raw && accountId) {
+      const owner = localStorage.getItem(SHOP_OWNER_KEY)
+      if (!owner || owner === accountId) raw = localStorage.getItem(SHOP_STORAGE_KEY)
+    }
     if (!raw) return null
 
     const parsed = JSON.parse(raw) as Partial<ShopState>
@@ -256,10 +296,20 @@ export function loadShopState(): ShopState | null {
       return null
     }
 
+    const owned = [...new Set(parsed.owned.filter((item): item is string => typeof item === 'string'))]
+    const equipped = emptyEquipped()
+    if (parsed.equipped && typeof parsed.equipped === 'object') {
+      for (const type of EQUIPPED_TYPES) {
+        const itemId = (parsed.equipped as Partial<ShopEquipped>)[type]
+        if (typeof itemId === 'string' && owned.includes(itemId)) equipped[type] = itemId
+      }
+    }
+
     return {
       version: 1,
       vbucks: Math.max(0, Math.round(parsed.vbucks)),
-      owned: [...new Set(parsed.owned.filter((item): item is string => typeof item === 'string'))],
+      owned,
+      equipped,
       progress: {
         day: progress.day,
         buildId: typeof progress.buildId === 'string' ? progress.buildId : null,
@@ -273,9 +323,10 @@ export function loadShopState(): ShopState | null {
   }
 }
 
-export function saveShopState(state: ShopState): void {
+export function saveShopState(state: ShopState, accountId?: string | null): void {
   try {
-    localStorage.setItem(SHOP_STORAGE_KEY, JSON.stringify(state))
+    localStorage.setItem(shopStorageKey(accountId), JSON.stringify(state))
+    if (accountId) localStorage.setItem(SHOP_OWNER_KEY, accountId)
   } catch {
     /* storage full / disabled — the shop still works for this session */
   }

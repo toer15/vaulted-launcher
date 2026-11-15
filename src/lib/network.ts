@@ -8,6 +8,7 @@
  */
 
 import defaultBuilds from '../assets/builds.json'
+import type { ShopEquipped } from '../types'
 
 export const API_BASE =
   'https://site-c377de5341934c84b54b325555448242.freebuff.page'
@@ -171,6 +172,52 @@ export async function signOut(token: string): Promise<void> {
   } catch {
     /* local sign-out is what matters */
   }
+}
+
+/* --------------------------------------------------------------- inventory */
+
+export interface RemoteInventory {
+  owned: string[]
+  equipped: Partial<ShopEquipped>
+  updatedAt?: number
+}
+
+function normalizeInventory(data: unknown): RemoteInventory {
+  const value = (data ?? {}) as { owned?: unknown; equipped?: unknown; updatedAt?: unknown }
+  const owned = Array.isArray(value.owned)
+    ? [...new Set(value.owned.filter((item): item is string => typeof item === 'string' && item.length > 0))].slice(0, 20000)
+    : []
+  const equipped: Partial<ShopEquipped> = {}
+  if (value.equipped && typeof value.equipped === 'object') {
+    for (const [type, itemId] of Object.entries(value.equipped as Record<string, unknown>)) {
+      if (typeof itemId === 'string' && itemId) equipped[type as keyof ShopEquipped] = itemId
+    }
+  }
+  return {
+    owned,
+    equipped,
+    updatedAt: typeof value.updatedAt === 'number' ? value.updatedAt : undefined,
+  }
+}
+
+/** The account-owned collection, used when the same user signs in anywhere. */
+export async function fetchInventory(token: string): Promise<RemoteInventory> {
+  return normalizeInventory(await request<unknown>('/api/inventory', { token }))
+}
+
+/** Merge a collection into the account and return the server's canonical copy. */
+export async function saveInventory(
+  token: string,
+  owned: string[],
+  equipped: ShopEquipped,
+): Promise<RemoteInventory> {
+  return normalizeInventory(
+    await request<unknown>('/api/inventory', {
+      method: 'POST',
+      token,
+      body: { owned, equipped },
+    }),
+  )
 }
 
 /* ---------------------------------------------------------------- presence */

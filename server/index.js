@@ -6,6 +6,8 @@
  *  GET  /api/me        Bearer <token>         -> { user }
  *  POST /api/logout    Bearer <token>         -> { ok }
  *  POST /api/presence  Bearer, { seasons }    -> { ok }        (heartbeat)
+ *  GET  /api/inventory Bearer                 -> { owned, equipped }
+ *  POST /api/inventory Bearer, { owned, equipped } -> merged collection
  *  GET  /api/active                           -> { counts, total, ttl }
  *  GET  /builds.json                           -> build source manifest
  *  GET  /latest.json                           -> app update feed
@@ -68,6 +70,14 @@ async function ensureSchema(env) {
         season_key TEXT NOT NULL,
         last_seen INTEGER NOT NULL,
         PRIMARY KEY (user_id, season_key)
+      )`,
+    ),
+    env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS inventory (
+        user_id TEXT PRIMARY KEY,
+        owned TEXT NOT NULL,
+        equipped TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
       )`,
     ),
   ])
@@ -232,6 +242,75 @@ async function logout(request, env) {
   return json({ ok: true })
 }
 
+const SHOP_TYPES = new Set([
+  'outfit', 'backpack', 'pickaxe', 'glider', 'emote', 'wrap', 'contrail', 'spray', 'emoji',
+  'loadingscreen', 'music', 'toy', 'pet', 'petcarrier', 'sidekick', 'shoe', 'aura', 'banner',
+])
+const ITEM_ID_RE = /^[A-Za-z0-9_.:-]{1,80}$/
+
+function cleanItemList(value) {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.filter((item) => typeof item === 'string' && ITEM_ID_RE.test(item)))].slice(0, 20000)
+}
+
+function cleanEquipped(value, owned) {
+  const equipped = {}
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return equipped
+  for (const [type, itemId] of Object.entries(value)) {
+    if (!SHOP_TYPES.has(type) || typeof itemId !== 'string' || !owned.includes(itemId)) continue
+    equipped[type] = itemId
+  }
+  return equipped
+}
+
+function readStoredJson(value) {
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+async function inventory(request, env) {
+  const user = await sessionUser(request, env)
+  if (!user) return bad('Not signed in.', 401)
+
+  const row = await env.DB.prepare(
+    'SELECT owned, equipped, updated_at AS updatedAt FROM inventory WHERE user_id = ?',
+  )
+    .bind(user.id)
+    .first()
+
+  if (request.method === 'GET') {
+    const owned = row ? cleanItemList(readStoredJson(row.owned).items ?? readStoredJson(row.owned)) : []
+    const equipped = row ? cleanEquipped(readStoredJson(row.equipped), owned) : {}
+    return json({ owned, equipped, updatedAt: row?.updatedAt ?? 0 })
+  }
+
+  const body = await readJson(request)
+  const incomingOwned = cleanItemList(body?.owned)
+  if (incomingOwned.length === 0 && !Array.isArray(body?.owned)) {
+    return bad('Inventory payload is missing owned items.', 422)
+  }
+
+  const priorOwned = row ? cleanItemList(readStoredJson(row.owned).items ?? readStoredJson(row.owned)) : []
+  const owned = [...new Set([...priorOwned, ...incomingOwned])].slice(0, 20000)
+  const priorEquipped = row ? cleanEquipped(readStoredJson(row.equipped), owned) : {}
+  const incomingEquipped = cleanEquipped(body?.equipped, owned)
+  const equipped = { ...priorEquipped, ...incomingEquipped }
+  const updatedAt = Date.now()
+
+  await env.DB.prepare(
+    `INSERT INTO inventory (user_id, owned, equipped, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id) DO UPDATE SET owned = excluded.owned, equipped = excluded.equipped, updated_at = excluded.updated_at`,
+  )
+    .bind(user.id, JSON.stringify(owned), JSON.stringify(equipped), updatedAt)
+    .run()
+
+  return json({ owned, equipped, updatedAt })
+}
+
 async function presence(request, env) {
   const user = await sessionUser(request, env)
   if (!user) return bad('Not signed in.', 401)
@@ -318,6 +397,9 @@ export default {
       if (url.pathname === '/api/me' && request.method === 'GET') return me(request, env)
       if (url.pathname === '/api/logout' && request.method === 'POST') return logout(request, env)
       if (url.pathname === '/api/presence' && request.method === 'POST') return presence(request, env)
+      if (url.pathname === '/api/inventory' && (request.method === 'GET' || request.method === 'POST')) {
+        return inventory(request, env)
+      }
       if (url.pathname === '/api/active' && request.method === 'GET') return active(env)
 
       return bad('Unknown endpoint.', 404)

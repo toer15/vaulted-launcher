@@ -8,12 +8,14 @@ interface ShopItemViewerProps {
   item: ShopItem
   holiday: ShopHoliday | null
   owned: boolean
+  equipped: boolean
   canAfford: boolean
   onBuy: () => void
+  onEquip: () => void
   onClose: () => void
 }
 
-export function ShopItemViewer({ item, holiday, owned, canAfford, onBuy, onClose }: ShopItemViewerProps) {
+export function ShopItemViewer({ item, holiday, owned, equipped, canAfford, onBuy, onEquip, onClose }: ShopItemViewerProps) {
   const [spin, setSpin] = useState(-24)
   const [autoSpin, setAutoSpin] = useState(true)
   const [dragging, setDragging] = useState(false)
@@ -236,19 +238,25 @@ export function ShopItemViewer({ item, holiday, owned, canAfford, onBuy, onClose
             <div className="mt-5">
               <button
                 type="button"
-                onClick={onBuy}
-                disabled={owned || !canAfford}
+                onClick={owned ? onEquip : onBuy}
+                disabled={owned ? equipped : !canAfford}
                 className={
-                  owned
-                    ? 'inline-flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/25 bg-emerald-400/[0.07] px-4 py-3 text-[12px] font-bold text-emerald-300'
-                    : canAfford
-                      ? 'inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#e2b85a] px-4 py-3 text-[12px] font-black uppercase tracking-wide text-[#1e180b] shadow-[0_16px_35px_-18px_rgba(226,184,90,0.9)] transition-colors hover:bg-[#f4d47e] active:scale-[0.99]'
-                      : 'inline-flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-[#29475a] bg-[#0e2230] px-4 py-3 text-[12px] font-bold text-[#648396]'
+                  equipped
+                    ? 'inline-flex w-full cursor-default items-center justify-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.08] px-4 py-3 text-[12px] font-bold text-emerald-300'
+                    : owned
+                      ? 'inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[#63bdd9]/45 bg-[#63bdd9]/10 px-4 py-3 text-[12px] font-bold text-[#c8f2fb] transition-colors hover:border-[#63bdd9]/80 hover:bg-[#63bdd9]/20 hover:text-white active:scale-[0.99]'
+                      : canAfford
+                        ? 'inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#e2b85a] px-4 py-3 text-[12px] font-black uppercase tracking-wide text-[#1e180b] shadow-[0_16px_35px_-18px_rgba(226,184,90,0.9)] transition-colors hover:bg-[#f4d47e] active:scale-[0.99]'
+                        : 'inline-flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-[#29475a] bg-[#0e2230] px-4 py-3 text-[12px] font-bold text-[#648396]'
                 }
               >
-                {owned ? (
+                {equipped ? (
                   <>
-                    <Check className="h-4 w-4" /> Already owned
+                    <Check className="h-4 w-4" /> Equipped in every season
+                  </>
+                ) : owned ? (
+                  <>
+                    <Sparkles className="h-4 w-4" /> Equip for every season
                   </>
                 ) : canAfford ? (
                   <>Buy for {formatVbucks(item.price)} V-Bucks</>
@@ -257,7 +265,7 @@ export function ShopItemViewer({ item, holiday, owned, canAfford, onBuy, onClose
                 )}
               </button>
               <p className="mt-2.5 text-center text-[9px] leading-relaxed text-[#5f8093]">
-                Purchases stay in your local VAULTED collection.
+                Saved to your account locker and active across every chapter and season.
               </p>
             </div>
           </div>

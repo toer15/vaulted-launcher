@@ -6,6 +6,8 @@ const STORAGE_KEY = 'vaulted.launcher.v1'
 export interface PersistedState {
   builds: Build[]
   activeId: string | null
+  /** buildId -> last community server chosen from Online */
+  serverByBuild?: Record<string, string>
 }
 
 export function uid(): string {
@@ -20,7 +22,20 @@ export function loadState(): PersistedState | null {
     const parsed = JSON.parse(raw) as PersistedState
     if (!Array.isArray(parsed.builds)) return null
 
-    return { builds: parsed.builds, activeId: parsed.activeId ?? parsed.builds[0]?.id ?? null }
+    const serverByBuild =
+      parsed.serverByBuild && typeof parsed.serverByBuild === 'object'
+        ? Object.fromEntries(
+            Object.entries(parsed.serverByBuild).filter(
+              (entry): entry is [string, string] => typeof entry[1] === 'string',
+            ),
+          )
+        : {}
+
+    return {
+      builds: parsed.builds,
+      activeId: parsed.activeId ?? parsed.builds[0]?.id ?? null,
+      serverByBuild,
+    }
   } catch {
     return null
   }
