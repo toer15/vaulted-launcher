@@ -139,6 +139,57 @@ internal static class VaultedInjector
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(uint access, bool inherit, int processId);
+
+    private const uint PROCESS_CREATE_THREAD = 0x0002;
+    private const uint PROCESS_VM_OPERATION = 0x0008;
+    private const uint PROCESS_VM_WRITE = 0x0020;
+    private const uint PROCESS_QUERY_INFORMATION = 0x0400;
+    private const uint PROCESS_ACCESS = PROCESS_CREATE_THREAD | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION;
+
+    private static int InjectIntoProcess(int processId, string dllPath)
+    {
+        IntPtr process = OpenProcess(PROCESS_ACCESS, false, processId);
+        if (process == IntPtr.Zero) return Fail("OpenProcess failed: " + Marshal.GetLastWin32Error());
+
+        IntPtr remote = IntPtr.Zero;
+        IntPtr thread = IntPtr.Zero;
+        try
+        {
+            byte[] bytes = Encoding.Unicode.GetBytes(dllPath + "\0");
+            remote = VirtualAllocEx(process, IntPtr.Zero, (UIntPtr)bytes.Length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+            if (remote == IntPtr.Zero) return Fail("VirtualAllocEx failed: " + Marshal.GetLastWin32Error());
+
+            UIntPtr written;
+            if (!WriteProcessMemory(process, remote, bytes, (UIntPtr)bytes.Length, out written))
+                return Fail("WriteProcessMemory failed: " + Marshal.GetLastWin32Error());
+
+            IntPtr kernel32 = GetModuleHandle("kernel32.dll");
+            IntPtr loadLibrary = GetProcAddress(kernel32, "LoadLibraryW");
+            if (loadLibrary == IntPtr.Zero) return Fail("GetProcAddress(LoadLibraryW) failed: " + Marshal.GetLastWin32Error());
+
+            uint threadId;
+            thread = CreateRemoteThread(process, IntPtr.Zero, UIntPtr.Zero, loadLibrary, remote, 0, out threadId);
+            if (thread == IntPtr.Zero) return Fail("CreateRemoteThread failed: " + Marshal.GetLastWin32Error());
+
+            if (WaitForSingleObject(thread, 15000) != 0) return Fail("The DLL did not load in time.");
+
+            uint moduleHandle;
+            if (!GetExitCodeThread(thread, out moduleHandle) || moduleHandle == 0)
+                return Fail("LoadLibraryW failed inside the game process.");
+
+            Console.WriteLine("INJECTED=" + dllPath);
+            return 0;
+        }
+        finally
+        {
+            if (remote != IntPtr.Zero) VirtualFreeEx(process, remote, UIntPtr.Zero, MEM_RELEASE);
+            if (thread != IntPtr.Zero) CloseHandle(thread);
+            CloseHandle(process);
+        }
+    }
+
     private static string Quote(string value)
     {
         return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
@@ -177,9 +228,16 @@ internal static class VaultedInjector
 
     private static int Main(string[] args)
     {
+        if (args.Length == 3 && args[0] == "--inject")
+        {
+            int processId;
+            if (!int.TryParse(args[1], out processId) || processId <= 0) return Fail("Invalid process id.");
+            return InjectIntoProcess(processId, args[2]);
+        }
+
         if (args.Length < 3)
         {
-            return Fail("Usage: VaultedInjector.exe <game.exe> <redirect.dll> <working-directory> [--aux <exe>]... [--] [game args...]");
+            return Fail("Usage: VaultedInjector.exe <game.exe> <redirect.dll> <working-directory> [--aux <exe>]... [--] [game args...]\n       VaultedInjector.exe --inject <pid> <dll>");
         }
 
         string executable = args[0];

@@ -55,7 +55,7 @@ import type {
 } from './types'
 
 const PROFILE = { outfit: 'Renegade Raider', level: 87, cosmetics: 214 }
-const APP_VERSION = '1.0.28'
+const APP_VERSION = '1.0.29'
 const TOAST_TTL = 4200
 
 interface VerifyJob {

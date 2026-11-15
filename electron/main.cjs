@@ -3,6 +3,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const crypto = require('node:crypto')
+const net = require('node:net')
 const { spawn, execFile } = require('node:child_process')
 const { autoUpdater } = require('electron-updater')
 
@@ -33,6 +34,9 @@ const extractions = new Map()
 const BACKEND_PORT = 3551
 const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}/`
 const BACKEND_START_TIMEOUT = 60_000
+const MATCHMAKER_PORT = 3552
+const MATCHMAKER_URL = `http://127.0.0.1:${MATCHMAKER_PORT}`
+const GAME_SERVER_PORT = 7777
 const BACKEND_PASSWORD = 'Rebooted'
 const LEGACY_FLTOKEN = '3db3ba5dcbd2e16703f3978d'
 const LEGACY_CALDERA =
@@ -42,6 +46,11 @@ const LEGACY_CALDERA_EOS =
 
 let backendInstallPromise = null
 let backendStartPromise = null
+let backendReady = false
+let backendUsername = ''
+let matchmakerStartPromise = null
+/** { child, pid, injectorPid, buildId, dll } for the local listen server */
+let gameServerState = null
 
 /** pending automatic update install */
 let autoInstallTimer = null
@@ -331,8 +340,143 @@ function backendLogPath() {
   return path.join(app.getPath('userData'), 'logs', 'private-server.log')
 }
 
+function matchmakerLogPath() {
+  return path.join(app.getPath('userData'), 'logs', 'matchmaker.log')
+}
+
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function normalizeUsername(value) {
+  return (
+    String(value || 'Player')
+      .replace(/[^a-z0-9_]/gi, '')
+      .slice(0, 24) || 'Player'
+  )
+}
+
+/** Apply the small VAULTED-only fixes to the bundled Neonite copy. */
+function patchBackendRuntime(paths) {
+  const patchRoot = path.join(runtimeRoot(), 'neonite-patch')
+  const files = [
+    'api/controllers/MatchMakingController.js',
+    'api/controllers/AuthController.js',
+    'config/matchmakingRoutes.js',
+  ]
+  for (const relative of files) {
+    const source = path.join(patchRoot, relative)
+    const destination = path.join(paths.cwd, relative)
+    if (!fs.existsSync(source)) continue
+    fs.mkdirSync(path.dirname(destination), { recursive: true })
+    const incoming = fs.readFileSync(source)
+    let current = null
+    try {
+      current = fs.readFileSync(destination)
+    } catch {
+      /* first install */
+    }
+    if (!current || !current.equals(incoming)) fs.writeFileSync(destination, incoming)
+  }
+}
+
+/** Persist the launcher account so EOS/external-auth logins use the same name. */
+function writeBackendUsername(paths, username) {
+  const configPath = path.join(paths.cwd, 'config.ini')
+  let config = ''
+  try {
+    config = fs.readFileSync(configPath, 'utf8')
+  } catch {
+    return
+  }
+
+  const safe = normalizeUsername(username)
+  config = config.replace(/^bEnableOverride\s*=.*$/m, 'bEnableOverride=true')
+  config = config.replace(/^username\s*=.*$/m, `username=${safe}`)
+  if (!/^bEnableOverride\s*=/m.test(config)) config += '\nbEnableOverride=true\n'
+  if (!/^username\s*=/m.test(config)) config += `username=${safe}\n`
+  fs.writeFileSync(configPath, config)
+}
+
+function portOpen(port, host = '127.0.0.1', timeout = 700) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port })
+    let settled = false
+    const finish = (open) => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      resolve(open)
+    }
+    socket.setTimeout(timeout)
+    socket.once('connect', () => finish(true))
+    socket.once('timeout', () => finish(false))
+    socket.once('error', () => finish(false))
+  })
+}
+
+async function waitForPort(port, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await portOpen(port)) return true
+    await delay(1000)
+  }
+  return portOpen(port)
+}
+
+function processAlive(pid) {
+  if (!pid) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Stop a listener only when its command line proves it belongs to VAULTED. */
+function stopOwnedListener(port, marker) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') return resolve(false)
+    execFile('netstat', ['-ano', '-p', 'tcp'], { windowsHide: true }, (error, stdout) => {
+      if (error || !stdout) return resolve(false)
+      const pids = new Set()
+      for (const line of String(stdout).split(/\r?\n/)) {
+        const columns = line.trim().split(/\s+/)
+        if (columns.length < 5) continue
+        const local = columns[1]
+        if (!local.endsWith(`:${port}`) || columns[3] !== 'LISTENING') continue
+        const pid = Number(columns[4])
+        if (pid > 0) pids.add(pid)
+      }
+      if (!pids.size) return resolve(false)
+
+      const check = (pid) =>
+        new Promise((done) => {
+          execFile(
+            'powershell.exe',
+            [
+              '-NoProfile',
+              '-NonInteractive',
+              '-Command',
+              `(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine`,
+            ],
+            { windowsHide: true, timeout: 8000 },
+            (err, out) => done(!err && String(out || '').toLowerCase().includes(marker)),
+          )
+        })
+
+      void (async () => {
+        for (const pid of pids) {
+          if (!(await check(pid))) continue
+          await new Promise((done) => {
+            execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => done())
+          })
+        }
+        resolve(true)
+      })()
+    })
+  })
 }
 
 function extractZipArchive(archive, destination) {
@@ -354,7 +498,10 @@ function extractZipArchive(archive, destination) {
 
 async function ensureBackendRuntime() {
   const paths = backendPaths()
-  if (fs.existsSync(paths.node) && fs.existsSync(paths.app)) return paths
+  if (fs.existsSync(paths.node) && fs.existsSync(paths.app)) {
+    patchBackendRuntime(paths)
+    return paths
+  }
 
   if (backendInstallPromise) return backendInstallPromise
 
@@ -407,12 +554,97 @@ async function waitForBackend(timeoutMs) {
   return backendResponds()
 }
 
-async function ensureLocalBackend() {
-  if (await backendResponds()) return { reused: true, pid: null }
+async function matchmakerResponds(timeoutMs = 900) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(`${MATCHMAKER_URL}/health`, { signal: controller.signal })
+    if (!response.ok) return false
+    const body = await response.json()
+    return body?.service === 'vaulted-matchmaker'
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function ensureLocalMatchmaker() {
+  if (await matchmakerResponds()) return
+  if (matchmakerStartPromise) return matchmakerStartPromise
+
+  matchmakerStartPromise = (async () => {
+    const paths = await ensureBackendRuntime()
+    const script = path.join(runtimeRoot(), 'matchmaker.cjs')
+    if (!fs.existsSync(script)) throw new Error('The local matchmaker is missing from this installation. Reinstall VAULTED.')
+
+    // A stale copy from an older release may hold the port. Only replace it
+    // when the process is our own matchmaker, never an unrelated service.
+    if (await portOpen(MATCHMAKER_PORT)) {
+      await stopOwnedListener(MATCHMAKER_PORT, 'matchmaker.cjs')
+      await delay(400)
+    }
+
+    const logFile = matchmakerLogPath()
+    fs.mkdirSync(path.dirname(logFile), { recursive: true })
+    const fd = fs.openSync(logFile, 'a')
+    let child
+    try {
+      child = spawn(paths.node, [script], {
+        cwd: path.dirname(script),
+        detached: true,
+        windowsHide: true,
+        stdio: ['ignore', fd, fd],
+        env: {
+          ...process.env,
+          VAULTED_MATCHMAKER_PORT: String(MATCHMAKER_PORT),
+          VAULTED_GAME_PORT: String(GAME_SERVER_PORT),
+          VAULTED_GAME_HOST: '127.0.0.1',
+        },
+      })
+    } finally {
+      fs.closeSync(fd)
+    }
+    if (!child.pid) throw new Error('The local matchmaker could not start.')
+    child.unref()
+
+    const deadline = Date.now() + 10_000
+    while (Date.now() < deadline) {
+      if (await matchmakerResponds()) return
+      await delay(300)
+    }
+    throw new Error('The local matchmaker did not start. Check the matchmaker log.')
+  })().finally(() => {
+    matchmakerStartPromise = null
+  })
+
+  return matchmakerStartPromise
+}
+
+async function ensureLocalBackend(username) {
+  const requestedUser = normalizeUsername(username)
+  if (backendReady && backendUsername === requestedUser && (await backendResponds())) {
+    return { reused: true, pid: null }
+  }
   if (backendStartPromise) return backendStartPromise
 
   backendStartPromise = (async () => {
     const paths = await ensureBackendRuntime()
+    patchBackendRuntime(paths)
+    writeBackendUsername(paths, requestedUser)
+
+    // The previous release has no ticket/session fix. Stop only our own
+    // Neonite listener so the patched files are loaded for this launch.
+    if (await backendResponds()) {
+      await stopOwnedListener(BACKEND_PORT, 'app.js')
+      for (let attempt = 0; attempt < 20 && (await portOpen(BACKEND_PORT)); attempt += 1) {
+        await delay(250)
+      }
+    }
+    if (await portOpen(BACKEND_PORT)) {
+      throw new Error('Port 3551 is already used by another program. Close it and try again.')
+    }
+
     const logFile = backendLogPath()
     await fs.promises.mkdir(path.dirname(logFile), { recursive: true })
 
@@ -449,6 +681,8 @@ async function ensureLocalBackend() {
       throw new Error(`The private server did not start.${detail ? `\n\n${detail}` : ''}`)
     }
 
+    backendReady = true
+    backendUsername = requestedUser
     return { reused: false, pid: child.pid }
   })().finally(() => {
     backendStartPromise = null
@@ -499,11 +733,8 @@ function removeAftermathDlls(executable) {
   }
 }
 
-function fortniteLaunchArgs(payload) {
-  const username =
-    String(payload.username || 'Player')
-      .replace(/[^a-z0-9_]/gi, '')
-      .slice(0, 24) || 'Player'
+function fortniteLaunchArgs(payload, options = {}) {
+  const username = normalizeUsername(payload.username)
   const eos = usesEosAuth(payload)
   const args = [
     '-epicapp=Fortnite',
@@ -521,6 +752,8 @@ function fortniteLaunchArgs(payload) {
     '-log',
   ]
   if (eos) args.push('-nouac', '-nocodeguards')
+  if (options.host) args.push('-nosplash', '-nosound')
+  if (options.headless) args.push('-nullrhi')
   return args
 }
 
@@ -529,7 +762,7 @@ function fortniteLaunchArgs(payload) {
  * Doing this before any client code runs is what guarantees the very first
  * OAuth request is redirected instead of hitting Epic and failing with 1015.
  */
-function launchInjectedGame(payload) {
+function launchInjectedGame(payload, options = {}) {
   return new Promise((resolve, reject) => {
     const injector = path.join(runtimeRoot(), 'VaultedInjector.exe')
     const dll = path.join(runtimeRoot(), 'Tellurium.dll')
@@ -543,7 +776,7 @@ function launchInjectedGame(payload) {
     for (const bootstrapper of suspendedBootstrappers(payload.executable)) {
       injectorArgs.push('--aux', bootstrapper)
     }
-    injectorArgs.push('--', ...fortniteLaunchArgs(payload))
+    injectorArgs.push('--', ...fortniteLaunchArgs(payload, options))
 
     const child = spawn(injector, injectorArgs, {
       cwd: workingDirectory,
@@ -585,6 +818,200 @@ function launchInjectedGame(payload) {
       finishError(`Fortnite could not start.${detail ? `\n${detail}` : code ? ` (injector exited ${code})` : ''}`)
     })
   })
+}
+
+function injectDll(pid, dllPath) {
+  return new Promise((resolve, reject) => {
+    const injector = path.join(runtimeRoot(), 'VaultedInjector.exe')
+    if (!fs.existsSync(injector)) return reject(new Error('The injector is missing from this installation. Reinstall VAULTED.'))
+    if (!fs.existsSync(dllPath)) return reject(new Error('The local game server is missing from this installation. Reinstall VAULTED.'))
+
+    const child = spawn(injector, ['--inject', String(pid), dllPath], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const finish = (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (error) reject(error)
+      else resolve()
+    }
+    const timer = setTimeout(() => {
+      finish(new Error('The local game server injector timed out.'))
+      void killProcessTree(child.pid)
+    }, 25_000)
+
+    child.stdout?.on('data', (chunk) => {
+      stdout = (stdout + chunk.toString()).slice(-3000)
+    })
+    child.stderr?.on('data', (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-3000)
+    })
+    child.on('error', (error) => finish(new Error(`Could not start the local game server: ${error.message}`)))
+    child.on('exit', (code) => {
+      if (code === 0) finish()
+      else finish(new Error(`The local game server could not attach.${stderr.trim() || stdout.trim() ? `\n${(stderr || stdout).trim()}` : code ? ` (exited ${code})` : ''}`))
+    })
+  })
+}
+
+function gameServerDll() {
+  const candidate = path.join(runtimeRoot(), 'Magnesium.dll')
+  if (fs.existsSync(candidate)) return candidate
+  throw new Error('The local game server DLL is missing from this installation. Reinstall VAULTED.')
+}
+
+/** Magnesium names its saved profile after the detected game version. */
+function fortniteVersionKey(payload) {
+  const text = [payload?.version, payload?.path, payload?.executable].filter(Boolean).join(' ')
+  const match = String(text).match(/(?:^|[^\d])(\d{1,2})\.(\d{1,2})(?:[^\d]|$)/)
+  if (!match) return null
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  if (!Number.isInteger(major) || !Number.isInteger(minor)) return null
+  if (major < 1 || major > 44 || minor < 0 || minor > 99) return null
+  // Magnesium formats its profile key as a fixed two-decimal version.
+  return `fn_${major}.${String(minor).padEnd(2, '0')}`
+}
+
+/**
+ * The bundled game server has a Start Match button. AutoHosting lets the host
+ * start its listen server without a second click, so every playlist/gamemode
+ * reaches a joinable 127.0.0.1 session before the player client asks for one.
+ */
+function configureAutoHost(payload) {
+  const profile = fortniteVersionKey(payload)
+  if (!profile) return false
+
+  const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local')
+  const directory = path.join(localAppData, 'Magnesium')
+  const settingsPath = path.join(directory, 'auto_hosting.json')
+
+  let document = { schema_version: 1, profiles: {} }
+  try {
+    const existing = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+    if (existing && typeof existing === 'object' && existing.schema_version === 1 && existing.profiles && typeof existing.profiles === 'object') {
+      document = existing
+    }
+  } catch {
+    /* first run or a malformed old file */
+  }
+
+  const previous = document.profiles[profile] && typeof document.profiles[profile] === 'object' ? document.profiles[profile] : {}
+  document.profiles[profile] = {
+    ...previous,
+    auto_host: { enabled: true, delay_seconds: 5, save_settings: false },
+  }
+
+  try {
+    fs.mkdirSync(directory, { recursive: true })
+    fs.writeFileSync(settingsPath, JSON.stringify(document, null, 2))
+    return true
+  } catch (error) {
+    console.warn(`[VAULTED] Could not enable automatic game-server hosting: ${error.message}`)
+    return false
+  }
+}
+
+/** Wait for the host client to finish its private-server login. */
+async function waitForFortniteLogin(startedAt, timeoutMs = 25_000) {
+  const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local')
+  const logDirectory = path.join(localAppData, 'FortniteGame', 'Saved', 'Logs')
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    try {
+      const logs = fs.readdirSync(logDirectory)
+        .filter((name) => /^FortniteGame.*\.log$/i.test(name))
+        .map((name) => {
+          const file = path.join(logDirectory, name)
+          return { file, stat: fs.statSync(file) }
+        })
+        .filter(({ stat }) => stat.isFile() && stat.mtimeMs >= startedAt - 15_000)
+        .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)
+
+      for (const { file } of logs) {
+        const text = fs.readFileSync(file, 'utf8').slice(-250_000)
+        if (/UOnlineAccountCommon::ContinueLoggingIn/i.test(text) && /\(Completed\)/i.test(text)) {
+          return true
+        }
+      }
+    } catch {
+      /* the host is still creating its log file */
+    }
+    await delay(500)
+  }
+  return false
+}
+
+async function stopGameServer() {
+  const state = gameServerState
+  gameServerState = null
+  if (state?.injectorPid && state.injectorPid !== state.pid) await killProcessTree(state.injectorPid)
+  if (state?.pid) await killProcessTree(state.pid)
+}
+
+/**
+ * Starts a hidden second client and turns it into the local listen server by
+ * injecting Magnesium after its login. Matchmaking then assigns the player
+ * client to 127.0.0.1:7777.
+ */
+async function ensureGameServer(payload) {
+  if (await portOpen(GAME_SERVER_PORT)) return { reused: true }
+  if (gameServerState) await stopGameServer()
+
+  const dll = gameServerDll(payload)
+  const hostUsername = `${normalizeUsername(payload.username)}Host`.slice(0, 24)
+  configureAutoHost(payload)
+
+  send('arc:launch-status', { id: payload?.id, message: 'Starting the local game server…' })
+  const hostStartedAt = Date.now()
+  const launched = await launchInjectedGame(
+    { ...payload, username: hostUsername },
+    { host: true, headless: true },
+  )
+
+  const state = {
+    child: launched.child,
+    pid: launched.pid,
+    injectorPid: launched.child.pid ?? null,
+    buildId: payload?.id ?? payload?.path ?? '',
+    dll,
+  }
+  gameServerState = state
+  launched.child.on('exit', () => {
+    if (gameServerState === state) gameServerState = null
+  })
+
+  try {
+    send('arc:launch-status', { id: payload?.id, message: 'Waiting for the game server to log in…' })
+    const loggedIn = await waitForFortniteLogin(hostStartedAt)
+    if (!processAlive(state.pid)) {
+      throw new Error('The local game server closed before it finished loading. Close any other running Fortnite client and try again.')
+    }
+    if (!loggedIn) await delay(5_000)
+
+    send('arc:launch-status', { id: payload?.id, message: 'Starting matchmaking on the local game server…' })
+    const memoryDll = path.join(runtimeRoot(), 'Memory.dll')
+    if (/^ch1/i.test(String(payload?.id || '')) && fs.existsSync(memoryDll)) {
+      await injectDll(state.pid, memoryDll)
+      await delay(800)
+    }
+    await injectDll(state.pid, dll)
+
+    if (!(await waitForPort(GAME_SERVER_PORT, 90_000))) {
+      throw new Error('The local game server did not open port 7777. Close any other running Fortnite client and try again.')
+    }
+    send('arc:launch-status', { id: payload?.id, message: 'Local game server is ready.' })
+    return { reused: false }
+  } catch (error) {
+    await stopGameServer()
+    throw error
+  }
 }
 
 function killProcessTree(pid) {
@@ -1535,7 +1962,9 @@ function registerIpc() {
 
     try {
       send('arc:launch-status', { id: id ?? undefined, message: 'Preparing the private server…' })
-      await ensureLocalBackend()
+      await ensureLocalBackend(payload.username)
+      await ensureLocalMatchmaker()
+      await ensureGameServer(payload)
 
       send('arc:launch-status', { id: id ?? undefined, message: 'Starting Fortnite…' })
       const launched = await launchInjectedGame(payload)
@@ -1547,6 +1976,7 @@ function registerIpc() {
         injector.on('exit', () => {
           running.delete(id)
           send('arc:build-exited', { id })
+          if (running.size === 0 && gameServerState) void stopGameServer()
         })
       }
 
@@ -1556,6 +1986,7 @@ function registerIpc() {
       if (gamePid) await killProcessTree(gamePid)
       if (injector?.pid) await killProcessTree(injector.pid)
       if (id) running.delete(id)
+      if (running.size === 0 && gameServerState) await stopGameServer()
       throw error
     }
   })
@@ -1568,6 +1999,7 @@ function registerIpc() {
     await killProcessTree(entry.pid)
 
     running.delete(id)
+    if (running.size === 0 && gameServerState) await stopGameServer()
     return { closed: true }
   })
 
