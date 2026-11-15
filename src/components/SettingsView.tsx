@@ -34,6 +34,7 @@ interface SettingsViewProps {
   updateState: { state: 'idle' | 'checking' | 'current' | 'available' | 'error'; message?: string; url?: string }
   updateReady?: boolean
   onCheckUpdates: () => void
+  onDownloadUpdate?: () => void
   onRestartToUpdate?: () => void
 }
 
@@ -54,6 +55,7 @@ export function SettingsView({
   updateState,
   updateReady,
   onCheckUpdates,
+  onDownloadUpdate,
   onRestartToUpdate,
 }: SettingsViewProps) {
   const art = build ? artFor(build.season) : null
@@ -319,6 +321,15 @@ export function SettingsView({
                 )}
                 Check for updates
               </button>
+              {updateState.state === 'available' && !updateReady && (
+                <button
+                  type="button"
+                  onClick={() => onDownloadUpdate?.()}
+                  className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.08] px-3.5 py-2 text-[12px] font-semibold text-emerald-200 transition-colors duration-200 hover:bg-emerald-400/15 hover:text-white"
+                >
+                  <CloudDownload className="h-3.5 w-3.5" /> Download update
+                </button>
+              )}
               {updateReady && (
                 <button
                   type="button"

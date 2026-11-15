@@ -122,13 +122,19 @@ export default function App() {
   useEffect(() => {
     if (!window.arc?.onUpdateAvailable) return
     const offAvail = window.arc.onUpdateAvailable((info) => {
-      setUpdateState({ state: 'available', message: `v${info.version} downloading…` })
+      setUpdateState({ state: 'available', message: `v${info.version} available — download in Settings.` })
     })
     const offDone = window.arc.onUpdateDownloaded?.((info) => {
-      setUpdateState({ state: 'available', message: `v${info.version} downloaded — installing automatically…` })
+      setUpdateState({ state: 'available', message: `v${info.version} downloaded — restart to install.` })
       setUpdateReady(true)
     })
-    return () => { offAvail(); offDone?.() }
+    const offProgress = window.arc.onUpdateProgress?.((info) => {
+      setUpdateState((prev) => (prev.state === 'available' ? { ...prev, message: `Downloading update… ${info.percent}%` } : prev))
+    })
+    const offError = window.arc.onUpdateError?.((info) => {
+      setUpdateState({ state: 'error', message: info.message || 'Update download failed.' })
+    })
+    return () => { offAvail(); offDone?.(); offProgress?.(); offError?.() }
   }, [])
 
   const sourceKeys = useMemo(
@@ -968,12 +974,25 @@ export default function App() {
     try {
       const result = await window.arc.checkUpdates()
       if (result?.version && compareVersions(result.version, APP_VERSION) > 0) {
-        setUpdateState({ state: 'available', message: `v${result.version} downloading in the background…` })
+        setUpdateState({ state: 'available', message: `v${result.version} available — download in Settings.` })
       } else {
         setUpdateState({ state: 'current', message: `You're on the newest version (v${APP_VERSION}).` })
       }
     } catch {
       setUpdateState({ state: 'error', message: 'Could not reach the update feed.' })
+    }
+  }, [])
+
+  const downloadUpdate = useCallback(async () => {
+    if (!window.arc?.downloadUpdate) return
+    setUpdateState({ state: 'available', message: 'Downloading update…' })
+    try {
+      const result = await window.arc.downloadUpdate()
+      if (!result?.ok) {
+        setUpdateState({ state: 'error', message: result?.error || 'Update download failed.' })
+      }
+    } catch (error) {
+      setUpdateState({ state: 'error', message: error instanceof Error ? error.message : 'Update download failed.' })
     }
   }, [])
 
@@ -1089,6 +1108,7 @@ export default function App() {
               updateState={updateState}
               updateReady={updateReady}
               onCheckUpdates={() => void checkForUpdates()}
+              onDownloadUpdate={() => void downloadUpdate()}
               onRestartToUpdate={() => void window.arc?.installUpdate?.()}
             />
           ) : view === 'friends' ? (

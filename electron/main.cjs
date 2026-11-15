@@ -2823,14 +2823,25 @@ ipcMain.handle('arc:install-update', async () => {
   }
 })
 
+ipcMain.handle('arc:download-update', async () => {
+  try {
+    await autoUpdater.downloadUpdate()
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: String(error && error.message ? error.message : error) }
+  }
+})
+
 app.whenReady().then(() => {
   if (SMOKE) {
     smokeLog('app ready; argv=' + JSON.stringify(process.argv))
     app.on('render-process-gone', (_event, _contents, details) => smokeLog('render gone: ' + JSON.stringify(details)))
   }
 
-  // silent auto-update via GitHub releases: no browser, no prompts
-  autoUpdater.autoDownload = true
+  // Updates are checked automatically, but never downloaded silently in the
+  // background: a stalled download used to hang forever. The user triggers the
+  // download from Settings, and it installs on the next quit.
+  autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.autoRunAppAfterInstall = true
   autoUpdater.on('update-available', (info) => {
@@ -2840,8 +2851,13 @@ app.whenReady().then(() => {
     send('arc:update-downloaded', { version: info.version })
     scheduleSilentInstall()
   })
+  autoUpdater.on('download-progress', (progress) => {
+    send('arc:update-progress', { percent: Math.round(progress?.percent ?? 0) })
+  })
   autoUpdater.on('error', (err) => {
-    if (SMOKE) smokeLog('updater error: ' + String(err && err.message ? err.message : err))
+    const message = String(err && err.message ? err.message : err)
+    send('arc:update-error', { message })
+    if (SMOKE) smokeLog('updater error: ' + message)
   })
 
   registerIpc()
