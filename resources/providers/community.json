@@ -1,0 +1,139 @@
+{
+  "version": 2,
+  "requestTimeoutMs": 6000,
+  "failureCooldownMs": 120000,
+  "maxServers": 250,
+  "endpoints": [
+    {
+      "id": "vaulted-public",
+      "label": "VAULTED Public",
+      "kind": "vaulted-summary",
+      "url": "https://site-710f0be1e3b24f2694e9e13b9ce4c84b.freebuff.page/api/summary",
+      "auth": "account",
+      "seasonParam": "season",
+      "freshnessMs": 30000,
+      "providerIds": ["*"],
+      "seasonIds": ["*"]
+    },
+    {
+      "id": "reboot-server-browser",
+      "label": "Reboot Server Browser",
+      "kind": "reboot-server-browser",
+      "url": "ws://192.99.216.42:8080",
+      "enabled": true,
+      "note": "Open-source Reboot Launcher browser. The public socket was unreachable at verification time; the adapter continues to retry with a cooldown.",
+      "format": "websocket",
+      "timeoutMs": 4000,
+      "freshnessMs": 0,
+      "providerId": "reboot",
+      "providerLabel": "Reboot",
+      "providerIds": ["reboot"],
+      "seasonIds": ["*"],
+      "entriesPath": "data",
+      "fields": {
+        "name": "name",
+        "address": "ip",
+        "build": "version",
+        "updated": "timestamp",
+        "provider": "provider"
+      },
+      "seasonMap": {
+        "1.10": "ch1-s1",
+        "1.11": "ch1-s2",
+        "3.00": "ch1-s3",
+        "4.10": "ch1-s4",
+        "5.41": "ch1-s5",
+        "6.31": "ch1-s6",
+        "7.40": "ch1-s7",
+        "8.40": "ch1-s8",
+        "9.40": "ch1-s9",
+        "10.40": "ch1-s10",
+        "14.40": "ch2-s4",
+        "17.50": "ch2-s7"
+      }
+    },
+    {
+      "id": "meteor-server-status",
+      "label": "Meteor Server Status",
+      "kind": "generic-server-status",
+      "url": "http://5.175.164.163:9768/api/coral/gameserver/list",
+      "statusOnly": true,
+      "timeoutMs": 5000,
+      "freshnessMs": 45000,
+      "providerId": "meteor",
+      "providerLabel": "Meteor",
+      "providerIds": ["meteor"],
+      "seasonIds": ["ch1-s6"],
+      "defaultSeasonId": "ch1-s6",
+      "entriesPath": ["servers", "data.servers"],
+      "fields": {
+        "id": "serverId",
+        "name": "name",
+        "players": "playerCount",
+        "maxPlayers": "maxPlayers",
+        "region": "region",
+        "playlist": "playlist",
+        "online": "status",
+        "updated": "lastSeen"
+      }
+    },
+    {
+      "id": "eon-server-status",
+      "label": "Eon Server Status",
+      "kind": "eon-server-status",
+      "url": "https://services.eonfn.net/api/servers",
+      "statusOnly": true,
+      "timeoutMs": 5000,
+      "freshnessMs": 60000,
+      "providerId": "eon",
+      "providerLabel": "Eon",
+      "providerIds": ["eon"],
+      "seasonIds": ["ch2-s7"],
+      "defaultSeasonId": "ch2-s7",
+      "entriesPath": "servers",
+      "fields": {
+        "id": "ServerId",
+        "name": "ServerName",
+        "players": "Joined",
+        "maxPlayers": "MaxPlayers",
+        "region": "Region",
+        "playlist": "Playlist",
+        "online": "Joinable",
+        "updated": "timestamp"
+      }
+    },
+    {
+      "id": "awesome-ogfn",
+      "label": "awesome-ogfn",
+      "kind": "awesome-ogfn",
+      "url": "https://raw.githubusercontent.com/Twin1dev/awesome-ogfn/main/README.md",
+      "timeoutMs": 8000,
+      "providerIds": ["*"],
+      "seasonIds": ["*"],
+      "providerMap": {
+        "Stellar": { "id": "stellar", "label": "Stellar", "url": "https://stellarfn.dev/" },
+        "Retrac": { "id": "retrac", "label": "Retrac", "url": "https://retrac.lol/" },
+        "EZFN": { "id": "ezfn", "label": "EZFN", "url": "https://ezfn.dev/" },
+        "Era": { "id": "era", "label": "Era", "url": "https://erafn.dev/" },
+        "Eon": { "id": "eon", "label": "Eon", "url": "https://eonfn.com/" },
+        "Neo": { "id": "neo", "label": "Neo", "url": "https://projectneofn.dev/" }
+      }
+    },
+    {
+      "id": "fortnite-versions",
+      "label": "Fortnite Versions Projects",
+      "kind": "fortnite-versions-directory",
+      "url": "https://raw.githubusercontent.com/ByZNexus/Fortnite-Versions/main/Projects.md",
+      "timeoutMs": 8000,
+      "providerIds": ["*"],
+      "seasonIds": ["*"],
+      "providerMap": {
+        "Project Era": { "id": "era", "label": "Era", "url": "https://erafn.dev/" },
+        "EZFN": { "id": "ezfn", "label": "EZFN", "url": "https://ezfn.dev/" },
+        "Project Neo": { "id": "neo", "label": "Neo", "url": "https://projectneofn.dev/" },
+        "Project Reboot": { "id": "reboot", "label": "Reboot", "url": "https://rebootmp.com/" },
+        "Erbium": { "id": "erbium", "label": "Erbium", "url": "https://github.com/plooshi/Erbium" }
+      }
+    }
+  ]
+}

@@ -142,6 +142,7 @@ function normalizeLobby(value: unknown, index: number, seasonHint?: string): Lob
   const players = Array.isArray(playersValue)
     ? playersValue.length
     : Number(playersValue ?? raw.playerCount ?? raw.player_count ?? raw.numPlayers ?? raw.count) || 0
+  const ping = Number(raw.pingMs ?? raw.ping ?? raw.latencyMs ?? raw.latency)
   const updatedValue = raw.updated ?? raw.updatedAt ?? raw.lastSeen ?? raw.last_seen
   const updated =
     typeof updatedValue === 'string'
@@ -159,6 +160,7 @@ function normalizeLobby(value: unknown, index: number, seasonHint?: string): Lob
     public: (raw.public ?? raw.isPublic) !== false && raw.private !== true,
     updated,
     players: players > 0 ? players : undefined,
+    pingMs: Number.isFinite(ping) && ping >= 0 ? Math.round(ping) : undefined,
   }
 }
 
@@ -292,6 +294,8 @@ export async function publishOnlineLobby(
       buildId: lobby.buildId ?? undefined,
       label: lobby.label ?? undefined,
       public: lobby.public,
+      seasonId: lobby.seasonId ?? undefined,
+      players: lobby.players,
     })
     activeLobbyRegistrations.set(normalized, lobby)
     return true

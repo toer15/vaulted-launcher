@@ -2,7 +2,7 @@
   "name": "vaulted-launcher",
   "productName": "VAULTED Launcher",
   "private": true,
-  "version": "1.0.72",
+  "version": "1.0.73",
   "description": "VAULTED — Fortnite build launcher",
   "author": "VAULTED",
   "type": "module",
@@ -15,19 +15,25 @@
     "app:dev": "electron . --dev",
     "test:join-watchdog": "node scripts/test-join-watchdog.cjs",
     "test:join-fallback": "node scripts/test-join-fallback.mjs",
+    "test:community": "node scripts/test-community-directories.cjs",
+    "test:bot-fill": "node scripts/test-bot-fill.cjs",
+    "test:provider-repair": "node scripts/test-provider-repair.cjs",
     "catalog": "node scripts/build-shop-catalog.cjs",
     "icon": "electron scripts/make-icon.cjs",
     "check:runtime": "node scripts/verify-runtime.cjs",
     "check:runtime:packaged": "node scripts/verify-runtime.cjs --runtime-dir release/win-unpacked/resources/runtime",
+    "check:providers": "node scripts/verify-provider-dlls.cjs",
+    "check:providers:packaged": "node scripts/verify-provider-dlls.cjs --providers-dir=release/win-unpacked/resources/providers",
     "version:bump": "npm version patch --no-git-tag-version",
-    "dist": "npm run version:bump && npm run build && npm run check:runtime && electron-builder --win nsis --publish never && npm run check:runtime:packaged"
+    "dist": "npm run version:bump && npm run build && npm run test:bot-fill && npm run test:provider-repair && npm run check:runtime && npm run check:providers && electron-builder --win nsis --publish never && npm run check:runtime:packaged && npm run check:providers:packaged"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
     "lucide-react": "^0.469.0",
     "qrcode": "^1.5.4",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "ws": "^8.23.0"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.0.0",
@@ -71,6 +77,22 @@
       {
         "from": "runtime",
         "to": "runtime"
+      },
+      {
+        "from": "resources/providers",
+        "to": "providers"
+      },
+      {
+        "from": "resources/providers/reboot",
+        "to": "providers/reboot",
+        "filter": [
+          "Reboot.dll",
+          "Reboot-LICENSE.txt"
+        ]
+      },
+      {
+        "from": "resources/providers/runtime",
+        "to": "providers/runtime"
       }
     ],
     "win": {

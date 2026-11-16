@@ -2,6 +2,7 @@ node_modules/
 dist/
 release/
 .logs/
+.tmp-dllcheck/
 .freebuff/
 *.log
 .DS_Store

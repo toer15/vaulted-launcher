@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "injector": "VaultedInjector.exe",
+  "dlls": ["Tellurium.dll", "Memory.dll"],
+  "licenses": ["Tellurium-LICENSE.txt", "THIRD-PARTY-NOTICES.txt"],
+  "botFill": {
+    "supported": false,
+    "mode": "auto_hosting_preferences",
+    "preferencesKey": "bots",
+    "enableKey": "auto_fill",
+    "countKey": "count",
+    "count": 0,
+    "targetLobbyPlayers": 0,
+    "batchSize": 0,
+    "batchIntervalMs": 0,
+    "manualCommand": "disabled",
+    "reason": "AI bot spawning is disabled. The runtime writes auto_fill=false and count=0; only real human players are allowed."
+  }
+}

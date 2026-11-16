@@ -1,8 +1,9 @@
 import { artKeyFor } from './art'
 import { lobbyIsFresh, lobbyPlayers, type LobbyInfo } from './friends'
+import type { CommunityDirectoryEntry, CommunityProviderStatus } from './network'
 import type { Build } from '../types'
 
-export type PlayModeLabel = 'ONLINE PLAY' | 'LOCAL PLAY'
+export type PlayModeLabel = 'ONLINE READY' | 'ONLINE PLAY'
 
 export interface SeasonPlayMode {
   online: boolean
@@ -11,14 +12,36 @@ export interface SeasonPlayMode {
   playerCount: number
   /** community provider pre-mapped in builds.json, e.g. EZFN */
   providerLabel?: string
+  /** players reported by an external directory that has no joinable address */
+  communityPlayerCount?: number
+  communityProviderLabel?: string
+  /** external directories that list this season */
+  directoryProviders?: string[]
 }
 
-/** Shared neutral state so every one of the 43 cards renders a mode badge. */
-export const LOCAL_PLAY_MODE: SeasonPlayMode = {
+/** Shared neutral state so every one of the 43 cards renders an online badge. */
+export const DEFAULT_PLAY_MODE: SeasonPlayMode = {
   online: false,
-  label: 'LOCAL PLAY',
+  label: 'ONLINE READY',
   lobbyCount: 0,
   playerCount: 0,
+}
+
+/**
+ * Use the largest known live community count. A relay lobby, a provider status
+ * feed, and VAULTED presence can all observe the same players, so adding them
+ * would double-count. Extra presence is passed in by the hero or card.
+ */
+export function onlinePlayerCount(
+  mode: SeasonPlayMode | null | undefined,
+  activePlayers = 0,
+): number {
+  const active = Number.isFinite(activePlayers) ? Math.max(0, Math.floor(activePlayers)) : 0
+  return Math.max(0, mode?.playerCount ?? 0, mode?.communityPlayerCount ?? 0, active)
+}
+
+export function onlineStatusLabel(players: number): string {
+  return players > 0 ? `ONLINE · ${players} playing` : 'ONLINE READY'
 }
 
 export interface HostedLobbyInfo {
@@ -28,6 +51,8 @@ export interface HostedLobbyInfo {
   label: string
   public: boolean
   seasonId?: string | null
+  /** live players currently connected, including bots */
+  players?: number
 }
 
 function lobbyHost(address: string): string {
@@ -64,19 +89,151 @@ export function lobbyMatchesBuild(lobby: LobbyInfo, build: Build): boolean {
   )
 }
 
+function lobbyPing(lobby: LobbyInfo): number {
+  return typeof lobby.pingMs === 'number' && Number.isFinite(lobby.pingMs) && lobby.pingMs >= 0
+    ? lobby.pingMs
+    : Number.POSITIVE_INFINITY
+}
+
+/**
+ * Discovery ranking is shared by the hero, the cards, and the fallback modal:
+ * the fullest live lobby wins; equally full lobbies are ordered by the lowest
+ * measured ping, then by the most recent heartbeat.
+ */
+export function compareLobbies(left: LobbyInfo, right: LobbyInfo): number {
+  return (
+    lobbyPlayers(right) - lobbyPlayers(left) ||
+    lobbyPing(left) - lobbyPing(right) ||
+    Date.parse(right.updated) - Date.parse(left.updated)
+  )
+}
+
+export function rankLobbies(lobbies: LobbyInfo[]): LobbyInfo[] {
+  return [...lobbies].sort(compareLobbies)
+}
+
+/**
+ * Directory rows and relay rows can describe the same host. Keep one row per
+ * address while retaining the fullest count, lowest ping, and newest heartbeat.
+ */
+export function mergeLobbies(lobbies: LobbyInfo[]): LobbyInfo[] {
+  const byAddress = new Map<string, LobbyInfo>()
+  for (const lobby of lobbies) {
+    const key = lobby.address.trim().toLowerCase()
+    if (!key) continue
+    const existing = byAddress.get(key)
+    if (!existing) {
+      byAddress.set(key, lobby)
+      continue
+    }
+    const best = compareLobbies(lobby, existing) < 0 ? lobby : existing
+    const other = best === lobby ? existing : lobby
+    const players = [lobby.players, existing.players].filter(
+      (value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0,
+    )
+    const pings = [lobby.pingMs, existing.pingMs].filter(
+      (value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0,
+    )
+    byAddress.set(key, {
+      ...other,
+      ...best,
+      players: players.length > 0 ? Math.max(...players) : undefined,
+      playersKnown: Boolean(lobby.playersKnown || existing.playersKnown),
+      external: Boolean(lobby.external || existing.external),
+      pingMs: pings.length > 0 ? Math.min(...pings) : undefined,
+      updated: Date.parse(best.updated) >= Date.parse(other.updated) ? best.updated : other.updated,
+    })
+  }
+  return rankLobbies([...byAddress.values()])
+}
+
+export interface ActiveServerChoice {
+  build: Build
+  /** the healthiest single lobby, used for the one-click join */
+  lobby: LobbyInfo
+  /** every live player across that season's lobbies */
+  players: number
+}
+
+/**
+ * Find an installed season that already has players when the selected season
+ * is empty. A season is only offered when it has a joinable, fresh lobby, so
+ * the fallback can never lead to a second dead end.
+ */
+export function findActiveServerChoice(
+  builds: Build[],
+  lobbies: LobbyInfo[],
+  installed: Record<string, boolean>,
+  excludeBuildId: string,
+  lanIp: string | null,
+  viewerUsername?: string | null,
+): ActiveServerChoice | null {
+  let best: ActiveServerChoice | null = null
+  for (const build of builds) {
+    if (build.id === excludeBuildId || !installed[build.id]) continue
+    const matching = rankLobbies(
+      lobbies.filter(
+        (lobby) =>
+          lobby.public &&
+          lobbyIsFresh(lobby) &&
+          lobbyIsReachable(lobby, lanIp) &&
+          lobbyMatchesBuild(lobby, build) &&
+          (!viewerUsername || lobby.username !== viewerUsername),
+      ),
+    )
+    const lobby = matching[0]
+    if (!lobby) continue
+    const players = matching.reduce((total, candidate) => total + lobbyPlayers(candidate), 0)
+    if (players <= 0) continue
+    if (
+      !best ||
+      players > best.players ||
+      (players === best.players && lobbyPlayers(lobby) > lobbyPlayers(best.lobby))
+    ) {
+      best = { build, lobby, players }
+    }
+  }
+  return best
+}
+
 function addLobby(mode: SeasonPlayMode, players: number): SeasonPlayMode {
   return {
     ...mode,
     online: true,
     label: 'ONLINE PLAY',
     lobbyCount: mode.lobbyCount + 1,
-    playerCount: mode.playerCount + Math.max(1, players),
+    playerCount: mode.playerCount + Math.max(0, players),
   }
 }
 
 /**
+ * Pick the healthiest public lobby for a season before Play launches. The
+ * selected address is handed to the bundled runtime's join target; the
+ * renderer never invents a host or port.
+ */
+export function findBestPublicLobby(
+  build: Build,
+  lobbies: LobbyInfo[],
+  lanIp: string | null,
+  viewerUsername?: string | null,
+): LobbyInfo | null {
+  return (
+    lobbies
+      .filter(
+        (lobby) =>
+          lobby.public &&
+          lobbyIsFresh(lobby) &&
+          lobbyIsReachable(lobby, lanIp) &&
+          lobbyMatchesBuild(lobby, build) &&
+          (!viewerUsername || lobby.username !== viewerUsername),
+      )
+      .sort(compareLobbies)[0] ?? null
+  )
+}
+
+/**
  * One source of truth for both the featured hero and every sidebar card.
- * Every build starts at LOCAL PLAY, then public, fresh, reachable lobbies are
+ * Every build starts online-ready, then public, fresh, reachable lobbies are
  * folded in by installed build id, manifest season id, or season label. A
  * public lobby hosted by this PC counts too, but is deduplicated if the relay
  * echoes it back in the lobby feed.
@@ -87,6 +244,8 @@ export function playModesForBuilds(
   hostedLobby: HostedLobbyInfo | null | undefined,
   lanIp: string | null,
   viewerUsername?: string | null,
+  communityStatuses: CommunityProviderStatus[] = [],
+  communityDirectories: CommunityDirectoryEntry[] = [],
 ): Record<string, SeasonPlayMode> {
   const modes: Record<string, SeasonPlayMode> = {}
   for (const build of builds) {
@@ -101,7 +260,7 @@ export function playModesForBuilds(
           playerCount: 0,
           providerLabel: build.onlineProvider.label || build.onlineProvider.name,
         }
-      : LOCAL_PLAY_MODE
+      : DEFAULT_PLAY_MODE
   }
 
   const hostedAddress = hostedLobby ? `${hostedLobby.address}:${hostedLobby.port}`.trim().toLowerCase() : null
@@ -120,7 +279,7 @@ export function playModesForBuilds(
     const key = `${build.id}|${lobby.address.trim().toLowerCase()}`
     if (seen.has(key)) continue
     seen.add(key)
-    modes[build.id] = addLobby(modes[build.id] ?? LOCAL_PLAY_MODE, lobbyPlayers(lobby))
+    modes[build.id] = addLobby(modes[build.id] ?? DEFAULT_PLAY_MODE, lobbyPlayers(lobby))
   }
 
   if (hostedLobby?.public) {
@@ -135,7 +294,42 @@ export function playModesForBuilds(
       const key = `${build.id}|${hostedAddress}`
       if (!seen.has(key)) {
         seen.add(key)
-        modes[build.id] = addLobby(modes[build.id] ?? LOCAL_PLAY_MODE, 1)
+        modes[build.id] = addLobby(
+          modes[build.id] ?? DEFAULT_PLAY_MODE,
+          Math.max(1, Math.floor(hostedLobby.players ?? 1)),
+        )
+      }
+    }
+  }
+
+  // A directory can publish live player counts for a provider without
+  // publishing an IP. Keep those numbers separate from lobby counts so the UI
+  // never implies there is an address to join.
+  for (const build of builds) {
+    const seasonKey = artKeyFor(build.season)
+    if (!seasonKey) continue
+
+    const statuses = communityStatuses.filter((status) => status.seasonId === seasonKey && status.players)
+    const statusPlayers = statuses.reduce((total, status) => total + (status.players ?? 0), 0)
+    const statusLabels = [...new Set(statuses.map((status) => status.providerLabel))]
+    const directoryLabels = [
+      ...new Set(
+        communityDirectories
+          .filter((entry) => entry.seasonId === seasonKey)
+          .map((entry) => entry.providerLabel),
+      ),
+    ]
+
+    if (statusPlayers > 0 || directoryLabels.length > 0) {
+      modes[build.id] = {
+        ...(modes[build.id] ?? DEFAULT_PLAY_MODE),
+        ...(statusPlayers > 0
+          ? {
+              communityPlayerCount: statusPlayers,
+              communityProviderLabel: statusLabels.join(' / '),
+            }
+          : {}),
+        ...(directoryLabels.length > 0 ? { directoryProviders: directoryLabels } : {}),
       }
     }
   }

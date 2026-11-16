@@ -7,6 +7,7 @@ import type {
   ShopEquipped,
   ShopItemType,
 } from '../types'
+import type { CommunityServer, CommunityServerQuery, CommunityServerResult } from './network'
 
 export interface InventoryItem {
   id: string
@@ -43,24 +44,14 @@ export interface LaunchPayload {
   joinFallback?: boolean
   /** pre-assigned runtime for this build, from the season manifest */
   runtimeProfile?: 'legacy' | 'modern'
+  /** request bot fill; main writes it only when the active runtime declares support */
+  botFill?: boolean
 }
 
 export interface WindowControls {
   minimize(): Promise<void>
   toggleMaximize(): Promise<void>
   close(): Promise<void>
-}
-
-export interface OnlineProviderDetection {
-  providerId?: string
-  name?: string
-  label?: string
-  installed: boolean
-  executable?: string | null
-  protocolRegistered?: boolean
-  viaProtocol?: boolean
-  installerUrl?: string
-  error?: string
 }
 
 export interface OnlineProviderLaunchResult {
@@ -117,10 +108,21 @@ export interface LauncherBridge {
     privateServer?: boolean
     matchmaking?: boolean
     joined?: string | null
+    /** The local host failed before a client was launched. */
+    localHostUnavailable?: boolean
+    reason?: string
   }>
   lanIp?(): Promise<string | null>
   /** where friends should connect: public mapping when available, otherwise LAN */
   publicAddress?(): Promise<{ address: string; port: number; public: boolean; method: string } | null>
+  /** live population written by the injected server during a hosted match */
+  sessionStatus?(): Promise<{
+    players: number
+    humans: number
+    bots: number
+    phase: number
+    updated: string
+  } | null>
   getPublicAddress?(): Promise<string>
   setPublicAddress?(value: string): Promise<{ ok: boolean; error?: string; value?: string | null }>
   closeBuild?(payload: { id: string }): Promise<{ closed: boolean }>
@@ -132,14 +134,6 @@ export interface LauncherBridge {
     clear(): Promise<boolean>
   }
   checkBuilds?(builds: Array<{ id: string; executable: string; path: string }>): Promise<Record<string, boolean>>
-  /** directly start a configured external launcher with the build folder as its target */
-  launchProfileBuild?(payload: { id: string; path: string; executable: string }): Promise<{
-    pid: number | null
-    privateServer?: boolean
-    matchmaking?: boolean
-    joined?: string | null
-    external?: boolean
-  }>
   downloadBuild?(payload: {
     id: string
     key: string
@@ -206,6 +200,8 @@ export interface LauncherBridge {
     text: string
     error?: string
   }>
+  /** configured public community directories, resolved in the main process */
+  fetchCommunityServers?(query: CommunityServerQuery): Promise<CommunityServerResult>
   /** configured install root where one-click downloads are unpacked */
   getBuildsRoot?(): Promise<string>
   scanBuilds?(roots?: string[]): Promise<string[]>
@@ -222,43 +218,15 @@ export interface LauncherBridge {
     save(value: string): Promise<boolean>
     clear(): Promise<boolean>
   }
-  openExternal?(url: string): Promise<void>
-  /** launch an installed third-party project launcher; download fallback is handled by the UI */
-  launchHostedProject?(id: string): Promise<{
-    installed: boolean
-    launched: boolean
-    executable?: string
-    error?: string
-  }>
-  /** look up a public lobby for a season in the main process */
-  findHostedLobby?(id: string): Promise<{
-    installed: boolean
-    lobby: { id: string; name: string; version: string; author?: string; host: string; port: number } | null
-    error?: string
-  }>
-  /** hand a public lobby id to an installed project launcher's URL protocol */
-  joinHostedLobby?(id: string, lobbyId: string): Promise<{
-    installed: boolean
-    joined: boolean
-    executable?: string
-    error?: string
-  }>
-  /** find a bundled community provider at its standard install paths or URI handler */
-  detectOnlineProvider?(id: string): Promise<OnlineProviderDetection>
-  /** open the provider's official installer/direct setup flow */
-  openOnlineProviderInstaller?(id: string): Promise<{
-    opened: boolean
-    url?: string
-    name?: string
-    error?: string
-  }>
-  /** launch an installed provider without the renderer supplying a path */
+  /** launch a downloaded season through its bundled provider profile */
   launchOnlineProvider?(payload: {
     id: string
     providerId: string
     seasonId: string
     version: string
-    path: string
+    buildFolderPath: string
+    joinHost?: string
+    joinPort?: number
   }): Promise<OnlineProviderLaunchResult>
   window?: WindowControls
 }
@@ -295,7 +263,15 @@ export async function launchBuild(
   join?: { host: string; port: number },
   fallbackToHost = false,
   runtimeProfile?: 'legacy' | 'modern',
-): Promise<{ pid: number | null; privateServer?: boolean; matchmaking?: boolean; joined?: string | null }> {
+  options: { botFill?: boolean } = {},
+): Promise<{
+  pid: number | null
+  privateServer?: boolean
+  matchmaking?: boolean
+  joined?: string | null
+  localHostUnavailable?: boolean
+  reason?: string
+}> {
   if (!hasNativeBridge()) {
     throw new Error('Launching needs the desktop app — run "npm run app".')
   }
@@ -312,6 +288,7 @@ export async function launchBuild(
       joinPort: join?.port,
       joinFallback: join ? fallbackToHost : undefined,
       runtimeProfile,
+      botFill: options.botFill === true,
     })
   } catch (error) {
     throw cleanIpcError(error)
@@ -361,57 +338,14 @@ export async function checkInstalledBuilds(builds: Build[]): Promise<Record<stri
   }
 }
 
-/** Starts an external launcher with this season's build folder as the target. */
-export async function launchProfileBuild(
-  build: Build,
-  executablePath: string,
-): Promise<{ pid: number | null; privateServer?: boolean; matchmaking?: boolean; joined?: string | null; external?: boolean }> {
-  if (!window.arc?.launchProfileBuild) {
-    throw new Error('Launching a configured external launcher needs the desktop app.')
-  }
-  try {
-    return await window.arc.launchProfileBuild({
-      id: build.id,
-      path: build.path,
-      executable: executablePath,
-    })
-  } catch (error) {
-    throw cleanIpcError(error)
-  }
-}
-
-export async function detectOnlineProvider(providerId: string): Promise<OnlineProviderDetection> {
-  if (!window.arc?.detectOnlineProvider) return { providerId, installed: false }
-  try {
-    return await window.arc.detectOnlineProvider(providerId)
-  } catch (error) {
-    return { providerId, installed: false, error: cleanIpcError(error).message }
-  }
-}
-
-export async function openOnlineProviderInstaller(
-  provider: OnlineProviderConfig,
-): Promise<{ opened: boolean; url?: string; name?: string; error?: string }> {
-  if (window.arc?.openOnlineProviderInstaller) {
-    try {
-      return await window.arc.openOnlineProviderInstaller(provider.id)
-    } catch (error) {
-      return { opened: false, url: provider.installerUrl, error: cleanIpcError(error).message }
-    }
-  }
-  if (typeof window !== 'undefined' && /^https:\/\//i.test(provider.installerUrl)) {
-    window.open(provider.installerUrl, '_blank', 'noopener,noreferrer')
-    return { opened: true, url: provider.installerUrl, name: provider.name }
-  }
-  return { opened: false, url: provider.installerUrl, error: 'The installer needs the desktop app.' }
-}
-
+/** Launches a downloaded season through its bundled provider profile. */
 export async function launchOnlineProvider(
   build: Build,
   provider: OnlineProviderConfig,
+  server?: Pick<CommunityServer, 'host' | 'port'> | null,
 ): Promise<OnlineProviderLaunchResult> {
   if (!window.arc?.launchOnlineProvider) {
-    throw new Error('Online community clients need the desktop app.')
+    throw new Error('Online play needs the desktop app.')
   }
   try {
     return await window.arc.launchOnlineProvider({
@@ -419,7 +353,8 @@ export async function launchOnlineProvider(
       providerId: provider.id,
       seasonId: artKeyFor(build.season) ?? build.id,
       version: build.version,
-      path: build.path,
+      buildFolderPath: build.path,
+      ...(server ? { joinHost: server.host, joinPort: server.port } : {}),
     })
   } catch (error) {
     throw cleanIpcError(error)

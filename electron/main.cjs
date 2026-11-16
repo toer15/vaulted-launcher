@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -6,9 +6,17 @@ const crypto = require('node:crypto')
 const net = require('node:net')
 const { spawn, execFile } = require('node:child_process')
 const { autoUpdater } = require('electron-updater')
-const { joinHostedLobby, playHostedProject } = require('./hostedLaunchers.cjs')
-const { findRebootLobby } = require('./rebootBrowser.cjs')
-const { detectProvider, openInstaller, providerForId } = require('./onlineProviders.cjs')
+const {
+  ensureProviderRedirects,
+  providerDllPath,
+  providerForId,
+  providerProfile,
+  providerRuntime,
+  redirectDllMatchesProfile,
+  redirectSupportsBackendParameter,
+} = require('./onlineProviders.cjs')
+const { fetchCommunityServers } = require('./communityServers.cjs')
+const { botFillPreferences } = require('./botFill.cjs')
 
 const DEV = process.argv.includes('--dev')
 const SMOKE = process.argv.includes('--smoke')
@@ -194,11 +202,8 @@ function createWindow() {
     mainWindow.webContents.on('did-finish-load', () => smokeLog('did-finish-load'))
   }
 
-  // anything that tries to open a new window goes to the default browser
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http')) shell.openExternal(url)
-    return { action: 'deny' }
-  })
+  // VAULTED never opens a browser window for a game launch.
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 
   if (DEV) {
     mainWindow.loadURL('http://127.0.0.1:5173')
@@ -928,6 +933,34 @@ function publicAddressPath() {
   return path.join(app.getPath('userData'), 'public-address.json')
 }
 
+function sessionStatusPath() {
+  const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local')
+  return path.join(localAppData, 'VAULTED', 'session-status.json')
+}
+
+/**
+ * The injected server writes its live population once per second. Treat an old
+ * file as empty so a stopped host cannot keep advertising its last bot count.
+ */
+function readSessionStatus() {
+  try {
+    const value = JSON.parse(fs.readFileSync(sessionStatusPath(), 'utf8'))
+    const updated = Number(value?.updated) * 1000
+    if (!Number.isFinite(updated) || Date.now() - updated > 15_000) return null
+    const players = Math.max(1, Math.min(100, Number(value.players) || 1))
+    const bots = Math.max(0, Math.min(99, Number(value.bots) || 0))
+    return {
+      players,
+      bots,
+      humans: Math.max(0, Math.min(100, Number(value.humans) || Math.max(0, players - bots))),
+      phase: Math.max(0, Number(value.phase) || 0),
+      updated: new Date(updated).toISOString(),
+    }
+  } catch {
+    return null
+  }
+}
+
 /** A forwarded host:port (or playit.gg tunnel) chosen by the player wins. */
 function readPublicOverride() {
   try {
@@ -1287,6 +1320,23 @@ function removeAftermathDlls(executable) {
   }
 }
 
+function providerFortniteArgs(backendUrl) {
+  const args = [
+    '-epicapp=Fortnite',
+    '-epicenv=Prod',
+    '-epicportal',
+    '-noeac',
+    '-nobe',
+    '-fltoken=none',
+    '-skippatchcheck',
+  ]
+  // Tellurium reads the value after -backend= from the raw command line, so
+  // this must remain the final argument. The injector quotes it; the DLL strips
+  // that closing quote before using the URL as its redirect origin.
+  if (backendUrl) args.push(`-backend=${backendUrl}`)
+  return args
+}
+
 function fortniteLaunchArgs(payload, options = {}) {
   const username = normalizeUsername(payload.username)
   const eos = usesEosAuth(payload)
@@ -1328,10 +1378,10 @@ function fortniteLaunchArgs(payload, options = {}) {
  */
 function launchInjectedGame(payload, options = {}) {
   return new Promise((resolve, reject) => {
-    const injector = path.join(runtimeRoot(), 'VaultedInjector.exe')
-    const dll = path.join(runtimeRoot(), 'Tellurium.dll')
-    if (!fs.existsSync(injector)) return reject(new Error('The login injector is missing from this installation. Reinstall VAULTED.'))
-    if (!fs.existsSync(dll)) return reject(new Error('The login redirect is missing from this installation. Reinstall VAULTED.'))
+    const injector = options.injector || path.join(runtimeRoot(), 'VaultedInjector.exe')
+    const dll = options.dll || path.join(runtimeRoot(), 'Tellurium.dll')
+    if (!fs.existsSync(injector)) return reject(new Error('The injector is missing from this installation. Reinstall VAULTED.'))
+    if (!fs.existsSync(dll)) return reject(new Error('The redirect DLL is missing from this installation. Reinstall VAULTED.'))
 
     const workingDirectory = path.dirname(payload.executable)
     removeAftermathDlls(payload.executable)
@@ -1341,13 +1391,14 @@ function launchInjectedGame(payload, options = {}) {
       injectorArgs.push('--aux', bootstrapper)
     }
     if (options.host) injectorArgs.push('--hide-window')
-    injectorArgs.push('--', ...fortniteLaunchArgs(payload, options))
+    const gameArgs = Array.isArray(options.args) ? options.args : fortniteLaunchArgs(payload, options)
+    injectorArgs.push('--', ...gameArgs)
 
     const child = spawn(injector, injectorArgs, {
       cwd: workingDirectory,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, OPENSSL_ia32cap: '~0x20000000' },
+      env: { ...process.env, OPENSSL_ia32cap: '~0x20000000', ...(options.env || {}) },
     })
 
     let stdout = ''
@@ -1360,7 +1411,7 @@ function launchInjectedGame(payload, options = {}) {
       reject(new Error(message))
     }
     const timer = setTimeout(() => {
-      finishError('The login redirect timed out while attaching to Fortnite.')
+      finishError('The redirect DLL timed out while attaching to Fortnite.')
       void killProcessTree(child.pid)
     }, 30_000)
 
@@ -1376,7 +1427,7 @@ function launchInjectedGame(payload, options = {}) {
     child.stderr?.on('data', (chunk) => {
       stderr = (stderr + chunk.toString()).slice(-4000)
     })
-    child.on('error', (error) => finishError(`Could not run the login injector: ${error.message}`))
+    child.on('error', (error) => finishError(`Could not run the game injector: ${error.message}`))
     child.on('exit', (code) => {
       if (settled) return
       const detail = stderr.trim() || stdout.trim()
@@ -1560,8 +1611,74 @@ function configureAutoHost(payload, selectedPlaylist = readSelectedPlaylist()) {
   resolvedPaths.playlist = playlistAssetPath(playlist)
   preferences.selection = selection
   preferences.resolved_paths = resolvedPaths
+  // Every launcher-hosted match is standard Athena Battle Royale. AutoHosting
+  // restores these values from the profile, so force the full standard set
+  // here (including old profiles saved while late-game was enabled).
+  const lateGame =
+    preferences.lategame && typeof preferences.lategame === 'object' && !Array.isArray(preferences.lategame)
+      ? { ...preferences.lategame }
+      : {}
+  lateGame.enabled = false
+  lateGame.moving_bus = false
+  lateGame.long_zone = false
+  lateGame.custom_safe_zone = false
+  lateGame.custom_moving_zone = false
+  lateGame.versionized_loadout = false
+  lateGame.custom_loadout = false
+  lateGame.starting_zone = 1
+  preferences.lategame = lateGame
+
+  const gameplay =
+    preferences.gameplay && typeof preferences.gameplay === 'object' && !Array.isArray(preferences.gameplay)
+      ? { ...preferences.gameplay }
+      : {}
+  gameplay.infinite_materials = false
+  gameplay.infinite_ammo = false
+  preferences.gameplay = gameplay
+
+  const match =
+    preferences.match && typeof preferences.match === 'object' && !Array.isArray(preferences.match)
+      ? { ...preferences.match }
+      : {}
+  match.auto_bus_start = true
+  match.bus_start_delay = 30
+  match.bus_settings_user_override = false
+  match.player_has_pickaxe = true
+  preferences.match = match
+
+  const respawns =
+    preferences.respawns && typeof preferences.respawns === 'object' && !Array.isArray(preferences.respawns)
+      ? { ...preferences.respawns }
+      : {}
+  respawns.enabled = false
+  respawns.storm_respawns = false
+  respawns.keep_inventory = false
+  respawns.midzone_respawns = false
+  respawns.join_in_progress = false
+  preferences.respawns = respawns
+
+  const loadout =
+    preferences.loadout && typeof preferences.loadout === 'object' && !Array.isArray(preferences.loadout)
+      ? { ...preferences.loadout }
+      : {}
+  for (const key of ['primary', 'secondary', 'tertiary', 'quaternary', 'quinary', 'traps']) {
+    loadout[key] = ''
+    loadout[`${key}_amount`] = 0
+  }
+  preferences.loadout = loadout
+
+  // AI bot spawning is disabled. Rewrite the block on every launch so profiles
+  // saved with auto-fill enabled by an older launcher are turned off too.
+  const existingBots =
+    preferences.bots && typeof preferences.bots === 'object' && !Array.isArray(preferences.bots)
+      ? preferences.bots
+      : {}
+  const bots = botFillPreferences({ ...existingBots, health: 100, shield: 100 })
+  if (Object.keys(bots).length > 0) preferences.bots = bots
+  else delete preferences.bots
+
   autoHost.enabled = true
-  autoHost.delay_seconds = 5
+  autoHost.delay_seconds = 25
   autoHost.save_settings = true
   document.profiles[profile] = {
     ...previous,
@@ -3333,81 +3450,11 @@ async function verifyBuild(payload) {
 }
 
 /**
- * Runs the player's configured launcher with the season folder as its target.
- * This intentionally bypasses the Fortnite injector: default executable paths
- * point at external launchers, while installed builds without an override use
- * the normal internal launch path.
- */
-function launchExternalProfile(payload) {
-  assertBuild(payload)
-  const id = typeof payload?.id === 'string' ? payload.id : ''
-  if (!id) throw new Error('Invalid profile launch request.')
-  if (running.has(id)) throw new Error('This build is already running.')
-
-  const executable = payload.executable
-  const folder = payload.path
-  const child = spawn(executable, [folder], {
-    cwd: folder,
-    windowsHide: false,
-    stdio: 'ignore',
-  })
-
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const startedAt = Date.now()
-    const entry = {
-      pid: child.pid ?? null,
-      injectorPid: null,
-      startedAt,
-      expectedExecutable: executable,
-      external: true,
-    }
-
-    const fail = (error) => {
-      if (settled) return
-      settled = true
-      reject(error instanceof Error ? error : new Error(String(error)))
-    }
-
-    child.once('error', (error) => {
-      fail(new Error(`Could not start ${path.basename(executable)}: ${error.message}`))
-    })
-
-    child.once('spawn', () => {
-      if (settled) return
-      settled = true
-      running.set(id, entry)
-      child.once('exit', (code, signal) => {
-        if (running.get(id) !== entry) return
-        running.delete(id)
-        clearJoinTarget()
-        send('arc:build-exited', {
-          id,
-          code: Number.isInteger(code) ? code : null,
-          signal: signal ?? null,
-          durationMs: Math.max(0, Date.now() - startedAt),
-          expected: true,
-          reason: 'client-closed',
-        })
-      })
-      resolve({
-        pid: child.pid ?? null,
-        privateServer: false,
-        matchmaking: false,
-        joined: null,
-        external: true,
-      })
-    })
-  })
-}
-
-/**
- * Start an installed community provider launcher for a mapped season. The
- * provider catalog comes from the bundled manifest, but detection and every
- * executable path are checked in the main process. The renderer never supplies
- * a path. When only a registered URI handler exists, we start that handler with
- * a season-qualified URI; otherwise the launcher gets the build folder argument
- * and season metadata through the environment.
+ * Launch a downloaded season directly inside VAULTED. The bundled provider
+ * profile supplies the backend URL and the redirect DLL; no vendor installer
+ * or external launcher is involved. The redirect DLL is injected before the
+ * first client frame, using the same suspended-process injector as the local
+ * runtime.
  */
 async function launchOnlineProvider(payload) {
   const id = typeof payload?.id === 'string' ? payload.id : ''
@@ -3418,96 +3465,131 @@ async function launchOnlineProvider(payload) {
   const provider = providerForId(providerId)
   if (!provider) throw new Error('That online provider is not in the bundled catalog.')
 
-  const detected = detectProvider(providerId, { shell })
-  if (!detected.installed || !detected.executable) {
-    return { installed: false, launched: false, providerId, name: provider.name }
+  const folder =
+    typeof payload?.buildFolderPath === 'string'
+      ? payload.buildFolderPath
+      : typeof payload?.path === 'string'
+        ? payload.path
+        : ''
+  if (!folder) throw new Error('This season has not been downloaded yet.')
+
+  let executable
+  try {
+    if (!fs.statSync(folder).isDirectory()) throw new Error('not a folder')
+    executable = findPrimaryExecutable(folder)
+  } catch {
+    throw new Error('The downloaded season folder is incomplete. Download the season again from VAULTED.')
+  }
+  if (!executable) {
+    throw new Error(
+      'FortniteClient-Win64-Shipping.exe is missing from this season. Download the season again from VAULTED.',
+    )
   }
 
-  const folder = typeof payload?.path === 'string' ? payload.path : ''
+  await ensureRuntimeInstalled()
+  // Repair an old or partially installed provider tree before the launch check
+  // below can turn it into a missing-DLL dialog.
+  await ensureProviderRedirects()
+  const profile = providerProfile(providerId)
+  const runtime = providerRuntime(profile)
+  const redirectDll = runtime.dll
+  let redirectReady = false
+  try {
+    redirectReady = fs.statSync(redirectDll).isFile()
+  } catch {
+    /* the profile is scaffolded; the DLL may not have been dropped in yet */
+  }
+  if (!redirectReady) {
+    throw new Error(
+      `VAULTED could not prepare the ${profile.label} redirect DLL automatically.\n\n` +
+        `The bundled redirect DLL is missing from this installation. Reinstall VAULTED.`,
+    )
+  }
+  if (!redirectDllMatchesProfile(redirectDll, profile)) {
+    throw new Error(
+      `The ${profile.label} redirect DLL does not match the checksum of the DLL bundled with VAULTED.\n\n` +
+        `Reinstall VAULTED to restore the validated provider files.`,
+    )
+  }
+  if (!fs.existsSync(runtime.injector)) {
+    throw new Error('The bundled open-source runtime injector is missing. Reinstall VAULTED.')
+  }
+  if (!redirectSupportsBackendParameter(redirectDll)) {
+    throw new Error(
+      `The ${profile.label} redirect DLL cannot be pointed at ${profile.backendUrl}.\n\n` +
+        `${path.basename(redirectDll)} does not support the -backend= launch option. Reinstall VAULTED or update the bundled Tellurium build.`,
+    )
+  }
+
   const seasonId = typeof payload?.seasonId === 'string' ? payload.seasonId : id
   const version = typeof payload?.version === 'string' ? payload.version : ''
-  let folderExists = false
-  try {
-    folderExists = Boolean(folder) && fs.statSync(folder).isDirectory()
-  } catch {
-    /* a provider-only season has no local Fortnite folder */
-  }
+  const launchPayload = { ...payload, path: folder, executable }
+  assertBuild(launchPayload)
 
-  const args = []
-  if (detected.viaProtocol) {
-    const base = String(provider.protocolUri || '')
-    if (!base) throw new Error('That provider has no launch protocol.')
-    const query = new URLSearchParams({ season: seasonId, build: version }).toString()
-    args.push(`${base}${base.includes('?') ? '&' : '?'}${query}`)
-  } else if (provider.launchMode !== 'current' && folderExists) {
-    // Existing community launchers accept a build folder as their first
-    // argument. Provider-only seasons have no local folder, so let the
-    // launcher choose its own season instead of passing a missing path.
-    args.push(folder)
-  }
+  const join = joinTargetFromPayload(payload)
+  if (join) writeJoinTarget(join.host, join.port)
+  else clearJoinTarget()
 
-  const cwd = folderExists ? folder : path.dirname(detected.executable)
-  const child = spawn(detected.executable, args, {
-    cwd,
-    windowsHide: false,
-    stdio: 'ignore',
+  const launched = await launchInjectedGame(launchPayload, {
+    injector: runtime.injector,
+    dll: redirectDll,
+    args: providerFortniteArgs(profile.backendUrl),
     env: {
-      ...process.env,
+      VAULTED_PROVIDER_ID: providerId,
+      // Retained for diagnostics; the redirect itself receives -backend= below.
+      VAULTED_PROVIDER_BACKEND_URL: profile.backendUrl,
+      VAULTED_PROVIDER_CONFIG: profile.configPath,
+      VAULTED_PROVIDER_DLL: redirectDll,
       VAULTED_SEASON_ID: seasonId,
       VAULTED_BUILD_VERSION: version,
       VAULTED_BUILD_FOLDER: folder,
+      ...(join
+        ? {
+            VAULTED_JOIN_FILE: joinTargetPath(),
+            VAULTED_PUBLIC_SERVER_HOST: join.host,
+            VAULTED_PUBLIC_SERVER_PORT: String(join.port),
+          }
+        : {}),
     },
   })
 
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const startedAt = Date.now()
-    const entry = {
-      pid: child.pid ?? null,
-      injectorPid: null,
-      startedAt,
-      expectedExecutable: detected.executable,
-      external: true,
-      providerId,
-    }
-
-    const fail = (error) => {
-      if (settled) return
-      settled = true
-      reject(error instanceof Error ? error : new Error(String(error)))
-    }
-
-    child.once('error', (error) => {
-      fail(new Error(`Could not start ${path.basename(detected.executable)}: ${error.message}`))
-    })
-
-    child.once('spawn', () => {
-      if (settled) return
-      settled = true
-      running.set(id, entry)
-      child.once('exit', (code, signal) => {
-        if (running.get(id) !== entry) return
-        running.delete(id)
-        clearJoinTarget()
-        send('arc:build-exited', {
-          id,
-          code: Number.isInteger(code) ? code : null,
-          signal: signal ?? null,
-          durationMs: Math.max(0, Date.now() - startedAt),
-          expected: true,
-          reason: 'client-closed',
-        })
-      })
-      resolve({
-        pid: child.pid ?? null,
-        privateServer: false,
-        matchmaking: false,
-        joined: null,
-        external: true,
-        provider: providerId,
-      })
+  const startedAt = Date.now()
+  const entry = {
+    pid: launched.pid,
+    injectorPid: launched.child.pid ?? null,
+    startedAt,
+    expectedExecutable: executable,
+    external: false,
+    providerId,
+  }
+  running.set(id, entry)
+  launched.child.once('exit', (code, signal) => {
+    if (running.get(id) !== entry) return
+    running.delete(id)
+    clearJoinTarget()
+    const expected = expectedBuildCloses.delete(id)
+    send('arc:build-exited', {
+      id,
+      code: Number.isInteger(code) ? code : null,
+      signal: signal ?? null,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      expected,
+      reason: expected ? 'closed-by-app' : code ? 'injector-failed' : 'client-closed',
     })
   })
+
+  return {
+    installed: true,
+    launched: true,
+    providerId,
+    name: profile.name,
+    pid: launched.pid,
+    privateServer: false,
+    matchmaking: Boolean(join),
+    joined: join ? `${join.host}:${join.port}` : null,
+    external: false,
+    provider: providerId,
+  }
 }
 
 function registerIpc() {
@@ -3553,10 +3635,6 @@ function registerIpc() {
   })
 
   ipcMain.handle('arc:verify-build', (_event, payload) => verifyBuild(payload))
-
-  ipcMain.handle('arc:launch-hosted-project', (_event, id) =>
-    playHostedProject(String(id ?? ''), { shell }),
-  )
 
   ipcMain.handle('arc:scan-builds', (_event, roots) => scanForBuilds(roots))
 
@@ -3695,16 +3773,24 @@ function registerIpc() {
           await ensureGameServer(payload)
           serverSpawned = true
         } catch (error) {
-          // Some modern EOS builds never expose the local listen server.
-          // Do not leave a live matchmaker behind in that case: the client would
-          // reach the lobby, queue, and ping an empty matchmaker forever.
-          console.warn(`[VAULTED] Local game server unavailable: ${error instanceof Error ? error.message : error}`)
+          // Do not launch a client into a guaranteed-empty local session. A
+          // failed host used to fall through to the player client, which then
+          // crashed and left the UI showing a raw client log. Return a clean
+          // result so the renderer can explain the fallback and keep the player
+          // in the launcher instead of starting a doomed client.
+          const reason = error instanceof Error ? error.message : String(error)
+          console.warn(`[VAULTED] Local game server unavailable: ${reason}`)
           await stopGameServer()
           await stopOwnedListener(MATCHMAKER_PORT, 'matchmaker.cjs')
-          send('arc:launch-status', {
-            id: id ?? undefined,
-            message: 'Game server unavailable — opening the lobby only.',
-          })
+          send('arc:launch-status', { id: id ?? undefined, message: 'Local hosting is unavailable for this build.' })
+          return {
+            pid: null,
+            privateServer: false,
+            matchmaking: matchmakingReady,
+            joined: null,
+            localHostUnavailable: true,
+            reason,
+          }
         }
       } else {
         send('arc:launch-status', {
@@ -3753,17 +3839,29 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle('arc:launch-profile', (_event, payload) => launchExternalProfile(payload))
-
-  ipcMain.handle('arc:online-provider-detect', (_event, id) =>
-    detectProvider(String(id ?? ''), { shell }),
-  )
-  ipcMain.handle('arc:online-provider-install', (_event, id) =>
-    openInstaller(String(id ?? ''), shell),
-  )
   ipcMain.handle('arc:online-provider-launch', (_event, payload) =>
     launchOnlineProvider(payload),
   )
+
+  /** Public community directories are allowlisted in resources/providers. */
+  ipcMain.handle('arc:community-servers', async (_event, payload) => {
+    try {
+      return await fetchCommunityServers({
+        token: typeof payload?.token === 'string' ? payload.token : '',
+        seasonId: typeof payload?.seasonId === 'string' ? payload.seasonId : '',
+        providerId: typeof payload?.providerId === 'string' ? payload.providerId : '',
+        force: payload?.force === true,
+      })
+    } catch (error) {
+      return {
+        servers: [],
+        statuses: [],
+        directories: [],
+        errors: [{ endpoint: 'community', message: error instanceof Error ? error.message : 'Community discovery failed.' }],
+        checkedAt: new Date().toISOString(),
+      }
+    }
+  })
 
   ipcMain.handle('arc:close-build', async (_event, payload) => {
     const id = String(payload?.id ?? '')
@@ -3788,6 +3886,7 @@ function registerIpc() {
 
   ipcMain.handle('arc:lan-ip', () => lanAddress())
   ipcMain.handle('arc:public-address', () => resolvePublicAddress())
+  ipcMain.handle('arc:session-status', () => readSessionStatus())
   ipcMain.handle('arc:get-public-address', () => {
     const manual = readPublicOverride()
     return manual ? `${manual.address}:${manual.port}` : ''
@@ -3956,26 +4055,6 @@ function runSmokeTest() {
   }, 1500)
 }
 
-ipcMain.handle('shell:open-external', async (_event, url) => {
-  if (typeof url === 'string' && /^https?:\/\//i.test(url)) await shell.openExternal(url)
-})
-
-/**
- * Reboot joins a public lobby by receiving `Reboot://<lobby-id>` as a launch
- * argument. The renderer only supplies a lobby id it read from the public
- * browser; the allowlist and id validation stay in hostedLaunchers.cjs.
- */
-ipcMain.handle('arc:join-hosted-lobby', async (_event, id, lobbyId) =>
-  joinHostedLobby(id, lobbyId),
-)
-
-/** Looks up a public Reboot lobby in the main process, away from file:// mixed-content rules. */
-ipcMain.handle('arc:find-hosted-lobby', async (_event, id) =>
-  // Play can wait a moment for a public table, but a dead directory must not
-  // hold the local host hostage for the full browser timeout.
-  findRebootLobby(String(id ?? ''), { timeoutMs: 2500 }),
-)
-
 /**
  * Applies a downloaded update without any browser or download page. Waits for
  * an active build download or running game to finish so it never interrupts
@@ -4036,6 +4115,18 @@ app.whenReady().then(async () => {
   } catch (error) {
     console.warn(`[VAULTED] Could not refresh the bundled runtime: ${error instanceof Error ? error.message : error}`)
   }
+
+  // Provider redirect DLLs are self-healing too. This runs without blocking
+  // startup; provider launch awaits the same singleton before injecting.
+  void ensureProviderRedirects()
+    .then((report) => {
+      if (report.errors.length > 0) {
+        console.warn(`[VAULTED] Provider redirect repair: ${report.errors.map((item) => `${item.id}: ${item.error}`).join('; ')}`)
+      }
+    })
+    .catch((error) => {
+      console.warn(`[VAULTED] Could not repair provider redirect DLLs: ${error instanceof Error ? error.message : error}`)
+    })
 
   if (SMOKE) {
     smokeLog('app ready; argv=' + JSON.stringify(process.argv))

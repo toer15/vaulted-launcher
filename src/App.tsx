@@ -5,13 +5,20 @@ import { AuthScreen } from './components/AuthScreen'
 import { BuildDrawer } from './components/BuildDrawer'
 import { FriendsView } from './components/FriendsView'
 import { ItemShopView } from './components/ItemShopView'
+import { ServerFallbackDialog } from './components/ServerFallbackDialog'
 import { LibraryRail } from './components/LibraryRail'
 import { SettingsView } from './components/SettingsView'
 import { ToastStack } from './components/Toast'
 import { TopBar } from './components/TopBar'
 import { artKeyFor } from './lib/art'
-import { fetchFriends, lobbyIsFresh, type LobbyInfo } from './lib/friends'
-import { lobbyIsReachable, lobbyMatchesBuild, playModesForBuilds } from './lib/playMode'
+import { fetchFriends, type LobbyInfo } from './lib/friends'
+import {
+  findActiveServerChoice,
+  findBestPublicLobby,
+  mergeLobbies,
+  playModesForBuilds,
+  type ActiveServerChoice,
+} from './lib/playMode'
 import {
   clearOnlineLobby,
   publishOnlineLobby,
@@ -25,12 +32,9 @@ import {
   checkInstalledBuilds,
   closeBuildProcess,
   deleteBuild,
-  detectOnlineProvider,
   hasNativeBridge,
   launchBuild,
   launchOnlineProvider,
-  launchProfileBuild,
-  openOnlineProviderInstaller,
   pauseDownload,
   pickBuildFolder,
   pickInstallDir,
@@ -45,6 +49,7 @@ import {
   clearSession,
   compareVersions,
   fetchActive,
+  fetchCommunityDirectory,
   fetchManifest,
   fetchMe,
   loadSession,
@@ -52,6 +57,9 @@ import {
   sendHeartbeat,
   signOut,
   type BuildManifest,
+  type CommunityDirectoryEntry,
+  type CommunityProviderStatus,
+  type CommunityServer,
   type RiftSession,
 } from './lib/network'
 import { accentForChapter, buildFromPath, executableFor, folderNameOf } from './lib/seasons'
@@ -133,6 +141,11 @@ function formatDuration(ms: number): string {
   return rest ? `${minutes}m ${rest}s` : `${minutes}m`
 }
 
+/** A failed local host must become a clean fallback, not a raw client log. */
+function isLocalHostFailure(message: string): boolean {
+  return /local game server|local hosting|port 7777|private server/i.test(message)
+}
+
 /** Short actionable summary of a failed build verification. */
 function verificationSummary(report: BuildVerifyReport): string {
   const groups: Array<[string, string[]]> = [
@@ -165,7 +178,6 @@ export default function App() {
   const [installed, setInstalled] = useState<Record<string, boolean>>({})
   const [downloads, setDownloads] = useState<Record<string, DownloadState>>({})
   const pausedDownloadIds = useRef(new Set<string>())
-  const providerPollTimers = useRef(new Map<string, number>())
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [runningId, setRunningId] = useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -174,8 +186,12 @@ export default function App() {
   const [view, setView] = useState<'home' | 'shop' | 'settings' | 'friends'>('home')
   const [friendRequests, setFriendRequests] = useState(0)
   const [verifyJobs, setVerifyJobs] = useState<Record<string, VerifyJob>>({})
-  const [launchFailure, setLaunchFailure] = useState<{ id: string; message: string } | null>(null)
+  const [launchFailure, setLaunchFailure] = useState<{ id: string; message: string; local?: boolean } | null>(null)
   const [launchStage, setLaunchStage] = useState<string | null>(null)
+  const localSessionRef = useRef<string | null>(null)
+  // Play can await a fresh directory scan; this prevents a double-click from
+  // starting a second launch while the first scan is still in flight.
+  const communityDiscoveryInFlight = useRef(false)
   const verificationPromises = useRef(new Map<string, Promise<VerifyJob | null>>())
   const autoVerifiedIds = useRef(new Set<string>())
   // Assigned after the verifier is defined; startBuild needs the preflight but
@@ -190,6 +206,9 @@ export default function App() {
   const [sourcesError, setSourcesError] = useState<string | null>(null)
   const [activeCounts, setActiveCounts] = useState<Record<string, number>>({})
   const [onlineLobbies, setOnlineLobbies] = useState<LobbyInfo[]>([])
+  const [communityServers, setCommunityServers] = useState<CommunityServer[]>([])
+  const [communityStatuses, setCommunityStatuses] = useState<CommunityProviderStatus[]>([])
+  const [communityDirectories, setCommunityDirectories] = useState<CommunityDirectoryEntry[]>([])
   const [onlineStatus, setOnlineStatus] = useState<OnlineStatus>('checking')
   const [lanIp, setLanIp] = useState<string | null>(null)
   const [buildsRoot, setBuildsRoot] = useState<string | null>(null)
@@ -226,6 +245,14 @@ export default function App() {
     label: string
     public: boolean
     seasonId?: string | null
+    /** live players currently connected, including spawned bots */
+    players?: number
+    /** false for a private host that should not be published */
+    publish?: boolean
+  } | null>(null)
+  const [serverFallback, setServerFallback] = useState<{
+    build: Build
+    choice: ActiveServerChoice
   } | null>(null)
 
   // Link/build overlays are card-scoped in intent, even though they live at
@@ -388,7 +415,7 @@ export default function App() {
 
   // The bundled manifest is the source of truth for pre-mapped community
   // seasons. Attach the provider to every card so both the hero and sidebar
-  // render ONLINE PLAY before any account, relay, or local build is configured.
+  // render an online status before any account, relay, or local build is configured.
   useEffect(() => {
     setBuilds((prev) => {
       let changed = false
@@ -403,13 +430,6 @@ export default function App() {
       return changed ? next : prev
     })
   }, [seasonManifest])
-
-  useEffect(() => {
-    return () => {
-      for (const timer of providerPollTimers.current.values()) window.clearInterval(timer)
-      providerPollTimers.current.clear()
-    }
-  }, [])
 
   const sourceKeys = useMemo(() => new Set(Object.keys(seasonManifest)), [seasonManifest])
   const onlineSeasonCount = useMemo(
@@ -443,6 +463,7 @@ export default function App() {
   )
   const activeVerifyJob = activeBuild ? (verifyJobs[activeBuild.id] ?? null) : null
   const activeLaunchFailure = launchFailure?.id === activeBuild?.id ? launchFailure.message : null
+  const activeLaunchFailureLocal = launchFailure?.id === activeBuild?.id && launchFailure.local === true
 
   const account: Account = useMemo(() => {
     const username = session?.user.username ?? 'player'
@@ -462,9 +483,33 @@ export default function App() {
 
   // The featured hero and every sidebar card read the same live map. It covers
   // all 43 seasons, including builds that have not been downloaded yet.
+  // Public directory results and relay echoes describe the same host often;
+  // merge them by address so the card keeps the fullest count and lowest ping.
+  const discoverableLobbies = useMemo(
+    () => mergeLobbies([...communityServers, ...onlineLobbies]),
+    [communityServers, onlineLobbies],
+  )
+
   const playModes = useMemo(
-    () => playModesForBuilds(builds, onlineLobbies, hostedLobby, lanIp, account.username),
-    [account.username, builds, hostedLobby, lanIp, onlineLobbies],
+    () =>
+      playModesForBuilds(
+        builds,
+        discoverableLobbies,
+        hostedLobby,
+        lanIp,
+        account.username,
+        communityStatuses,
+        communityDirectories,
+      ),
+    [
+      account.username,
+      builds,
+      communityDirectories,
+      communityStatuses,
+      discoverableLobbies,
+      hostedLobby,
+      lanIp,
+    ],
   )
   const activePlayMode = activeBuild ? playModes[activeBuild.id] : undefined
 
@@ -612,6 +657,29 @@ export default function App() {
     })
   }, [cloudSettings.onlineServiceUrl, onlineToken])
 
+  // Public community directories are queried in the main process (no CORS or
+  // mixed-content restriction) so every card can show live lobby and player
+  // counts even when a provider has no VAULTED relay presence.
+  useEffect(() => {
+    if (!onlineToken) setCommunityServers([])
+    let cancelled = false
+    let timer = 0
+    const poll = async () => {
+      const directory = await fetchCommunityDirectory({ token: onlineToken })
+      if (!cancelled) {
+        setCommunityServers(directory.servers)
+        setCommunityStatuses(directory.statuses)
+        setCommunityDirectories(directory.directories)
+      }
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 20_000)
+    }
+    void poll()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [onlineToken])
+
   // heartbeat the season being viewed, then show live counts
   useEffect(() => {
     if (!session) return
@@ -732,12 +800,27 @@ export default function App() {
 
     const offExit = subscribeBuildExit((exit: BuildExitInfo) => {
       const { id } = exit
+      const wasLocalSession = localSessionRef.current === id
+      if (wasLocalSession) localSessionRef.current = null
       setRunningId((current) => (current === id ? null : current))
       setLaunchStage(null)
 
       if (exit.expected) {
         setPhase((current) => (current === 'running' || current === 'launching' ? 'idle' : current))
         setLaunchFailure((current) => (current?.id === id ? null : current))
+        return
+      }
+
+      if (wasLocalSession) {
+        // The host was ready and the player client still exited before a match.
+        // Keep the retry path, but do not surface a raw crash log or imply that
+        // the player needs to debug their install.
+        setLaunchFailure({
+          id,
+          local: true,
+          message: 'This build closed before its local match started. Try again, or choose another installed build.',
+        })
+        setPhase('error')
         return
       }
 
@@ -1249,114 +1332,80 @@ export default function App() {
     [beginDownload, downloads, pushToast, seasonManifest],
   )
 
-  /**
-   * Zero-setup community flow: detect the provider's installed launcher, open
-   * its official installer when missing, then keep checking in the background
-   * and launch it as soon as Windows finishes the install.
-   */
+  /** Launch a downloaded season directly through its bundled provider profile. */
   const startOnlineProvider = useCallback(
-    async (build: Build, provider: OnlineProviderConfig) => {
+    async (
+      build: Build,
+      provider: OnlineProviderConfig,
+      server?: { host: string; port: number },
+    ): Promise<boolean> => {
       if (!window.arc?.launchOnlineProvider) {
         pushToast({
           tone: 'error',
-          title: 'Online community clients need the desktop app',
+          title: 'Online play needs the desktop app',
           description: 'Run "npm run app".',
         })
-        return
+        return false
       }
 
       const providerLabel = provider.label || provider.name
-      const launchProvider = async () => {
-        const attemptToken = launchAttempts.start(build.id, 'host')
-        setPhase('launching')
-        setLaunchStage(`Starting ${providerLabel}…`)
-        try {
-          const result = await launchOnlineProvider(build, provider)
-          if (!result.launched) throw new Error(`${providerLabel} is not installed yet.`)
-          const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
-            setRunningId(build.id)
-            setPhase('running')
-            setLaunchStage(null)
-            setLaunchFailure(null)
-            setHostedLobby(null)
-            shop.sets.recordLaunch(build.id)
-            pushToast({
-              tone: 'success',
-              title: `${providerLabel} is starting`,
-              description: `${build.season.label} opens directly in ${providerLabel}.`,
-            })
-          })
-          if (!applied) return
-        } catch (error) {
-          launchAttempts.commitIfCurrent(attemptToken, () => {
-            const message = error instanceof Error ? error.message : `${providerLabel} could not be started.`
-            setLaunchFailure({ id: build.id, message })
-            setPhase('error')
-            setLaunchStage(null)
-            pushToast({ tone: 'error', title: `${providerLabel} launch failed`, description: message })
-          })
-        }
-      }
-
-      const detected = await detectOnlineProvider(provider.id)
-      if (detected.installed) {
-        await launchProvider()
-        return
-      }
-
-      if (providerPollTimers.current.has(build.id)) {
-        pushToast({
-          tone: 'info',
-          title: `Waiting for ${providerLabel}`,
-          description: 'Finish the official installer — the season will link automatically.',
-        })
-        return
-      }
-
-      const installer = await openOnlineProviderInstaller(provider)
-      if (!installer.opened) {
-        pushToast({
-          tone: 'error',
-          title: `Could not open the ${providerLabel} installer`,
-          description: installer.error || 'Check your connection and try again.',
-        })
-        return
-      }
-
-      pushToast({
-        tone: 'info',
-        title: `Install ${providerLabel}`,
-        description: `${build.season.label} will start automatically as soon as the official client is ready.`,
-      })
-
-      const startedAt = Date.now()
-      let attempts = 0
-      const timer = window.setInterval(() => {
-        attempts += 1
-        if (Date.now() - startedAt > 20 * 60 * 1000 || attempts > 300) {
-          window.clearInterval(timer)
-          providerPollTimers.current.delete(build.id)
-          return
-        }
-        void detectOnlineProvider(provider.id).then((next) => {
-          if (!next.installed) return
-          window.clearInterval(timer)
-          providerPollTimers.current.delete(build.id)
+      const attemptToken = launchAttempts.start(build.id, server ? 'join' : 'host')
+      setPhase('launching')
+      setLaunchStage(
+        server
+          ? `Joining a ${providerLabel} public server…`
+          : `Starting ${build.season.label} in ${providerLabel}…`,
+      )
+      try {
+        const result = await launchOnlineProvider(build, provider, server)
+        if (!result.launched) throw new Error(`${providerLabel} could not be started.`)
+        const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
+          setRunningId(build.id)
+          setPhase('running')
+          setLaunchStage(null)
+          setLaunchFailure(null)
+          setHostedLobby(null)
+          shop.sets.recordLaunch(build.id)
           pushToast({
             tone: 'success',
-            title: `${providerLabel} detected`,
-            description: `Linking ${build.season.label} and starting the client…`,
+            title: server ? `Joining a ${providerLabel} server` : `${providerLabel} is starting`,
+            description: server
+              ? `${build.season.label} · your client is pointed at ${server.host}:${server.port}`
+              : `${build.season.label} is starting through the bundled ${providerLabel} runtime.`,
           })
-          void launchProvider()
         })
-      }, 4000)
-      providerPollTimers.current.set(build.id, timer)
+        // A stale attempt must not trigger the caller's local fallback: another
+        // launch already owns this client.
+        return applied || result.launched
+      } catch (error) {
+        launchAttempts.commitIfCurrent(attemptToken, () => {
+          const message = error instanceof Error ? error.message : `${providerLabel} could not be started.`
+          setLaunchFailure({ id: build.id, message })
+          setPhase('error')
+          setLaunchStage(null)
+          pushToast({ tone: 'error', title: `${providerLabel} launch failed`, description: message })
+        })
+        return false
+      }
     },
     [launchAttempts, pushToast, shop.sets],
   )
 
+  /** Re-scan every configured external directory immediately before Play. */
+  const refreshCommunityServers = useCallback(async (): Promise<CommunityServer[]> => {
+    const directory = await fetchCommunityDirectory({ token: onlineToken, force: true })
+    setCommunityServers(directory.servers)
+    setCommunityStatuses(directory.statuses)
+    setCommunityDirectories(directory.directories)
+    return directory.servers
+  }, [onlineToken])
+
   const startBuild = useCallback(
-    async (build: Build, join?: { host: string; port: number }, options: { forceHost?: boolean } = {}) => {
+    async (
+      build: Build,
+      join?: { host: string; port: number },
+      options: { forceHost?: boolean; promptOnEmpty?: boolean; autoPublish?: boolean } = {},
+    ) => {
       if (!options.forceHost && phase === 'launching') return
       // A paused entry is an invitation to resume, not an active download.
       if (!options.forceHost && downloads[build.id] && downloads[build.id].phase !== 'paused') return
@@ -1374,57 +1423,88 @@ export default function App() {
         return
       }
 
-      // A pre-mapped community season runs through its trusted provider even
-      // when no VAULTED archive is installed on this PC. The provider owns the
-      // game files and server, so never ask the player to browse for an exe.
-      if (build.onlineProvider) {
-        await startOnlineProvider(build, build.onlineProvider)
-        return
-      }
-
-      // not on this PC -> download it
+      // Downloaded seasons launch directly through their provider. Uninstalled
+      // cards stay on the existing Download → Play path.
       if (!installed[build.id]) {
         requestDownload(build)
         return
       }
 
+      localSessionRef.current = null
       setLaunchFailure((current) => (current?.id === build.id ? null : current))
 
-      // A global or per-card executable is an external launcher. Start it with
-      // this season's build folder as the target instead of running VAULTED's
-      // Fortnite injector/private-server flow.
-      const profileExecutable = profileExecutableFor(build, profiles)
-      if (profileExecutable) {
-        const attemptToken = launchAttempts.start(build.id, 'host')
-        setPhase('launching')
-        setLaunchStage(`Starting ${build.season.label}…`)
+      // Play always consults the live community directories before choosing a
+      // destination. The 20-second background poll is only a cache; this scan
+      // makes the click itself check Reboot/Eon/Era/EZFN/Neo/Stellar/Retrac
+      // (and any other configured endpoint) instead of acting on stale rows.
+      let availableCommunityServers = communityServers
+      if (!join && !options.forceHost) {
+        if (communityDiscoveryInFlight.current) return
+        communityDiscoveryInFlight.current = true
+        setLaunchStage('Checking live community servers…')
         try {
-          await launchProfileBuild(build, profileExecutable)
-          const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
-            setRunningId(build.id)
-            setPhase('running')
-            setLaunchStage(null)
-            setLaunchFailure(null)
-            setHostedLobby(null)
-            shop.sets.recordLaunch(build.id)
-            pushToast({
-              tone: 'success',
-              title: 'Launcher is starting',
-              description: `${build.season.label} · ${build.path}`,
-            })
-          })
-          if (!applied) return
-        } catch (error) {
-          launchAttempts.commitIfCurrent(attemptToken, () => {
-            const message = error instanceof Error ? error.message : 'The launcher could not be started.'
-            setLaunchFailure({ id: build.id, message })
-            setPhase('error')
-            setLaunchStage(null)
-            pushToast({ tone: 'error', title: 'Launch failed', description: message })
-          })
+          availableCommunityServers = await refreshCommunityServers()
+        } catch {
+          /* keep the last good scan only when the scan itself fails */
+        } finally {
+          communityDiscoveryInFlight.current = false
         }
-        return
       }
+
+      // External directories are authoritative for Play. Only when none of
+      // them lists this exact season do we fall back to the VAULTED relay or a
+      // locally hosted fallback match.
+      const externalLobby = findBestPublicLobby(
+        build,
+        availableCommunityServers.filter((server) => server.external === true),
+        lanIp,
+        account.username,
+      )
+      const availableLobbies = mergeLobbies([...availableCommunityServers, ...onlineLobbies])
+      const liveLobby =
+        !join && !options.forceHost
+          ? externalLobby ?? findBestPublicLobby(build, availableLobbies, lanIp, account.username)
+          : null
+      let startEmptyServer = false
+      if (options.promptOnEmpty && !join && !options.forceHost && !liveLobby) {
+        setLaunchStage(null)
+        const choice = findActiveServerChoice(
+          builds,
+          availableLobbies,
+          installed,
+          build.id,
+          lanIp,
+          account.username,
+        )
+        if (choice) {
+          setServerFallback({ build, choice })
+          return
+        }
+        // There is nowhere else to go, so turn Play into a working lobby
+        // instead of leaving the player on a zero-lobby screen.
+        startEmptyServer = true
+      }
+
+      // A provider season joins the healthiest public community server through
+      // the bundled open-source runtime. The selected host/port is handed to
+      // that runtime so Fortnite loads straight into the live match. If no
+      // public lobby is up, fall through to launchBuild() and start a clean
+      // local session instead of opening an external launcher or browser.
+      let targetJoin = join
+      let autoJoin = false
+      if (build.onlineProvider && !targetJoin && !options.forceHost && !startEmptyServer) {
+        const publicLobby =
+          externalLobby ?? findBestPublicLobby(build, availableLobbies, lanIp, account.username)
+        const publicTarget = publicLobby ? lobbyTarget(publicLobby.address) : null
+        if (publicTarget) {
+          const started = await startOnlineProvider(build, build.onlineProvider, publicTarget)
+          if (started) return
+          // Provider launch failed (for example a damaged bundled DLL). Keep
+          // Play usable by continuing into the local bundled runtime below.
+        }
+      }
+
+      setLaunchFailure((current) => (current?.id === build.id ? null : current))
 
       // Installed downloads get a full automatic preflight. If the files or
       // the shared runtime are broken, explain that instead of handing the
@@ -1455,19 +1535,14 @@ export default function App() {
       // Installed -> join a live public lobby from the configured source for
       // this exact season when one is listed, otherwise host the season. The
       // source is authoritative, so Play never silently joins a different
-      // directory or relay while the card reads LOCAL PLAY.
-      let target = join
-      let autoJoin = false
-      if (!target && session && !options.forceHost) {
+      // directory or relay while the card reads ONLINE READY.
+      let target = targetJoin
+      if (!target && !options.forceHost && !startEmptyServer) {
         // The configured matchmaking feed is authoritative for ONLINE PLAY.
-        const listed = onlineLobbies.find(
-          (lobby) =>
-            lobby.public &&
-            lobbyIsFresh(lobby) &&
-            lobbyIsReachable(lobby, lanIp) &&
-            lobby.username !== session.user.username &&
-            lobbyMatchesBuild(lobby, build),
-        )
+        // Use the shared healthiest-lobby ranking so Play never joins a worse
+        // server just because a directory returned its rows out of order.
+        const listed =
+          externalLobby ?? findBestPublicLobby(build, availableLobbies, lanIp, account.username)
         if (listed) {
           const parsed = lobbyTarget(listed.address)
           if (parsed) {
@@ -1491,7 +1566,11 @@ export default function App() {
         runtimeProfileFor(build.season.chapter, build.version)
 
       try {
-        const launch = (joinTarget?: { host: string; port: number }, fallbackToHost = false) =>
+        const launch = (
+          joinTarget?: { host: string; port: number },
+          fallbackToHost = false,
+          botFill = false,
+        ) =>
           launchBuild(
             build,
             session?.user.username,
@@ -1502,15 +1581,42 @@ export default function App() {
             joinTarget,
             fallbackToHost,
             runtimeProfile,
+            { botFill },
           )
 
         let launched: Awaited<ReturnType<typeof launchBuild>>
+        // Mark this before the IPC call: a local client can exit while the host
+        // readiness promise is still pending, and that exit must still become
+        // the clean local fallback rather than a raw client-log report.
+        if (!target) localSessionRef.current = build.id
         try {
-          launched = await launch(target, autoJoin)
+          // Bot fill is disabled for every launch, including local hosts.
+          launched = await launch(target, autoJoin, false)
         } catch (error) {
           // A fallback may already have taken over this launch. Never let the
           // failed attempt report an error or start a second host.
           if (!launchAttempts.isCurrent(attemptToken)) return
+          const message = error instanceof Error ? error.message : 'The client could not be started.'
+          if (isLocalHostFailure(message)) {
+            const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
+              localSessionRef.current = null
+              setRunningId(null)
+              setPhase('error')
+              setLaunchStage(null)
+              setLaunchFailure({
+                id: build.id,
+                local: true,
+                message: 'This build could not start its local game server. Try again, or choose another installed build.',
+              })
+              pushToast({
+                tone: 'info',
+                title: 'Local match unavailable',
+                description: `${build.season.label} did not open a local server, so no client was started.`,
+              })
+            })
+            if (!applied) return
+            return
+          }
           // A relay lobby can be listed while its host is already closing. Do
           // not leave Play stuck on that error: retry the same season locally
           // and publish the replacement lobby. Explicit friend joins keep their
@@ -1518,6 +1624,7 @@ export default function App() {
           if (!autoJoin || !target) throw error
           autoJoin = false
           target = undefined
+          localSessionRef.current = build.id
           attemptToken = launchAttempts.start(build.id, 'host')
           setLaunchStage('Lobby closed — starting your own lobby…')
           pushToast({
@@ -1525,13 +1632,33 @@ export default function App() {
             title: 'That lobby closed',
             description: `Starting ${build.season.label} and listing your lobby instead.`,
           })
-          launched = await launch()
+          launched = await launch(undefined, false, true)
+        }
+        if (launched.localHostUnavailable) {
+          const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
+            localSessionRef.current = null
+            setRunningId(null)
+            setPhase('error')
+            setLaunchStage(null)
+            setLaunchFailure({
+              id: build.id,
+              local: true,
+              message: 'This build could not start its local game server. Try again, or choose another installed build.',
+            })
+            pushToast({
+              tone: 'info',
+              title: 'Local match unavailable',
+              description: `${build.season.label} did not open a local server, so no client was started.`,
+            })
+          })
+          if (applied) return
         }
         // The initial join can resolve after its post-launch failure fallback
         // has started. Run the entire running-state update through the real
         // production guard: if the fallback has claimed the attempt, none of
         // this (including the hosting stop) may execute.
         const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
+          localSessionRef.current = target ? null : build.id
           setRunningId(build.id)
           setPhase('running')
           setLaunchStage(null)
@@ -1544,18 +1671,29 @@ export default function App() {
             // sends a stop. If it already sent one, the fallback awaits it.
             void hostingStops.stopFor(attemptToken)
           } else {
+            // A locally hosted session is always registered. The public flag
+            // still controls whether other people can reach it, but every host
+            // now advertises its match so UPnP promotion or a manual playit.gg
+            // address makes it discoverable without restarting the lobby.
+            const publishHostedLobby = true
             void (async () => {
-              if (!cloudSettings.hostPublicLobby || !cloudSettings.onlineServiceUrl.trim()) return
+              if (!publishHostedLobby || !cloudSettings.onlineServiceUrl.trim()) return
               try {
                 const endpoint = await window.arc?.publicAddress?.()
-                if (!endpoint) return
+                if (!launchAttempts.isCurrent(attemptToken)) return
+                // Keep a LAN registration when the router has not answered yet:
+                // the retry effect below can promote it to a public lobby later.
+                const address = endpoint?.address || lanIp
+                if (!address) return
                 setHostedLobby({
-                  address: endpoint.address,
-                  port: endpoint.port,
+                  address,
+                  port: endpoint?.port || 7777,
                   buildId: build.id,
                   label: build.season.label,
-                  public: endpoint.public,
+                  public: Boolean(endpoint?.public),
                   seasonId: artKeyFor(build.season),
+                  players: 1,
+                  publish: true,
                 })
               } catch {
                 /* friends can still join by IP if the relay is offline */
@@ -1573,13 +1711,15 @@ export default function App() {
               ? `${build.season.label} · your client is pointed at ${target.host}:${target.port}`
               : launched.privateServer === false
                 ? `${build.season.label} · no match server available for this build — no queue was started.`
-                : cloudSettings.hostPublicLobby && cloudSettings.onlineServiceUrl.trim()
+                : (cloudSettings.hostPublicLobby || options.autoPublish || startEmptyServer) &&
+                    cloudSettings.onlineServiceUrl.trim()
                   ? `${build.season.label} · v${build.version} · your lobby is listed for everyone in Open lobbies.`
                   : `${build.season.label} · v${build.version} · local match started on this PC.`,
           })
         })
         if (!applied) return
       } catch (error) {
+        localSessionRef.current = null
         launchAttempts.commitIfCurrent(attemptToken, () => {
           const message = error instanceof Error ? error.message : 'The client could not be started.'
           setLaunchFailure({ id: build.id, message })
@@ -1604,7 +1744,11 @@ export default function App() {
       pushToast,
       runningId,
       lanIp,
+      communityServers,
       onlineLobbies,
+      refreshCommunityServers,
+      builds,
+      account.username,
       profiles,
       cloudSettings.hostPublicLobby,
       cloudSettings.onlineServiceUrl,
@@ -1649,7 +1793,7 @@ export default function App() {
             description: `Starting ${build.season.label} and listing your lobby instead.`,
           })
         },
-        startHost: () => startBuild(build, undefined, { forceHost: true }),
+        startHost: () => startBuild(build, undefined, { forceHost: true, autoPublish: true }),
       })
     },
     [builds, hostingStops, launchAttempts, pushToast, runningId, startBuild],
@@ -1689,7 +1833,7 @@ export default function App() {
       return
     }
 
-    await startBuild(build)
+    await startBuild(build, undefined, { promptOnEmpty: true })
   }, [activeBuild, downloads, phase, pushToast, runningId, startBuild])
 
   const handlePlayChallengeBuild = useCallback(
@@ -1712,15 +1856,42 @@ export default function App() {
         return
       }
 
-      void startBuild(build)
+      void startBuild(build, undefined, { promptOnEmpty: true })
     },
     [builds, pushToast, runningId, startBuild],
   )
 
+  const handleJoinFallbackSeason = useCallback(() => {
+    const pending = serverFallback
+    if (!pending) return
+    const target = lobbyTarget(pending.choice.lobby.address)
+    if (!target) {
+      pushToast({
+        tone: 'error',
+        title: 'That lobby has no usable address',
+        description: 'Start a new public server for your selected season instead.',
+      })
+      return
+    }
+    setServerFallback(null)
+    setActiveId(pending.choice.build.id)
+    setView('home')
+    void startBuild(pending.choice.build, target)
+  }, [pushToast, serverFallback, startBuild])
+
+  const handleStartFallbackServer = useCallback(() => {
+    const pending = serverFallback
+    if (!pending) return
+    setServerFallback(null)
+    setActiveId(pending.build.id)
+    setView('home')
+    void startBuild(pending.build, undefined, { forceHost: true, autoPublish: true })
+  }, [serverFallback, startBuild])
+
   // Keep the lobby listed while the host is up; the relay drops entries it has
   // not heard from for two minutes.
   useEffect(() => {
-    if (!hostedLobby || !cloudSettings.hostPublicLobby) return
+    if (!hostedLobby || hostedLobby.publish === false) return
     const endpoint = cloudSettings.onlineServiceUrl.trim()
     if (!endpoint) return
     let closed = false
@@ -1728,6 +1899,19 @@ export default function App() {
     const publish = async () => {
       if (closed) return
       try {
+        // The injected server mirrors its live population every second. Publish
+        // that count (host + bots + joiners) instead of a permanent "1".
+        const status = window.arc?.sessionStatus
+          ? await window.arc.sessionStatus().catch(() => null)
+          : null
+        const players = Math.max(1, Math.floor(status?.players ?? hostedLobby.players ?? 1))
+        if (hostedLobby.players !== players) {
+          setHostedLobby((current) =>
+            current && current.address === hostedLobby.address && current.port === hostedLobby.port
+              ? { ...current, players }
+              : current,
+          )
+        }
         // One source, one registration: the configured relay gets the host;
         // no other lobby directory is updated behind the player's back.
         await publishOnlineLobby(endpoint, {
@@ -1736,7 +1920,7 @@ export default function App() {
           label: hostedLobby.label,
           public: hostedLobby.public,
           seasonId: hostedLobby.seasonId ?? null,
-          players: 1,
+          players,
         })
       } catch {
         /* keep hosting; the next heartbeat retries the same source */
@@ -1748,15 +1932,16 @@ export default function App() {
       closed = true
       window.clearInterval(timer)
     }
-  }, [cloudSettings.hostPublicLobby, cloudSettings.onlineServiceUrl, hostedLobby])
+  }, [cloudSettings.onlineServiceUrl, hostedLobby])
 
   // A router can finish booting or receive UPnP later than the launch. Keep
   // trying the public mapping while the lobby is only visible on the LAN; once
   // it succeeds, republish the same lobby as an internet lobby automatically.
   useEffect(() => {
-    if (!native || !hostedLobby || hostedLobby.public || !cloudSettings.hostPublicLobby) return
+    if (!native || !hostedLobby || hostedLobby.public || hostedLobby.publish === false) return
     let cancelled = false
-    const timer = window.setInterval(async () => {
+    let announced = false
+    const refresh = async () => {
       if (cancelled) return
       try {
         const endpoint = await window.arc?.publicAddress?.()
@@ -1770,20 +1955,26 @@ export default function App() {
             public: true,
           }
         })
-        pushToast({
-          tone: 'success',
-          title: 'Lobby is now public',
-          description: `${hostedLobby.label} can be joined over the internet.`,
-        })
+        if (!announced) {
+          announced = true
+          pushToast({
+            tone: 'success',
+            title: 'Lobby is now public',
+            description: `${hostedLobby.label} can be joined over the internet.`,
+          })
+        }
       } catch {
         /* keep the LAN lobby listed and try again */
       }
-    }, 30_000)
+    }
+    // Try once immediately; the launch-time mapping may have raced the router.
+    void refresh()
+    const timer = window.setInterval(() => void refresh(), 30_000)
     return () => {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [cloudSettings.hostPublicLobby, hostedLobby, native, pushToast])
+  }, [hostedLobby, native, pushToast])
 
   useEffect(() => {
     if (!runningId) setHostedLobby(null)
@@ -2158,9 +2349,9 @@ export default function App() {
           ? 'downloading'
         : phase === 'launching'
           ? 'launching'
-          : phase === 'error'
+          : phase === 'error' && activeLaunchFailure
             ? 'error'
-            : activeBuild.onlineProvider || installed[activeBuild.id]
+            : installed[activeBuild.id]
               ? 'ready'
               : 'missing'
 
@@ -2332,6 +2523,7 @@ export default function App() {
                 deleting={deletingId === activeBuild?.id}
                 launchStage={launchStage}
                 launchError={activeLaunchFailure}
+                launchErrorLocal={activeLaunchFailureLocal}
                 hostedLobby={activeBuild && hostedLobby?.buildId === activeBuild.id ? hostedLobby : null}
                 verify={activeVerifyJob}
                 onVerify={handleVerifyBuild}
@@ -2391,6 +2583,16 @@ export default function App() {
       />
 
       <AddBuildDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onAdd={handleAdd} />
+
+      {serverFallback && (
+        <ServerFallbackDialog
+          selectedBuild={serverFallback.build}
+          choice={serverFallback.choice}
+          onJoinAlternative={handleJoinFallbackSeason}
+          onStartServer={handleStartFallbackServer}
+          onClose={() => setServerFallback(null)}
+        />
+      )}
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>

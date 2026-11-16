@@ -24,7 +24,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 6591289197
+      "sizeBytes": 6591289197,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch1-s2": {
       "id": "ch1-s2",
@@ -48,7 +53,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 6976364737
+      "sizeBytes": 6976364737,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch1-s3": {
       "id": "ch1-s3",
@@ -76,28 +86,7 @@
       "onlineProvider": {
         "id": "neo",
         "name": "Project Neo",
-        "label": "Neo",
-        "protocolUri": "neo://",
-        "installerUrl": "https://projectneofn.dev/download",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/Neo Launcher/Neo Launcher.exe",
-          "%LOCALAPPDATA%/Neo Launcher/Neo Launcher.exe",
-          "%LOCALAPPDATA%/Programs/Neo Launcher/NeoLauncher.exe",
-          "%LOCALAPPDATA%/Neo Launcher/NeoLauncher.exe",
-          "%LOCALAPPDATA%/Programs/Project Neo/Neo Launcher.exe"
-        ],
-        "executableNames": [
-          "Neo Launcher.exe",
-          "NeoLauncher.exe",
-          "Project Neo.exe",
-          "Neo.exe"
-        ],
-        "installDirNames": [
-          "Neo Launcher",
-          "Project Neo",
-          "Neo"
-        ],
-        "launchMode": "season"
+        "label": "Neo"
       }
     },
     "ch1-s4": {
@@ -126,28 +115,7 @@
       "onlineProvider": {
         "id": "neo",
         "name": "Project Neo",
-        "label": "Neo",
-        "protocolUri": "neo://",
-        "installerUrl": "https://projectneofn.dev/download",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/Neo Launcher/Neo Launcher.exe",
-          "%LOCALAPPDATA%/Neo Launcher/Neo Launcher.exe",
-          "%LOCALAPPDATA%/Programs/Neo Launcher/NeoLauncher.exe",
-          "%LOCALAPPDATA%/Neo Launcher/NeoLauncher.exe",
-          "%LOCALAPPDATA%/Programs/Project Neo/Neo Launcher.exe"
-        ],
-        "executableNames": [
-          "Neo Launcher.exe",
-          "NeoLauncher.exe",
-          "Project Neo.exe",
-          "Neo.exe"
-        ],
-        "installDirNames": [
-          "Neo Launcher",
-          "Project Neo",
-          "Neo"
-        ],
-        "launchMode": "season"
+        "label": "Neo"
       }
     },
     "ch1-s5": {
@@ -172,7 +140,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 13283153744
+      "sizeBytes": 13283153744,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch1-s6": {
       "id": "ch1-s6",
@@ -200,28 +173,7 @@
       "onlineProvider": {
         "id": "era",
         "name": "Project Era",
-        "label": "Era",
-        "protocolUri": "era://",
-        "installerUrl": "https://api.erafn.dev/api/launcher/download",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/Era Launcher/EraLauncher.exe",
-          "%LOCALAPPDATA%/Programs/Era Launcher/Era Launcher.exe",
-          "%LOCALAPPDATA%/Era Launcher/EraLauncher.exe",
-          "%LOCALAPPDATA%/Programs/Era/EraLauncher.exe",
-          "%APPDATA%/Era Launcher/EraLauncher.exe"
-        ],
-        "executableNames": [
-          "EraLauncher.exe",
-          "Era Launcher.exe",
-          "Project Era.exe",
-          "Era.exe"
-        ],
-        "installDirNames": [
-          "Era Launcher",
-          "Project Era",
-          "Era"
-        ],
-        "launchMode": "season"
+        "label": "Era"
       }
     },
     "ch1-s7": {
@@ -250,28 +202,7 @@
       "onlineProvider": {
         "id": "neo",
         "name": "Project Neo",
-        "label": "Neo",
-        "protocolUri": "neo://",
-        "installerUrl": "https://projectneofn.dev/download",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/Neo Launcher/Neo Launcher.exe",
-          "%LOCALAPPDATA%/Neo Launcher/Neo Launcher.exe",
-          "%LOCALAPPDATA%/Programs/Neo Launcher/NeoLauncher.exe",
-          "%LOCALAPPDATA%/Neo Launcher/NeoLauncher.exe",
-          "%LOCALAPPDATA%/Programs/Project Neo/Neo Launcher.exe"
-        ],
-        "executableNames": [
-          "Neo Launcher.exe",
-          "NeoLauncher.exe",
-          "Project Neo.exe",
-          "Neo.exe"
-        ],
-        "installDirNames": [
-          "Neo Launcher",
-          "Project Neo",
-          "Neo"
-        ],
-        "launchMode": "season"
+        "label": "Neo"
       }
     },
     "ch1-s8": {
@@ -296,7 +227,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 23087753024
+      "sizeBytes": 23087753024,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch1-s9": {
       "id": "ch1-s9",
@@ -324,27 +260,7 @@
       "onlineProvider": {
         "id": "reboot",
         "name": "Project Reboot",
-        "label": "Reboot",
-        "protocolUri": "reboot://",
-        "installerUrl": "https://github.com/Auties00/Reboot-Launcher/releases/latest",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/Reboot Launcher/reboot_launcher.exe",
-          "%LOCALAPPDATA%/Programs/Reboot Launcher/Reboot Launcher.exe",
-          "%LOCALAPPDATA%/Reboot Launcher/reboot_launcher.exe",
-          "%APPDATA%/Reboot Launcher/reboot_launcher.exe",
-          "%ProgramFiles%/Reboot Launcher/reboot_launcher.exe"
-        ],
-        "executableNames": [
-          "reboot_launcher.exe",
-          "Reboot Launcher.exe",
-          "Reboot.exe"
-        ],
-        "installDirNames": [
-          "Reboot Launcher",
-          "Project Reboot",
-          "Reboot"
-        ],
-        "launchMode": "season"
+        "label": "Reboot"
       }
     },
     "ch1-s10": {
@@ -373,28 +289,7 @@
       "onlineProvider": {
         "id": "neo",
         "name": "Project Neo",
-        "label": "Neo",
-        "protocolUri": "neo://",
-        "installerUrl": "https://projectneofn.dev/download",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/Neo Launcher/Neo Launcher.exe",
-          "%LOCALAPPDATA%/Neo Launcher/Neo Launcher.exe",
-          "%LOCALAPPDATA%/Programs/Neo Launcher/NeoLauncher.exe",
-          "%LOCALAPPDATA%/Neo Launcher/NeoLauncher.exe",
-          "%LOCALAPPDATA%/Programs/Project Neo/Neo Launcher.exe"
-        ],
-        "executableNames": [
-          "Neo Launcher.exe",
-          "NeoLauncher.exe",
-          "Project Neo.exe",
-          "Neo.exe"
-        ],
-        "installDirNames": [
-          "Neo Launcher",
-          "Project Neo",
-          "Neo"
-        ],
-        "launchMode": "season"
+        "label": "Neo"
       }
     },
     "ch2-s1": {
@@ -423,27 +318,7 @@
       "onlineProvider": {
         "id": "reboot",
         "name": "Project Reboot",
-        "label": "Reboot",
-        "protocolUri": "reboot://",
-        "installerUrl": "https://github.com/Auties00/Reboot-Launcher/releases/latest",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/Reboot Launcher/reboot_launcher.exe",
-          "%LOCALAPPDATA%/Programs/Reboot Launcher/Reboot Launcher.exe",
-          "%LOCALAPPDATA%/Reboot Launcher/reboot_launcher.exe",
-          "%APPDATA%/Reboot Launcher/reboot_launcher.exe",
-          "%ProgramFiles%/Reboot Launcher/reboot_launcher.exe"
-        ],
-        "executableNames": [
-          "reboot_launcher.exe",
-          "Reboot Launcher.exe",
-          "Reboot.exe"
-        ],
-        "installDirNames": [
-          "Reboot Launcher",
-          "Project Reboot",
-          "Reboot"
-        ],
-        "launchMode": "season"
+        "label": "Reboot"
       }
     },
     "ch2-s2": {
@@ -472,29 +347,7 @@
       "onlineProvider": {
         "id": "ezfn",
         "name": "EZFN",
-        "label": "EZFN",
-        "protocolUri": "ezfn://",
-        "installerUrl": "https://releases.ezfn.app/ogfn/latest/EZFN-OGFN-Setup.msi",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/EZFN OGFN Launcher/EZFN OGFN Launcher.exe",
-          "%LOCALAPPDATA%/Programs/EZFN OGFN Launcher/EZFNLauncher.exe",
-          "%LOCALAPPDATA%/EZFN OGFN Launcher/EZFN OGFN Launcher.exe",
-          "%LOCALAPPDATA%/EZFN OGFN Launcher/EZFNLauncher.exe",
-          "%LOCALAPPDATA%/Programs/EZFN Launcher/EZFN Launcher.exe",
-          "%LOCALAPPDATA%/EZFN Launcher/EZFNLauncher.exe"
-        ],
-        "executableNames": [
-          "EZFN OGFN Launcher.exe",
-          "EZFNLauncher.exe",
-          "EZFN Launcher.exe",
-          "EZFN.exe"
-        ],
-        "installDirNames": [
-          "EZFN OGFN Launcher",
-          "EZFN Launcher",
-          "EZFN"
-        ],
-        "launchMode": "season"
+        "label": "EZFN"
       }
     },
     "ch2-s3": {
@@ -519,7 +372,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 85051868529
+      "sizeBytes": 85051868529,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch2-s4": {
       "id": "ch2-s4",
@@ -543,7 +401,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 28769341535
+      "sizeBytes": 28769341535,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch2-s5": {
       "id": "ch2-s5",
@@ -571,27 +434,7 @@
       "onlineProvider": {
         "id": "reboot",
         "name": "Project Reboot",
-        "label": "Reboot",
-        "protocolUri": "reboot://",
-        "installerUrl": "https://github.com/Auties00/Reboot-Launcher/releases/latest",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/Reboot Launcher/reboot_launcher.exe",
-          "%LOCALAPPDATA%/Programs/Reboot Launcher/Reboot Launcher.exe",
-          "%LOCALAPPDATA%/Reboot Launcher/reboot_launcher.exe",
-          "%APPDATA%/Reboot Launcher/reboot_launcher.exe",
-          "%ProgramFiles%/Reboot Launcher/reboot_launcher.exe"
-        ],
-        "executableNames": [
-          "reboot_launcher.exe",
-          "Reboot Launcher.exe",
-          "Reboot.exe"
-        ],
-        "installDirNames": [
-          "Reboot Launcher",
-          "Project Reboot",
-          "Reboot"
-        ],
-        "launchMode": "season"
+        "label": "Reboot"
       }
     },
     "ch2-s6": {
@@ -616,7 +459,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 32285717194
+      "sizeBytes": 32285717194,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch2-s7": {
       "id": "ch2-s7",
@@ -644,27 +492,7 @@
       "onlineProvider": {
         "id": "reboot",
         "name": "Project Reboot",
-        "label": "Reboot",
-        "protocolUri": "reboot://",
-        "installerUrl": "https://github.com/Auties00/Reboot-Launcher/releases/latest",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/Reboot Launcher/reboot_launcher.exe",
-          "%LOCALAPPDATA%/Programs/Reboot Launcher/Reboot Launcher.exe",
-          "%LOCALAPPDATA%/Reboot Launcher/reboot_launcher.exe",
-          "%APPDATA%/Reboot Launcher/reboot_launcher.exe",
-          "%ProgramFiles%/Reboot Launcher/reboot_launcher.exe"
-        ],
-        "executableNames": [
-          "reboot_launcher.exe",
-          "Reboot Launcher.exe",
-          "Reboot.exe"
-        ],
-        "installDirNames": [
-          "Reboot Launcher",
-          "Project Reboot",
-          "Reboot"
-        ],
-        "launchMode": "season"
+        "label": "Reboot"
       }
     },
     "ch2-s8": {
@@ -689,7 +517,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 36818767206
+      "sizeBytes": 36818767206,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch3-s1": {
       "id": "ch3-s1",
@@ -713,7 +546,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 20890688413
+      "sizeBytes": 20890688413,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch3-s2": {
       "id": "ch3-s2",
@@ -737,7 +575,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 30449531352
+      "sizeBytes": 30449531352,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch3-s3": {
       "id": "ch3-s3",
@@ -761,7 +604,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 22624469153
+      "sizeBytes": 22624469153,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch3-s4": {
       "id": "ch3-s4",
@@ -785,7 +633,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 20268856467
+      "sizeBytes": 20268856467,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch4-s1": {
       "id": "ch4-s1",
@@ -809,7 +662,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 33544852956
+      "sizeBytes": 33544852956,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch4-s2": {
       "id": "ch4-s2",
@@ -833,7 +691,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 33412713556
+      "sizeBytes": 33412713556,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch4-s3": {
       "id": "ch4-s3",
@@ -857,7 +720,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 58602866850
+      "sizeBytes": 58602866850,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch4-s4": {
       "id": "ch4-s4",
@@ -881,7 +749,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 74419514811
+      "sizeBytes": 74419514811,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch4-s5": {
       "id": "ch4-s5",
@@ -905,7 +778,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 21191740399
+      "sizeBytes": 21191740399,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      }
     },
     "ch5-s1": {
       "id": "ch5-s1",
@@ -929,7 +807,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 46055666663
+      "sizeBytes": 46055666663,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch5-s2": {
       "id": "ch5-s2",
@@ -953,7 +836,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 59492160383
+      "sizeBytes": 59492160383,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch5-s3": {
       "id": "ch5-s3",
@@ -977,7 +865,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 73367000433
+      "sizeBytes": 73367000433,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch5-s4": {
       "id": "ch5-s4",
@@ -1001,7 +894,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 64131788085
+      "sizeBytes": 64131788085,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch5-remix": {
       "id": "ch5-remix",
@@ -1025,7 +923,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 48165375351
+      "sizeBytes": 48165375351,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch6-s1": {
       "id": "ch6-s1",
@@ -1049,7 +952,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 118808310143
+      "sizeBytes": 118808310143,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch6-s2": {
       "id": "ch6-s2",
@@ -1073,7 +981,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 49194881985
+      "sizeBytes": 49194881985,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch6-s3": {
       "id": "ch6-s3",
@@ -1097,7 +1010,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 85268125327
+      "sizeBytes": 85268125327,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch6-s4": {
       "id": "ch6-s4",
@@ -1121,7 +1039,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 96145206471
+      "sizeBytes": 96145206471,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch6-mini1": {
       "id": "ch6-mini1",
@@ -1145,7 +1068,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 5428813433
+      "sizeBytes": 5428813433,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch6-mini2": {
       "id": "ch6-mini2",
@@ -1169,7 +1097,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 101372711167
+      "sizeBytes": 101372711167,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch7-s1": {
       "id": "ch7-s1",
@@ -1193,7 +1126,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 155247495991
+      "sizeBytes": 155247495991,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch7-s2": {
       "id": "ch7-s2",
@@ -1217,7 +1155,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 106817993494
+      "sizeBytes": 106817993494,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch7-s3": {
       "id": "ch7-s3",
@@ -1241,7 +1184,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 96407407168
+      "sizeBytes": 96407407168,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch7-s4": {
       "id": "ch7-s4",
@@ -1265,7 +1213,12 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 145317973819
+      "sizeBytes": 145317973819,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid"
+      }
     },
     "ch7-mini1": {
       "id": "ch7-mini1",
@@ -1293,25 +1246,7 @@
       "onlineProvider": {
         "id": "ezfn-hybrid",
         "name": "EZFN Hybrid",
-        "label": "EZFN Hybrid",
-        "protocolUri": "ezfn-hybrid://",
-        "installerUrl": "https://releases.ezfn.app/hybrid/latest/EZFN-Hybrid-Setup.msi",
-        "installPaths": [
-          "%LOCALAPPDATA%/Programs/EZFN Hybrid/EZFN Hybrid.exe",
-          "%LOCALAPPDATA%/EZFN Hybrid/EZFN Hybrid.exe",
-          "%LOCALAPPDATA%/Programs/EZFN Hybrid/EZFNHybrid.exe",
-          "%LOCALAPPDATA%/EZFN Hybrid/EZFNHybrid.exe"
-        ],
-        "executableNames": [
-          "EZFN Hybrid.exe",
-          "EZFNHybrid.exe",
-          "EZFN Hybrid Launcher.exe"
-        ],
-        "installDirNames": [
-          "EZFN Hybrid",
-          "EZFN Hybrid Launcher"
-        ],
-        "launchMode": "current"
+        "label": "EZFN Hybrid"
       }
     }
   }

@@ -24,22 +24,12 @@ export interface SeasonInfo {
 }
 
 export interface OnlineProviderConfig {
-  /** stable provider id used by the trusted desktop launcher catalog */
+  /** stable provider id used by the bundled provider profile */
   id: string
   /** full project name, e.g. Project Neo */
   name: string
   /** compact badge label, e.g. Neo */
   label: string
-  /** Windows URI scheme registered by the official launcher */
-  protocolUri: string
-  /** official installer or direct setup flow */
-  installerUrl: string
-  /** standard Windows install locations, with %ENV% placeholders */
-  installPaths: string[]
-  executableNames?: string[]
-  installDirNames?: string[]
-  /** current = launches the live game (EZFN Hybrid); season = opens a season launcher */
-  launchMode?: 'season' | 'current'
 }
 
 export interface Build {
@@ -54,7 +44,7 @@ export interface Build {
   executable: string
   /** launcher/provider label inherited from the global profile settings */
   providerLabel?: string
-  /** community client that hosts this season without a VAULTED relay */
+  /** bundled provider that hosts this season directly */
   onlineProvider?: OnlineProviderConfig
   season: SeasonInfo
   addedAt: number

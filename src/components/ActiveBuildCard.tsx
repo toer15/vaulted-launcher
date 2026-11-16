@@ -20,7 +20,7 @@ import { BuildArt } from './BuildArt'
 import { artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { formatDownloadSize, formatSpeed } from '../lib/downloadSize'
-import type { SeasonPlayMode } from '../lib/playMode'
+import { onlinePlayerCount, onlineStatusLabel, type SeasonPlayMode } from '../lib/playMode'
 import type { Account, Build, BuildState, BuildVerifyReport, DownloadState } from '../types'
 
 interface ActiveBuildCardProps {
@@ -29,7 +29,7 @@ interface ActiveBuildCardProps {
   download: DownloadState | null
   /** players with this season open right now (null while unknown) */
   activeNow?: number | null
-  /** shared live ONLINE PLAY / LOCAL PLAY state for this season */
+  /** shared live online state for this season */
   playMode?: SeasonPlayMode
   account: Account
   sourceKeys?: Set<string>
@@ -40,8 +40,10 @@ interface ActiveBuildCardProps {
   launchStage?: string | null
   /** persistent explanation for a failed launch or unexpected client close */
   launchError?: string | null
+  /** local-host fallback: never show it as a raw crash report */
+  launchErrorLocal?: boolean
   /** this PC's currently published lobby, if it is hosting this build */
-  hostedLobby?: { address: string; port: number; public: boolean; label: string } | null
+  hostedLobby?: { address: string; port: number; public: boolean; label: string; players?: number } | null
   verify?: { phase: 'running' | 'done'; report?: BuildVerifyReport; error?: string } | null
   onVerify?: () => void
   /** optional: link a build folder that already exists on this PC */
@@ -91,6 +93,7 @@ export function ActiveBuildCard({
   deleting,
   launchStage,
   launchError,
+  launchErrorLocal,
   hostedLobby,
   verify,
   onVerify,
@@ -128,7 +131,9 @@ export function ActiveBuildCard({
 
   const { season } = build
   const busy = state === 'launching' || state === 'downloading'
-  const pill = STATE_PILL[state]
+  const pill = launchErrorLocal
+    ? { label: 'Unavailable', dot: 'bg-amber-400', text: 'text-amber-300' }
+    : STATE_PILL[state]
   const isOnlineProvider = Boolean(build.onlineProvider)
   const showLocateExisting = !busy && state !== 'running' && !isOnlineProvider
   const isInstalled = Boolean(installed?.[build.id])
@@ -142,10 +147,26 @@ export function ActiveBuildCard({
   const showVerify = Boolean(canDelete && isInstalled && !busy && state !== 'running' && onVerify)
   // The hero and the sidebar read the same map. The hosted fallback keeps this
   // card correct if it is rendered in isolation during a transition.
-  const onlinePlay = Boolean(playMode?.online || hostedLobby?.public)
-  const onlineProviderLabel = playMode?.providerLabel
+  const onlineProviderLabel =
+    playMode?.providerLabel ||
+    build.onlineProvider?.label ||
+    build.onlineProvider?.name ||
+    build.providerLabel
+  const onlinePlayers = onlinePlayerCount(playMode, activeNow ?? 0)
+  const onlineStatus = onlineStatusLabel(onlinePlayers)
   const lobbyCount = playMode?.lobbyCount ?? (hostedLobby?.public ? 1 : 0)
-  const playerCount = playMode?.playerCount ?? (hostedLobby?.public ? 1 : 0)
+  const playerCount = playMode?.playerCount ?? (hostedLobby?.public ? Math.max(1, hostedLobby.players ?? 1) : 0)
+  const communityPlayers = playMode?.communityPlayerCount ?? 0
+  const communityProviderLabel = playMode?.communityProviderLabel
+  const directoryProviders = playMode?.directoryProviders ?? []
+  const communityDetail = [
+    communityPlayers > 0
+      ? `${communityProviderLabel || 'A community directory'} reports ${communityPlayers} player${communityPlayers === 1 ? '' : 's'}.`
+      : '',
+    directoryProviders.length > 0 ? `Directories list ${directoryProviders.join(', ')} for this season.` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
   const verifyReport = verify?.report
   const verifyIssues = verifyReport
     ? [
@@ -245,17 +266,25 @@ export function ActiveBuildCard({
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
     ready: onlineProviderLabel
-      ? `Ready — Play opens ${onlineProviderLabel} for ${season.label}, with no manual client or server setup.`
+      ? lobbyCount > 0
+        ? `Ready — ${lobbyCount} public ${lobbyCount === 1 ? 'lobby' : 'lobbies'} online${playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}. Play joins one through the bundled runtime.`
+        : communityPlayers > 0
+          ? `Ready — ${communityProviderLabel || 'A community directory'} reports ${communityPlayers} player${communityPlayers === 1 ? '' : 's'}. Play joins the healthiest public server, or starts a local lobby if none are up.`
+          : `Ready — Play joins the healthiest public server through the bundled runtime, or starts a local lobby if none are up.`
       : lobbyCount > 0
         ? `Ready — ${lobbyCount} reachable VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} online${playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}. Play joins one automatically.`
-        : 'Ready — Play joins a live public lobby when one is available, otherwise starts your own.',
+        : onlinePlayers > 0
+          ? `Ready — ${onlinePlayers} player${onlinePlayers === 1 ? '' : 's'} playing online.`
+          : 'Ready — online play is ready.',
     launching: launchStage ?? 'Fortnite is starting. Have fun.',
     running: hostedLobby
       ? hostedLobby.public
         ? `Fortnite is running — your lobby is public at ${hostedLobby.address}:${hostedLobby.port}.`
         : 'Fortnite is running — your lobby is WiFi-only. Forward UDP 7777 or use a tunnel in Settings for internet play.'
       : 'Fortnite is running. Have fun.',
-    error: 'Could not start the client. Check the build path and try again.',
+    error: launchErrorLocal
+      ? 'Local match unavailable — try again or choose another installed build.'
+      : 'Could not start the client. Check the build path and try again.',
   }
 
   return (
@@ -280,62 +309,46 @@ export function ActiveBuildCard({
                 v{build.version}
               </span>
             )}
-            {build.providerLabel && (
+            {onlineProviderLabel && (
               <span
-                title={`External launcher: ${build.providerLabel}`}
+                title={`Provider: ${onlineProviderLabel}`}
                 className="inline-flex items-center rounded-full border border-arc/25 bg-arc/[0.1] px-2.5 py-1.5 text-[10.5px] font-semibold text-arc backdrop-blur"
               >
-                {build.providerLabel}
+                {onlineProviderLabel}
               </span>
             )}
             <span
               title={
-                onlinePlay
-                  ? onlineProviderLabel
-                    ? `${onlineProviderLabel} hosts this season — Play opens it automatically.${lobbyCount > 0 ? ` ${lobbyCount} VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} also listed.` : ''}`
-                    : `${lobbyCount} live public VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} · ${playerCount} player${playerCount === 1 ? '' : 's'} — Play joins one automatically.`
-                  : 'No public lobby is live for this season. Play starts a match on this PC.'
+                `${onlineStatus}${onlineProviderLabel ? ` · ${onlineProviderLabel}` : ''}.${communityDetail ? ` ${communityDetail}` : ''}`
               }
-              aria-label={onlinePlay ? 'Online play' : 'Local play'}
+              aria-label={`Online status: ${onlineStatus}`}
               className={cx(
-                'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] backdrop-blur',
-                onlinePlay
-                  ? 'border-emerald-400/35 bg-emerald-400/[0.12] text-emerald-200 shadow-[0_0_22px_rgba(16,185,129,0.14)]'
-                  : 'border-slate-400/20 bg-slate-400/[0.06] text-slate-300',
+                'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-emerald-200 backdrop-blur',
+                onlinePlayers > 0
+                  ? 'border-emerald-300/50 bg-emerald-400/[0.18] shadow-[0_0_26px_rgba(16,185,129,0.22)]'
+                  : 'border-emerald-400/35 bg-emerald-400/[0.12] shadow-[0_0_22px_rgba(16,185,129,0.14)]',
               )}
             >
               <span
                 className={cx(
-                  'h-2 w-2 rounded-full',
-                  onlinePlay
-                    ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.95)]'
-                    : 'bg-slate-400/70',
+                  'h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.95)]',
+                  onlinePlayers > 0 && 'animate-pulse',
                 )}
               />
-              {onlinePlay ? 'ONLINE PLAY' : 'LOCAL PLAY'}
-              {onlinePlay && onlineProviderLabel && (
-                <span className="font-semibold normal-case tracking-normal text-emerald-100/80">
-                  · {onlineProviderLabel}
-                </span>
-              )}
-              {onlinePlay && playerCount > 0 && (
-                <span className="font-semibold normal-case tracking-normal text-emerald-100/80">
-                  · {playerCount} {playerCount === 1 ? 'player' : 'players'}
-                </span>
-              )}
+              {onlineStatus}
             </span>
+            {directoryProviders.length > 0 && (
+              <span
+                title={`External directories list ${directoryProviders.join(', ')} for this season.`}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10.5px] text-mist/80 backdrop-blur"
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-white/40" />
+                Listed by {directoryProviders.join(' / ')}
+              </span>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {activeNow != null && activeNow > 0 && (
-              <span
-                title="Players with this season open right now"
-                className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-3 py-1.5 text-[11px] font-medium text-emerald-200 backdrop-blur"
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.9)]" />
-                {activeNow} playing now
-              </span>
-            )}
             <span onClick={(event) => event.stopPropagation()}>
               <AccountChip account={account} onLogout={onLogout} />
             </span>
@@ -379,15 +392,10 @@ export function ActiveBuildCard({
             ) : lobbyCount > 0 ? (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-2.5 py-1 text-[10.5px] font-semibold text-emerald-100">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
-                {lobbyCount} reachable {lobbyCount === 1 ? 'lobby' : 'lobbies'} online
+                {lobbyCount} public {lobbyCount === 1 ? 'lobby' : 'lobbies'} online
                 {playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}
               </span>
-            ) : (
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10.5px] text-fog">
-                <span className="h-1.5 w-1.5 rounded-full bg-fog/50" />
-                No public lobby — Play starts a local match
-              </span>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -489,14 +497,30 @@ export function ActiveBuildCard({
 
           {launchError && (
             <div
-              className="mb-3 rounded-2xl border border-rose-400/30 bg-rose-500/[0.08] px-3.5 py-3 text-[11.5px] leading-relaxed text-rose-100 backdrop-blur"
-              role="alert"
+              className={cx(
+                'mb-3 rounded-2xl border px-3.5 py-3 text-[11.5px] leading-relaxed backdrop-blur',
+                launchErrorLocal
+                  ? 'border-amber-400/30 bg-amber-400/[0.07] text-amber-100'
+                  : 'border-rose-400/30 bg-rose-500/[0.08] text-rose-100',
+              )}
+              role={launchErrorLocal ? 'status' : 'alert'}
             >
               <div className="flex items-start gap-2">
-                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
+                <TriangleAlert
+                  className={cx('mt-0.5 h-4 w-4 shrink-0', launchErrorLocal ? 'text-amber-300' : 'text-rose-300')}
+                />
                 <div className="min-w-0 flex-1">
-                  <p className="font-semibold">Why the last launch stopped</p>
-                  <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[9.5px] leading-relaxed text-rose-100/80">
+                  <p className="font-semibold">
+                    {launchErrorLocal ? 'Local match unavailable' : 'Why the last launch stopped'}
+                  </p>
+                  <p
+                    className={cx(
+                      'mt-1 break-words',
+                      launchErrorLocal
+                        ? 'text-[11px] text-amber-100/85'
+                        : 'max-h-40 overflow-y-auto whitespace-pre-wrap font-mono text-[9.5px] leading-relaxed text-rose-100/80',
+                    )}
+                  >
                     {launchError}
                   </p>
                 </div>

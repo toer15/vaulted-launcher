@@ -189,7 +189,7 @@ function schema(env) {
         'CREATE TABLE IF NOT EXISTS auth_attempts (key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset_at TEXT NOT NULL)',
       ),
       env.DB.prepare(
-        'CREATE TABLE IF NOT EXISTS sessions_v2 (lower TEXT PRIMARY KEY, address TEXT NOT NULL, build_id TEXT, label TEXT, public INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL)',
+        'CREATE TABLE IF NOT EXISTS sessions_v2 (lower TEXT PRIMARY KEY, address TEXT NOT NULL, build_id TEXT, label TEXT, public INTEGER NOT NULL DEFAULT 0, season_id TEXT, players INTEGER NOT NULL DEFAULT 1, updated TEXT NOT NULL)',
       ),
     ])
       .then(async () => {
@@ -198,6 +198,8 @@ function schema(env) {
           'ALTER TABLE sessions_v2 ADD COLUMN build_id TEXT',
           'ALTER TABLE sessions_v2 ADD COLUMN label TEXT',
           'ALTER TABLE sessions_v2 ADD COLUMN public INTEGER NOT NULL DEFAULT 0',
+          'ALTER TABLE sessions_v2 ADD COLUMN season_id TEXT',
+          'ALTER TABLE sessions_v2 ADD COLUMN players INTEGER NOT NULL DEFAULT 1',
         ]) {
           try {
             await env.DB.prepare(sql).run()
@@ -284,11 +286,13 @@ async function summaryFor(env, user) {
     buildId: value.build_id || null,
     label: value.label || null,
     public: Boolean(value.public),
+    seasonId: value.season_id || null,
+    players: Math.max(1, Math.min(100, Number(value.players) || 1)),
     updated: value.updated,
   })
 
   const { results: live } = await env.DB.prepare(
-    `SELECT u.username AS name, s.address AS address, s.build_id, s.label, s.public, s.updated AS updated
+    `SELECT u.username AS name, s.address AS address, s.build_id, s.label, s.public, s.season_id, s.players, s.updated AS updated
        FROM sessions_v2 s
        JOIN users u ON u.lower = s.lower
        JOIN pairs_v2 p ON p.status = 'accepted' AND ((p.a = ? AND p.b = s.lower) OR (p.b = ? AND p.a = s.lower))
@@ -300,7 +304,7 @@ async function summaryFor(env, user) {
   const hosting = (live || []).map(row)
 
   const { results: open } = await env.DB.prepare(
-    `SELECT u.username AS name, s.address AS address, s.build_id, s.label, s.public, s.updated AS updated
+    `SELECT u.username AS name, s.address AS address, s.build_id, s.label, s.public, s.season_id, s.players, s.updated AS updated
        FROM sessions_v2 s
        JOIN users u ON u.lower = s.lower
       WHERE s.updated > ? AND s.lower != ?
@@ -313,7 +317,7 @@ async function summaryFor(env, user) {
   const lobbies = (open || []).map(row)
 
   const own = await env.DB.prepare(
-    `SELECT u.username AS name, s.address AS address, s.build_id, s.label, s.public, s.updated AS updated
+    `SELECT u.username AS name, s.address AS address, s.build_id, s.label, s.public, s.season_id, s.players, s.updated AS updated
        FROM sessions_v2 s
        JOIN users u ON u.lower = s.lower
       WHERE s.lower = ? AND s.updated > ?`,
@@ -578,14 +582,16 @@ export default {
       }
       const buildId = String(body.buildId || '').trim().slice(0, 80) || null
       const label = String(body.label || '').trim().slice(0, 80) || null
+      const seasonId = String(body.seasonId || '').trim().slice(0, 80) || null
+      const players = Math.max(1, Math.min(100, Number(body.players) || 1))
       const visibility = body.public === true ? 1 : 0
       await env.DB.prepare(
-        'INSERT INTO sessions_v2 (lower, address, build_id, label, public, updated) VALUES (?, ?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(lower) DO UPDATE SET address = excluded.address, build_id = excluded.build_id, label = excluded.label, public = excluded.public, updated = excluded.updated',
+        'INSERT INTO sessions_v2 (lower, address, build_id, label, public, season_id, players, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' +
+          'ON CONFLICT(lower) DO UPDATE SET address = excluded.address, build_id = excluded.build_id, label = excluded.label, public = excluded.public, season_id = excluded.season_id, players = excluded.players, updated = excluded.updated',
       )
-        .bind(user.lower, address, buildId, label, visibility, new Date().toISOString())
+        .bind(user.lower, address, buildId, label, visibility, seasonId, players, new Date().toISOString())
         .run()
-      return json({ ok: true, address, buildId, label, public: Boolean(visibility) })
+      return json({ ok: true, address, buildId, label, public: Boolean(visibility), seasonId, players })
     }
 
     if (request.method === 'POST' && url.pathname === '/api/session/clear') {

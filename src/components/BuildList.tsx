@@ -3,7 +3,7 @@ import { Check, FolderPlus } from 'lucide-react'
 import { artKeyFor, seasonImageFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { formatDownloadSize } from '../lib/downloadSize'
-import { LOCAL_PLAY_MODE, type SeasonPlayMode } from '../lib/playMode'
+import { DEFAULT_PLAY_MODE, onlinePlayerCount, onlineStatusLabel, type SeasonPlayMode } from '../lib/playMode'
 import type { Build } from '../types'
 
 interface BuildListProps {
@@ -18,7 +18,7 @@ interface BuildListProps {
   /** real VAULTED presence heartbeats, by season key */
   activeCounts?: Record<string, number>
   activeKey?: string | null
-  /** build id -> shared live ONLINE PLAY / LOCAL PLAY status */
+  /** build id -> shared live online status */
   playModes: Record<string, SeasonPlayMode>
   onSelect: (id: string) => void
   onAdd: () => void
@@ -59,22 +59,34 @@ export function BuildList({
         const active = build.id === activeId
         const art = seasonImageFor(build.season)
         const sourceKey = artKeyFor(build.season)
-        const playMode = playModes[build.id] ?? LOCAL_PLAY_MODE
-        const onlineProviderLabel = playMode.providerLabel
+        const playMode = playModes[build.id] ?? DEFAULT_PLAY_MODE
+        const onlineProviderLabel =
+          playMode.providerLabel || build.onlineProvider?.label || build.onlineProvider?.name || build.providerLabel
+        const communityPlayers = playMode.communityPlayerCount ?? 0
+        const communityProviderLabel = playMode.communityProviderLabel
+        const directoryProviders = playMode.directoryProviders ?? []
+        const communityDetail = [
+          communityPlayers > 0
+            ? `${communityProviderLabel || 'A community directory'} reports ${communityPlayers} player${communityPlayers === 1 ? '' : 's'}.`
+            : '',
+          directoryProviders.length > 0 ? `Directories list ${directoryProviders.join(', ')} for this season.` : '',
+        ]
+          .filter(Boolean)
+          .join(' ')
+        const directoryLabel =
+          directoryProviders.length > 0
+            ? `${directoryProviders.slice(0, 2).join(', ')}${directoryProviders.length > 2 ? ` +${directoryProviders.length - 2}` : ''}`
+            : ''
         const playingCount = Math.max(
           0,
           (sourceKey ? activeCounts?.[sourceKey] ?? 0 : 0) - (activeKey && activeKey === sourceKey ? 1 : 0),
         )
+        const onlinePlayers = onlinePlayerCount(playMode, playingCount)
+        const onlineStatus = onlineStatusLabel(onlinePlayers)
         const chapterChanged = index === 0 || builds[index - 1].season.chapter !== build.season.chapter
         const hasSource = Boolean(sourceKey && sourceKeys?.has(sourceKey))
         const sizeLabel = sourceKey && sourceSizes?.[sourceKey] ? formatDownloadSize(sourceSizes[sourceKey]) : null
-        const playModeTitle = onlineProviderLabel
-          ? `${onlineProviderLabel} hosts this season — Play opens it automatically.${playMode.lobbyCount > 0 ? ` ${playMode.lobbyCount} VAULTED ${playMode.lobbyCount === 1 ? 'lobby' : 'lobbies'} also listed.` : ''}`
-          : playMode.online
-            ? `${playMode.lobbyCount} live public VAULTED ${playMode.lobbyCount === 1 ? 'lobby' : 'lobbies'} · ${playMode.playerCount} player${playMode.playerCount === 1 ? '' : 's'} — Play joins one automatically.`
-            : playingCount
-            ? `${playingCount} other VAULTED player${playingCount === 1 ? '' : 's'} active here, but no public lobby is live. Play starts a match on this PC.`
-            : 'No public lobby is live for this season. Play starts a match on this PC.'
+        const playModeTitle = `${onlineStatus}${onlineProviderLabel ? ` · ${onlineProviderLabel}` : ''}.${communityDetail ? ` ${communityDetail}` : ''}`
 
         return (
           <Fragment key={build.id}>
@@ -124,7 +136,7 @@ export function BuildList({
                   <span className="flex items-center gap-1.5">
                     <span className="truncate text-[13px] font-semibold text-mist">{build.season.label}</span>
                     {active && <Check className="h-3.5 w-3.5 shrink-0 text-arc" />}
-                    {!build.placeholder && installed?.[build.id] === false && !build.onlineProvider && (
+                    {!build.placeholder && installed?.[build.id] === false && (
                       <span
                         title="Not downloaded on this PC"
                         className="shrink-0 rounded bg-amber-400/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-amber-300"
@@ -132,7 +144,7 @@ export function BuildList({
                         missing
                       </span>
                     )}
-                    {!installed?.[build.id] && !build.onlineProvider &&
+                    {!installed?.[build.id] &&
                       (hasSource ? (
                         <span
                           title={sizeLabel ? `${sizeLabel} download` : 'Download available for this season'}
@@ -154,37 +166,33 @@ export function BuildList({
                       title={playModeTitle}
                       aria-label={playModeTitle}
                       className={cx(
-                        'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em]',
-                        playMode.online
-                          ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
-                          : 'border-slate-400/15 bg-slate-400/[0.06] text-slate-400',
+                        'inline-flex min-w-0 max-w-full flex-wrap items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em]',
+                        onlinePlayers > 0
+                          ? 'border-emerald-300/45 bg-emerald-400/20 text-emerald-200 shadow-[0_0_16px_rgba(16,185,129,0.18)]'
+                          : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
                       )}
                     >
                       <span
                         className={cx(
-                          'h-1.5 w-1.5 rounded-full',
-                          playMode.online
-                            ? 'bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]'
-                            : 'bg-slate-500',
+                          'h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]',
+                          onlinePlayers > 0 && 'animate-pulse',
                         )}
                       />
-                      {playMode.label}
-                      {playMode.online && onlineProviderLabel && (
-                        <span className="text-emerald-200/80">· {onlineProviderLabel}</span>
-                      )}
-                      {playMode.online && playMode.playerCount > 0 && (
-                        <span className="text-emerald-200/80">
-                          · {playMode.playerCount} {playMode.playerCount === 1 ? 'player' : 'players'}
-                        </span>
-                      )}
+                      {onlineStatus}
                     </span>
                     <span className="min-w-0 truncate font-mono text-[11px] text-fog" title={build.path || 'Not downloaded'}>
-                      {build.onlineProvider
-                        ? `via ${build.onlineProvider.label || build.onlineProvider.name}`
-                        : build.folderName}
+                      {onlineProviderLabel ? `via ${onlineProviderLabel}` : build.folderName}
                       {!build.onlineProvider && !installed?.[build.id] && hasSource && ` · ${sizeLabel ?? 'size unavailable'}`}
                     </span>
                   </span>
+                  {directoryLabel && (
+                    <span
+                      title={`External directories list ${directoryProviders.join(', ')} for this season.`}
+                      className="mt-1 block truncate text-[9px] font-medium uppercase tracking-[0.06em] text-sky-200/70"
+                    >
+                      Listed by {directoryLabel}
+                    </span>
+                  )}
                 </span>
               </button>
             </div>

@@ -8,6 +8,7 @@
  */
 
 import defaultBuilds from '../assets/builds.json'
+import { FRIENDS_API_BASE, type LobbyInfo } from './friends'
 import type { OnlineProviderConfig, ShopEquipped } from '../types'
 
 export const API_BASE =
@@ -232,6 +233,244 @@ export interface ActiveCounts {
   total: number
 }
 
+/* ------------------------------------------------------- community servers */
+
+/** A live lobby returned by a configured public community directory. */
+export interface CommunityServer extends LobbyInfo {
+  id: string
+  name: string
+  host: string
+  port: number
+  providerId: string
+  providerLabel?: string
+  source: string
+  sourceLabel?: string
+  maxPlayers?: number
+}
+
+/**
+ * A provider/season report from a directory that has player fields but no
+ * joinable address. Kept separate from CommunityServer on purpose: these rows
+ * must never be joined or counted as public lobbies.
+ */
+export interface CommunityProviderStatus {
+  providerId: string
+  providerLabel: string
+  seasonId: string | null
+  online: boolean
+  players?: number
+  maxPlayers?: number
+  servers: number
+  region: string | null
+  playlist: string | null
+  updated: string
+  source: string
+  sourceLabel?: string
+}
+
+/** A curated external project directory row (provider + season mapping). */
+export interface CommunityDirectoryEntry {
+  providerId: string
+  providerLabel: string
+  seasonId: string | null
+  name: string
+  url: string | null
+  source: string
+  sourceLabel?: string
+}
+
+export interface CommunityServerQuery {
+  token?: string | null
+  seasonId?: string | null
+  providerId?: string | null
+  /** Bypass the failure cooldown so Play always checks every directory. */
+  force?: boolean
+}
+
+export interface CommunityServerResult {
+  servers: CommunityServer[]
+  statuses: CommunityProviderStatus[]
+  directories: CommunityDirectoryEntry[]
+  errors: Array<{ endpoint: string; message: string }>
+  checkedAt: string
+}
+
+function communityAddress(address: string, fallbackPort = 7777): { host: string; port: number } | null {
+  const value = String(address || '')
+    .trim()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+    .split('/')[0]
+  if (!value) return null
+  const split = value.lastIndexOf(':')
+  const host = (split > 0 ? value.slice(0, split) : value).replace(/^\[|\]$/g, '')
+  const port = Number(split > 0 ? value.slice(split + 1) : '') || fallbackPort
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) return null
+  return { host, port }
+}
+
+function sanitizeCommunityServer(value: unknown, index: number): CommunityServer | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  const address = communityAddress(String(raw.address || ''), Number(raw.port) || 7777)
+  if (!address) return null
+  const seasonId = typeof raw.seasonId === 'string' ? raw.seasonId : typeof raw.buildId === 'string' ? raw.buildId : null
+  const players = Number(raw.players)
+  const pingMs = Number(raw.pingMs)
+  const freshForMs = typeof raw.freshForMs === 'number' ? raw.freshForMs : undefined
+  return {
+    id: typeof raw.id === 'string' && raw.id ? raw.id : `community-${index}`,
+    name: typeof raw.name === 'string' && raw.name ? raw.name : 'Community lobby',
+    username: typeof raw.username === 'string' ? raw.username : 'community',
+    address: `${address.host}:${address.port}`,
+    host: address.host,
+    port: address.port,
+    buildId: seasonId,
+    seasonId,
+    label: typeof raw.label === 'string' ? raw.label : null,
+    public: raw.public !== false,
+    updated: typeof raw.updated === 'string' ? raw.updated : new Date().toISOString(),
+    freshForMs: typeof freshForMs === 'number' && Number.isFinite(freshForMs) && freshForMs >= 0 ? freshForMs : undefined,
+    players: Number.isFinite(players) && players > 0 ? Math.floor(players) : undefined,
+    playersKnown: typeof raw.playersKnown === 'boolean' ? raw.playersKnown : undefined,
+    pingMs: Number.isFinite(pingMs) && pingMs >= 0 ? Math.round(pingMs) : undefined,
+    providerId: typeof raw.providerId === 'string' ? raw.providerId : 'community',
+    providerLabel: typeof raw.providerLabel === 'string' ? raw.providerLabel : undefined,
+    source: typeof raw.source === 'string' ? raw.source : 'community',
+    sourceLabel: typeof raw.sourceLabel === 'string' ? raw.sourceLabel : undefined,
+    maxPlayers: Number(raw.maxPlayers) > 0 ? Math.floor(Number(raw.maxPlayers)) : undefined,
+    external: raw.external === true,
+  }
+}
+
+function sanitizeProviderStatus(value: unknown): CommunityProviderStatus | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  const providerId = typeof raw.providerId === 'string' ? raw.providerId.trim() : ''
+  if (!providerId) return null
+  const players = Number(raw.players)
+  const maxPlayers = Number(raw.maxPlayers)
+  const servers = Number(raw.servers)
+  return {
+    providerId,
+    providerLabel:
+      typeof raw.providerLabel === 'string' && raw.providerLabel ? raw.providerLabel : providerId,
+    seasonId: typeof raw.seasonId === 'string' ? raw.seasonId : null,
+    online: raw.online !== false,
+    players: Number.isFinite(players) && players > 0 ? Math.floor(players) : undefined,
+    maxPlayers: Number.isFinite(maxPlayers) && maxPlayers > 0 ? Math.floor(maxPlayers) : undefined,
+    servers: Number.isFinite(servers) && servers >= 0 ? Math.floor(servers) : 0,
+    region: typeof raw.region === 'string' ? raw.region : null,
+    playlist: typeof raw.playlist === 'string' ? raw.playlist : null,
+    updated: typeof raw.updated === 'string' ? raw.updated : new Date().toISOString(),
+    source: typeof raw.source === 'string' ? raw.source : 'community',
+    sourceLabel: typeof raw.sourceLabel === 'string' ? raw.sourceLabel : undefined,
+  }
+}
+
+function sanitizeDirectoryEntry(value: unknown): CommunityDirectoryEntry | null {
+  if (!value || typeof value !== 'object') return null
+  const raw = value as Record<string, unknown>
+  const providerId = typeof raw.providerId === 'string' ? raw.providerId.trim() : ''
+  if (!providerId) return null
+  return {
+    providerId,
+    providerLabel:
+      typeof raw.providerLabel === 'string' && raw.providerLabel ? raw.providerLabel : providerId,
+    seasonId: typeof raw.seasonId === 'string' ? raw.seasonId : null,
+    name: typeof raw.name === 'string' && raw.name ? raw.name : providerId,
+    url: typeof raw.url === 'string' && /^https?:\/\//i.test(raw.url) ? raw.url : null,
+    source: typeof raw.source === 'string' ? raw.source : 'community',
+    sourceLabel: typeof raw.sourceLabel === 'string' ? raw.sourceLabel : undefined,
+  }
+}
+
+function fallbackCommunityServers(payload: unknown): CommunityServer[] {
+  const lobbies = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === 'object'
+      ? (payload as { lobbies?: unknown }).lobbies
+      : null
+  if (!Array.isArray(lobbies)) return []
+  return lobbies
+    .map((lobby, index) => sanitizeCommunityServer(lobby, index))
+    .filter((server): server is CommunityServer => Boolean(server && server.public))
+}
+
+/**
+ * Reads the allowlisted public directories through the desktop shell. The
+ * browser fallback only uses the VAULTED summary so preview mode still shows
+ * counts without turning the renderer into an arbitrary URL fetcher.
+ */
+export async function fetchCommunityDirectory(
+  query: CommunityServerQuery = {},
+): Promise<CommunityServerResult> {
+  try {
+    const result = await window.arc?.fetchCommunityServers?.({
+      token: query.token ?? undefined,
+      seasonId: query.seasonId ?? undefined,
+      providerId: query.providerId ?? undefined,
+      force: query.force === true,
+    })
+    if (result) {
+      return {
+        servers: (Array.isArray(result.servers) ? result.servers : [])
+          .map((server, index) => sanitizeCommunityServer(server, index))
+          .filter((server): server is CommunityServer => Boolean(server && server.public)),
+        statuses: (Array.isArray(result.statuses) ? result.statuses : [])
+          .map(sanitizeProviderStatus)
+          .filter((status): status is CommunityProviderStatus => Boolean(status)),
+        directories: (Array.isArray(result.directories) ? result.directories : [])
+          .map(sanitizeDirectoryEntry)
+          .filter((entry): entry is CommunityDirectoryEntry => Boolean(entry)),
+        errors: Array.isArray(result.errors)
+          ? result.errors.filter(
+              (error): error is { endpoint: string; message: string } =>
+                Boolean(error && typeof error.endpoint === 'string' && typeof error.message === 'string'),
+            )
+          : [],
+        checkedAt: typeof result.checkedAt === 'string' ? result.checkedAt : new Date().toISOString(),
+      }
+    }
+  } catch {
+    /* fall through to the browser-safe relay query */
+  }
+
+  const empty: CommunityServerResult = {
+    servers: [],
+    statuses: [],
+    directories: [],
+    errors: [],
+    checkedAt: new Date().toISOString(),
+  }
+  if (!query.token) return empty
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT)
+  try {
+    const response = await fetch(`${FRIENDS_API_BASE}/summary`, {
+      headers: { authorization: `Bearer ${query.token}` },
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+    if (!response.ok) return empty
+    return {
+      ...empty,
+      servers: fallbackCommunityServers(await response.json()).filter((server) => {
+        if (query.seasonId && server.seasonId && server.seasonId !== query.seasonId) return false
+        if (query.providerId && server.providerId !== 'community' && server.providerId !== query.providerId) return false
+        return true
+      }),
+    }
+  } catch {
+    return empty
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export async function fetchCommunityServers(query: CommunityServerQuery = {}): Promise<CommunityServer[]> {
+  return (await fetchCommunityDirectory(query)).servers
+}
+
 export async function fetchActive(): Promise<ActiveCounts> {
   const data = await request<{ counts?: Record<string, number>; total?: number }>('/api/active')
   return { counts: data.counts ?? {}, total: data.total ?? 0 }
@@ -371,12 +610,4 @@ export function compareVersions(a: string, b: string): number {
     if (diff !== 0) return diff > 0 ? 1 : -1
   }
   return 0
-}
-
-export async function openExternal(url: string): Promise<void> {
-  if (typeof window !== 'undefined' && window.arc?.openExternal) {
-    await window.arc.openExternal(url)
-    return
-  }
-  window.open(url, '_blank', 'noopener,noreferrer')
 }

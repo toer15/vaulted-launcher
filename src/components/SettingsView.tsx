@@ -88,7 +88,6 @@ export function SettingsView({
   onRestartToUpdate,
 }: SettingsViewProps) {
   const art = build ? artFor(build.season) : null
-  const providerReady = Boolean(build?.onlineProvider)
   const activeSource = cloudSourceUrl || manifestUrl()
   const [cloudUrl, setCloudUrl] = useState(cloudSourceUrl)
   const [cloudDir, setCloudDir] = useState(cloudInstallDir)
@@ -135,17 +134,17 @@ export function SettingsView({
               <span
                                 className={cx(
                   'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-medium',
-                  installed || providerReady
+                  installed
                     ? 'border-emerald-400/30 bg-emerald-400/[0.07] text-emerald-300'
                     : 'border-amber-400/30 bg-amber-400/[0.07] text-amber-300',
                 )}
               >
-                {installed || providerReady ? (
+                {installed ? (
                   <ShieldCheck className="h-3 w-3" />
                 ) : (
                   <TriangleAlert className="h-3 w-3" />
                 )}
-                {providerReady ? 'Provider ready' : installed ? 'Installed' : 'Not installed'}
+                {installed ? 'Installed' : 'Not installed'}
               </span>
             )}
           </div>
@@ -156,7 +155,7 @@ export function SettingsView({
             <div className="min-w-0">
               <p className="text-[12px] font-semibold text-mist">Global defaults</p>
               <p className="mt-1 text-[11px] leading-relaxed text-fog">
-                Online seasons open their bundled community provider automatically. Local seasons use this builds root.
+                Online seasons download here, then Play launches the client straight into the bundled provider backend. Local seasons use this builds root.
               </p>
             </div>
             <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.06] px-2.5 py-1 text-[10px] font-semibold text-emerald-300">
@@ -266,7 +265,7 @@ export function SettingsView({
               </button>
               <p className="text-[11px] leading-relaxed text-fog">
                 {build.onlineProvider ? (
-                  `Play opens ${build.onlineProvider.name} automatically — no executable or server setup needed.`
+                  `Play joins the healthiest public server through the bundled runtime, or starts a local lobby if none are up — no installer or external launcher.`
                 ) : (
                   <>
                     VAULTED launches{' '}
