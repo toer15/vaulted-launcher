@@ -32,6 +32,17 @@ export interface OnlineProviderConfig {
   label: string
 }
 
+/** A live health/population sample for one configured global backend. */
+export interface ProviderLiveStatus {
+  providerId: string
+  online: boolean
+  players?: number
+  /** Reachable backend count; at least 1 when a global backend is online. */
+  servers: number
+  pingMs?: number
+  checkedAt: string
+}
+
 /** A live global OGFN backend configured in resources/providers/provider.json. */
 export interface GlobalBackend extends OnlineProviderConfig {
   backendUrl: string
@@ -42,6 +53,8 @@ export interface GlobalBackend extends OnlineProviderConfig {
   mode?: 'download' | 'global_live'
   global: boolean
   supportedSeasons: string[]
+  /** refreshed by the main-process health poll */
+  live?: ProviderLiveStatus
 }
 
 export interface ProviderAuthStatus {
@@ -109,11 +122,20 @@ export interface DownloadState {
   sha256?: string | null
 }
 
+export interface ToastAction {
+  label: string
+  onClick: () => void
+}
+
 export interface ToastMessage {
   id: string
   title: string
   description?: string
   tone: 'success' | 'info' | 'error'
+  /** Optional one-click action shown below the message. */
+  action?: ToastAction
+  /** Keep actionable errors visible longer than normal notifications. */
+  ttlMs?: number
 }
 
 export type ShopItemType =

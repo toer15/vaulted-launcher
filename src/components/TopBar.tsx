@@ -1,4 +1,4 @@
-import { LayoutGrid, LockKeyhole, Radio, Settings2, Sparkles, Store, Users } from 'lucide-react'
+import { LayoutGrid, LockKeyhole, LogIn, Radio, Settings2, Sparkles, Store, Users } from 'lucide-react'
 import brandIcon from '../assets/brand-icon.png'
 import { AccountChip } from './AccountChip'
 import { WindowControls } from './WindowControls'
@@ -19,6 +19,8 @@ interface TopBarProps {
   communityOnline?: number
   /** provider-only identity: global play works, VAULTED socials are gated */
   providerOnly?: boolean
+  /** a VAULTED or verified provider session is active */
+  signedIn?: boolean
   settingsActive: boolean
   shopActive: boolean
   friendsActive: boolean
@@ -27,6 +29,7 @@ interface TopBarProps {
   onOpenSettings: () => void
   onOpenShop: () => void
   onOpenFriends: () => void
+  onSignIn: () => void
   onLogout: () => void
 }
 
@@ -39,6 +42,7 @@ export function TopBar({
   onlineStatus,
   communityOnline,
   providerOnly = false,
+  signedIn = true,
   settingsActive,
   shopActive,
   friendsActive,
@@ -47,8 +51,11 @@ export function TopBar({
   onOpenSettings,
   onOpenShop,
   onOpenFriends,
+  onSignIn,
   onLogout,
 }: TopBarProps) {
+  const friendsLocked = providerOnly || !signedIn
+
   return (
     <header className="app-drag flex items-center justify-between gap-3">
       <div className="flex min-w-0 items-center gap-3">
@@ -81,16 +88,20 @@ export function TopBar({
         <span
           className={cx(
             'hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-medium md:inline-flex',
-            providerOnly || onlineStatus === 'connected' || (communityOnline ?? 0) > 0
-              ? 'border-emerald-400/30 bg-emerald-400/[0.07] text-emerald-300'
-              : onlineStatus === 'checking'
-                ? 'border-sky-400/30 bg-sky-400/[0.07] text-sky-300'
-                : 'border-amber-400/25 bg-amber-400/[0.06] text-amber-200/90',
+            !signedIn
+              ? 'border-amber-400/25 bg-amber-400/[0.06] text-amber-200/90'
+              : providerOnly || onlineStatus === 'connected' || (communityOnline ?? 0) > 0
+                ? 'border-emerald-400/30 bg-emerald-400/[0.07] text-emerald-300'
+                : onlineStatus === 'checking'
+                  ? 'border-sky-400/30 bg-sky-400/[0.07] text-sky-300'
+                  : 'border-amber-400/25 bg-amber-400/[0.06] text-amber-200/90',
           )}
           title={
-            providerOnly
-              ? 'Provider account · global matchmaking ready. Friends and the VAULTED relay are gated.'
-              : onlineStatus === 'connected'
+            !signedIn
+              ? 'Sign in to unlock Download and Play across every season.'
+              : providerOnly
+                ? 'Provider account · global matchmaking ready. Friends and the VAULTED relay are gated.'
+                : onlineStatus === 'connected'
                 ? `Matchmaking service connected${native ? ' · desktop bridge ready' : ' · desktop bridge unavailable'}`
                 : (communityOnline ?? 0) > 0
                   ? `${communityOnline} seasons mapped to community providers${native ? ' · desktop bridge ready' : ''}`
@@ -100,9 +111,11 @@ export function TopBar({
           }
         >
           <Radio className="h-3 w-3" />
-          {providerOnly
-            ? 'Global play'
-            : onlineStatus === 'connected'
+          {!signedIn
+            ? 'Sign in required'
+            : providerOnly
+              ? 'Global play'
+              : onlineStatus === 'connected'
               ? 'Bridge connected'
               : (communityOnline ?? 0) > 0
                 ? 'Community online'
@@ -130,16 +143,18 @@ export function TopBar({
         <button
           type="button"
           onClick={onOpenFriends}
-          aria-pressed={friendsActive && !providerOnly}
-          disabled={providerOnly}
+          aria-pressed={friendsActive && !friendsLocked}
+          disabled={friendsLocked}
           title={
             providerOnly
               ? 'Friends and the VAULTED relay need a VAULTED account. Global provider play is still ready.'
-              : 'Friends'
+              : !signedIn
+                ? 'Sign in to use Friends and the VAULTED relay.'
+                : 'Friends'
           }
           className={cx(
             'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300',
-            providerOnly
+            friendsLocked
               ? 'cursor-not-allowed border-line/70 bg-panel/40 text-fog/50'
               : friendsActive
                 ? 'border-arc/50 bg-arc/15 text-white'
@@ -147,8 +162,8 @@ export function TopBar({
           )}
         >
           <span className="relative">
-            {providerOnly ? <LockKeyhole className="h-4 w-4" /> : <Users className="h-4 w-4" />}
-            {!providerOnly && friendRequests > 0 && (
+            {friendsLocked ? <LockKeyhole className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+            {!friendsLocked && friendRequests > 0 && (
               <span className="absolute -right-2 -top-2 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">
                 {friendRequests}
               </span>
@@ -187,7 +202,17 @@ export function TopBar({
         </button>
 
         <div className="app-no-drag">
-          <AccountChip account={account} onLogout={onLogout} />
+          {signedIn ? (
+            <AccountChip account={account} onLogout={onLogout} />
+          ) : (
+            <button
+              type="button"
+              onClick={onSignIn}
+              className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/35 bg-emerald-400/[0.1] px-3.5 py-2 text-[12px] font-semibold text-emerald-100 transition-colors duration-200 hover:border-emerald-400/65 hover:bg-emerald-400/15 hover:text-white"
+            >
+              <LogIn className="h-4 w-4" /> Sign in
+            </button>
+          )}
         </div>
 
         {hasWindowControls() && <WindowControls />}

@@ -19,6 +19,7 @@ const {
 } = require('./onlineProviders.cjs')
 const { fetchCommunityServers, normalizeHostPort, probePing } = require('./communityServers.cjs')
 const { createProviderAuth } = require('./providerAuth.cjs')
+const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 
 const { botFillPreferences } = require('./botFill.cjs')
 
@@ -3534,6 +3535,67 @@ async function verifyBuild(payload) {
   return report
 }
 
+const PROVIDER_ACCOUNT_STATUS_PREFIX = 'VAULTED_PROVIDER_ACCOUNT_STATUS:'
+
+/** Turn a structured provider account status into an actionable launch error. */
+function providerAccountIssue(profile, error) {
+  // Only let providerAuth's structured account status through this path. A
+  // transport error code such as ECONNRESET must keep its normal launch error.
+  if (!error?.accountStatus && error?.verificationRequired !== true) return null
+  const code = String(error?.accountStatus || error?.code || 'verification_required').toLowerCase()
+  const verification =
+    error?.verificationRequired === true ||
+    /(?:^|_)(?:verification|verify|verified|discord|guild|membership|whitelist)(?:_|$)/.test(code)
+  const providerName = String(profile?.name || profile?.label || profile?.id || 'the provider')
+  const providerLabel = String(profile?.label || providerName)
+  const issuer = providerLabel
+  const rawWebsite = String(profile?.website || profile?.signInUrl || '').trim()
+  const website = /^https?:\/\//i.test(rawWebsite)
+    ? rawWebsite.replace(/\/+$/, '')
+    : profile?.id === 'era'
+      ? 'https://erafn.dev'
+      : ''
+  const isEra = profile?.id === 'era'
+  const accountLabel = isEra ? 'Discord/Era' : providerLabel
+  const destination = isEra
+    ? "Project Era's official Discord server"
+    : `${providerName}'s official account page`
+
+  let message
+  if (verification) {
+    const link = website ? ` (${website})` : ''
+    const open = website
+      ? ` Open ${website}, complete verification, then press Retry.`
+      : ' Complete verification, then press Retry.'
+    message =
+      `Your signed-in ${accountLabel} account needs one-time verification in ` +
+      `${destination}${link} before ${issuer} will issue game launch codes.${open}`
+  } else {
+    const link = website ? ` Check ${website}, then press Retry.` : ' Check your account, then press Retry.'
+    let reason = 'The provider rejected this account status.'
+    if (/banned|suspended|disabled/.test(code)) {
+      reason = `${providerName} has suspended or banned this account, so it cannot receive launch codes right now.`
+    } else if (/restricted|locked|whitelist|role/.test(code)) {
+      reason = `This account is restricted or missing a required ${providerName} role or whitelist entry.`
+    } else if (/not_found|missing/.test(code)) {
+      reason = `The provider could not find this signed-in account. Sign in again from the season card.`
+    } else if (/link_required|not_linked/.test(code)) {
+      reason = `This account needs to be linked to ${providerName} before it can receive launch codes.`
+    }
+    message = `Your signed-in ${accountLabel} account cannot receive ${issuer} game launch codes right now. ${reason}${link}`
+  }
+
+  return {
+    code: code || 'account_status',
+    providerId: String(profile?.id || ''),
+    providerLabel,
+    providerName,
+    website,
+    verificationRequired: verification,
+    message,
+  }
+}
+
 /**
  * Launch a downloaded season directly inside VAULTED. The bundled provider
  * profile supplies the backend URL and the redirect DLL; no vendor installer
@@ -3543,7 +3605,12 @@ async function verifyBuild(payload) {
  */
 async function launchOnlineProvider(payload) {
   const id = typeof payload?.id === 'string' ? payload.id : ''
-  const providerId = typeof payload?.providerId === 'string' ? payload.providerId : ''
+  // Provider identity is account-wide; casing or a legacy season suffix must
+  // never create a second session or a second launch path.
+  const providerId =
+    typeof payload?.providerId === 'string'
+      ? payload.providerId.trim().toLowerCase().split(':')[0]
+      : ''
   if (!id || !providerId) throw new Error('Invalid online provider launch request.')
   if (running.has(id)) throw new Error('This season is already running.')
 
@@ -3611,21 +3678,30 @@ async function launchOnlineProvider(payload) {
   const launchPayload = { ...payload, path: folder, executable }
   assertBuild(launchPayload)
 
-  let authCode = normalizeProviderAuthCode(payload?.authCode)
-  if (profile.auth === 'oauth') {
-    try {
-      const exchange = await providerAuth.exchangeCode(providerId, { seasonId, version })
-      authCode = normalizeProviderAuthCode(exchange.code)
-      if (!authCode) throw new Error('The provider returned an invalid login code.')
-    } catch (error) {
+  if (profile.auth !== 'oauth') {
+    throw new Error(
+      `VAULTED requires verified in-app sign-in for ${profile.label}. Manual provider codes are no longer supported.`,
+    )
+  }
+
+  let authCode = ''
+  try {
+    const exchange = await providerAuth.exchangeCode(providerId, { seasonId, version })
+    authCode = normalizeProviderAuthCode(exchange.code)
+    if (!authCode) throw new Error('The provider returned an invalid login code.')
+  } catch (error) {
+    const issue = providerAccountIssue(profile, error)
+    if (issue) {
+      // Keep the friendly explanation first, then carry an opaque marker so the
+      // renderer can offer the correct account action without exposing a raw
+      // verification code or losing the status through Electron IPC.
       throw new Error(
-        `VAULTED could not get a fresh ${profile.label} login code.\n\n` +
-          `${error instanceof Error ? error.message : String(error)}`,
+        `${issue.message}\n${PROVIDER_ACCOUNT_STATUS_PREFIX}${JSON.stringify(issue)}`,
       )
     }
-  } else if (profile.auth === 'exchangeCode' && !authCode) {
     throw new Error(
-      `Sign in to ${profile.label} first. Open the provider in your browser, copy a fresh exchange code, then paste it on the season card.`,
+      `VAULTED could not get a fresh ${profile.label} login code.\n\n` +
+        `${error instanceof Error ? error.message : String(error)}`,
     )
   }
 
@@ -4007,13 +4083,28 @@ function registerIpc() {
 
   ipcMain.handle('arc:provider-auth-status', () => providerAuth.statuses())
 
-  ipcMain.handle('arc:provider-auth-login', (_event, providerId) =>
-    providerAuth.login(providerId),
-  )
+  // Backend health is deliberately checked in main, where the provider catalog
+  // is trusted and the renderer cannot turn this into an arbitrary URL fetch.
+  ipcMain.handle('arc:provider-live-status', () => fetchProviderLiveStatuses(providerCatalog()))
 
-  ipcMain.handle('arc:provider-auth-logout', (_event, providerId) =>
-    providerAuth.logout(providerId),
-  )
+  const broadcastProviderAuth = (status) => {
+    if (!status?.providerId) return
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('arc:provider-auth-changed', status)
+    }
+  }
+
+  ipcMain.handle('arc:provider-auth-login', async (_event, providerId, method) => {
+    const status = await providerAuth.login(providerId, { method })
+    broadcastProviderAuth(status)
+    return status
+  })
+
+  ipcMain.handle('arc:provider-auth-logout', async (_event, providerId) => {
+    const status = await providerAuth.logout(providerId)
+    broadcastProviderAuth(status)
+    return status
+  })
 
   ipcMain.on('arc:provider-auth-close', (event) => {
     const sender = BrowserWindow.fromWebContents(event.sender)

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActiveBuildCard } from './components/ActiveBuildCard'
 import { AddBuildDialog } from './components/AddBuildDialog'
-import { ProviderSignInDialog } from './components/ProviderSignInDialog'
-import { AuthScreen } from './components/AuthScreen'
+import { SignInModal } from './components/SignInModal'
 import { BuildDrawer } from './components/BuildDrawer'
 import { FriendsView } from './components/FriendsView'
 import { ItemShopView } from './components/ItemShopView'
@@ -55,7 +54,9 @@ import {
   fetchCommunityDirectory,
   fetchManifest,
   fetchMe,
+  fetchProviderLiveStatuses,
   loadSession,
+  normalizeProviderId,
   saveSession,
   sendHeartbeat,
   signOut,
@@ -85,6 +86,7 @@ import {
 } from './lib/profiles'
 import { loadCloudSettings, persistCloudSettings, readLocalCloudSettings, type CloudSettings } from './lib/cloudSettings'
 import { normalizeCloudUrl, resolveCloudSource, type CloudSourceMode } from './lib/cloudSource'
+import { parseProviderAccountIssue } from './lib/providerErrors'
 import defaultBuilds from './assets/builds.json'
 import { buildForSeason, ensureAllSeasons, seedBuilds, sortBuilds } from './lib/sampleBuilds'
 import { loadState, saveState, uid } from './lib/storage'
@@ -100,6 +102,7 @@ import type {
   GlobalBackend,
   LaunchPhase,
   ProviderAuthStatus,
+  ProviderLiveStatus,
   SeasonInfo,
   ToastMessage,
 } from './types'
@@ -124,6 +127,28 @@ function lobbyTarget(address: string): { host: string; port: number } | null {
   return host ? { host, port } : null
 }
 
+/** Open the provider's verification page in the desktop browser, with a web fallback. */
+function openExternalUrl(rawUrl: string) {
+  const url = /^https?:\/\//i.test(rawUrl) ? rawUrl : 'https://erafn.dev'
+  const fallback = () => {
+    try {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch {
+      /* the browser blocked the popup; the URL is still available in the banner */
+    }
+  }
+  const bridge = window.arc?.openExternal
+  if (!bridge) {
+    fallback()
+    return
+  }
+  void bridge(url)
+    .then((result) => {
+      if (!result?.ok) fallback()
+    })
+    .catch(fallback)
+}
+
 const MANUAL_SERVERS_KEY = 'vaulted.manualServers.v1'
 
 interface ManualServerRecord {
@@ -133,6 +158,9 @@ interface ManualServerRecord {
   seasonId: string
   addedAt: number
   pingMs?: number
+  /** last 10-second reachability probe; a failed probe removes the row */
+  online?: boolean
+  lastSeen?: number
 }
 
 function readManualServers(): Record<string, ManualServerRecord[]> {
@@ -215,8 +243,8 @@ function manualServerOptions(
         buildId: seasonId,
         seasonId,
         label: null,
-        public: true,
-        updated: new Date(record.addedAt).toISOString(),
+        public: record.online !== false,
+        updated: new Date(record.lastSeen ?? record.addedAt).toISOString(),
         freshForMs: 0,
         playersKnown: false,
         pingMs: record.pingMs,
@@ -320,7 +348,12 @@ export default function App() {
   const [view, setView] = useState<'home' | 'shop' | 'settings' | 'friends'>('home')
   const [friendRequests, setFriendRequests] = useState(0)
   const [verifyJobs, setVerifyJobs] = useState<Record<string, VerifyJob>>({})
-  const [launchFailure, setLaunchFailure] = useState<{ id: string; message: string; local?: boolean } | null>(null)
+  const [launchFailure, setLaunchFailure] = useState<{
+    id: string
+    message: string
+    local?: boolean
+    verificationUrl?: string
+  } | null>(null)
   const [launchStage, setLaunchStage] = useState<string | null>(null)
   const localSessionRef = useRef<string | null>(null)
   // Play can await a fresh directory scan; this prevents a double-click from
@@ -343,12 +376,10 @@ export default function App() {
   const [onlineLobbies, setOnlineLobbies] = useState<LobbyInfo[]>([])
   const [communityServers, setCommunityServers] = useState<CommunityServer[]>([])
   const [providerCatalog, setProviderCatalog] = useState<GlobalBackend[]>([])
+  const [providerLiveStatus, setProviderLiveStatus] = useState<Record<string, ProviderLiveStatus>>({})
   const [manualServers, setManualServers] = useState<Record<string, ManualServerRecord[]>>(() =>
     readManualServers(),
   )
-  // One-time provider codes stay in memory for this launch session only. They
-  // are never written to localStorage, settings or logs.
-  const [providerCodes, setProviderCodes] = useState<Record<string, string>>({})
   // OAuth sessions are encrypted on disk by Electron main; the renderer only
   // receives a signed-in flag and display name.
   const [providerAuthStatus, setProviderAuthStatus] = useState<Record<string, ProviderAuthStatus>>({})
@@ -359,6 +390,21 @@ export default function App() {
     provider: GlobalBackend
     server?: { host: string; port: number; name?: string; seasonId?: string | null }
   } | null>(null)
+  const [signInOpen, setSignInOpen] = useState(false)
+  const verifiedOAuthProviders = useMemo(
+    () =>
+      providerCatalog
+        .filter(
+          (provider) => provider.global && provider.auth === 'oauth' && provider.mode === 'global_live',
+        )
+        .map((provider) => ({ ...provider, live: providerLiveStatus[provider.id] })),
+    [providerCatalog, providerLiveStatus],
+  )
+  const providerVerified = useMemo(
+    () => verifiedOAuthProviders.some((provider) => providerAuthStatus[provider.id]?.signedIn),
+    [providerAuthStatus, verifiedOAuthProviders],
+  )
+  const signedIn = Boolean(session) || providerVerified
   // Per-season manual choice from the hero server dropdown. A missing entry
   // means the external router's automatic best live server.
   const [serverSelections, setServerSelections] = useState<Record<string, string>>({})
@@ -609,13 +655,16 @@ export default function App() {
   const activeVerifyJob = activeBuild ? (verifyJobs[activeBuild.id] ?? null) : null
   const activeLaunchFailure = launchFailure?.id === activeBuild?.id ? launchFailure.message : null
   const activeLaunchFailureLocal = launchFailure?.id === activeBuild?.id && launchFailure.local === true
+  const activeLaunchVerificationUrl =
+    launchFailure?.id === activeBuild?.id ? launchFailure.verificationUrl ?? null : null
 
   const providerIdentity = useMemo(() => {
-    const signedIn = providerCatalog.filter(
-      (provider) => provider.auth === 'oauth' && providerAuthStatus[provider.id]?.signedIn,
+    const providersSignedIn = verifiedOAuthProviders.filter(
+      (provider) => providerAuthStatus[provider.id]?.signedIn,
     )
     const preferred =
-      signedIn.find((provider) => provider.id === activeBuild?.onlineProvider?.id) ?? signedIn[0]
+      providersSignedIn.find((provider) => provider.id === activeBuild?.onlineProvider?.id) ??
+      providersSignedIn[0]
     if (!preferred) return null
     const status = providerAuthStatus[preferred.id]
     return {
@@ -624,7 +673,7 @@ export default function App() {
       displayName: status?.displayName || null,
       avatarUrl: status?.avatarUrl || null,
     }
-  }, [activeBuild?.onlineProvider?.id, providerAuthStatus, providerCatalog])
+  }, [activeBuild?.onlineProvider?.id, providerAuthStatus, verifiedOAuthProviders])
 
   const account: Account = useMemo(() => {
     const username = providerIdentity?.displayName || session?.user.username || 'player'
@@ -673,7 +722,7 @@ export default function App() {
         account.username,
         communityStatuses,
         communityDirectories,
-        providerCatalog,
+        verifiedOAuthProviders,
       ),
     [
       account.username,
@@ -683,7 +732,7 @@ export default function App() {
       discoverableLobbies,
       hostedLobby,
       lanIp,
-      providerCatalog,
+      verifiedOAuthProviders,
     ],
   )
   const activePlayMode = activeBuild ? playModes[activeBuild.id] : undefined
@@ -697,10 +746,8 @@ export default function App() {
   )
   const activeGlobalBackends = useMemo(() => {
     if (!activeKey) return []
-    return providerCatalog.filter(
-      (provider) => provider.global && provider.supportedSeasons.includes(activeKey),
-    )
-  }, [activeKey, providerCatalog])
+    return verifiedOAuthProviders.filter((provider) => provider.supportedSeasons.includes(activeKey))
+  }, [activeKey, verifiedOAuthProviders])
   const selectedServerValue = activeBuild ? serverSelections[activeBuild.id] : undefined
   const selectedGlobalBackend = selectedServerValue?.startsWith('global:')
     ? activeGlobalBackends.find((provider) => provider.id === selectedServerValue.slice('global:'.length)) ?? null
@@ -872,9 +919,119 @@ export default function App() {
     }
   }, [])
 
+  const refreshProviderLiveStatus = useCallback(async () => {
+    if (!window.arc?.providerLiveStatus) return
+    try {
+      setProviderLiveStatus(await fetchProviderLiveStatuses())
+    } catch {
+      /* keep the last good backend sample */
+    }
+  }, [])
+
+  // Backend health/population is refreshed while VAULTED is open. The server
+  // dropdown and hero badge read this map; a selected change refreshes it below.
+  useEffect(() => {
+    if (!window.arc?.providerLiveStatus) return
+    let cancelled = false
+    let timer = 0
+    const poll = async () => {
+      await refreshProviderLiveStatus()
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 10_000)
+    }
+    void poll()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [refreshProviderLiveStatus])
+
   useEffect(() => {
     void refreshProviderAuthStatus()
   }, [refreshProviderAuthStatus])
+
+  // Switching seasons or a dropdown row is a user-visible selection change:
+  // refresh immediately instead of waiting for the next 10-second tick.
+  useEffect(() => {
+    void refreshProviderLiveStatus()
+  }, [activeKey, selectedServerValue, refreshProviderLiveStatus])
+
+  // Saved custom IPs are not directories; probe them on the same 10-second
+  // cadence so an offline row disappears and a live row keeps a fresh ping.
+  useEffect(() => {
+    if (!native || !window.arc?.probeServer) return
+    let cancelled = false
+    let timer = 0
+    const poll = async () => {
+      const targets = new Map<string, ManualServerRecord>()
+      for (const records of Object.values(manualServersRef.current)) {
+        for (const record of records) {
+          targets.set(`${record.host.toLowerCase()}:${record.port}`, record)
+        }
+      }
+      if (targets.size > 0) {
+        const probes = await Promise.all(
+          [...targets.values()].map(async (record) => {
+            try {
+              const result = await window.arc!.probeServer!({ host: record.host, port: record.port })
+              return [
+                `${record.host.toLowerCase()}:${record.port}`,
+                { online: result?.reachable === true, pingMs: result?.pingMs },
+              ] as const
+            } catch {
+              return [`${record.host.toLowerCase()}:${record.port}`, { online: false, pingMs: undefined }] as const
+            }
+          }),
+        )
+        if (!cancelled) {
+          const byAddress = new Map(probes)
+          setManualServers((prev) => {
+            let changed = false
+            const next: Record<string, ManualServerRecord[]> = {}
+            for (const [seasonId, records] of Object.entries(prev)) {
+              next[seasonId] = records.map((record) => {
+                const probe = byAddress.get(`${record.host.toLowerCase()}:${record.port}`)
+                if (!probe) return record
+                const online = probe.online
+                const pingMs = probe.pingMs
+                if (record.online === online && record.pingMs === pingMs) return record
+                changed = true
+                return {
+                  ...record,
+                  online,
+                  pingMs,
+                  ...(online ? { lastSeen: Date.now() } : {}),
+                }
+              })
+            }
+            return changed ? next : prev
+          })
+        }
+      }
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 10_000)
+    }
+    void poll()
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [native])
+
+  // A provider login applies to every catalog season mapped to that provider.
+  // Main broadcasts the provider-wide status so no other season asks again.
+  useEffect(() => {
+    const subscribe = window.arc?.providerAuth?.onProviderAuthChanged
+    if (!subscribe) return
+    return subscribe((status) => {
+      const providerId = normalizeProviderId(status?.providerId)
+      if (!providerId) return
+      const next = {
+        ...providerAuthRef.current,
+        [providerId]: { ...status, providerId },
+      }
+      providerAuthRef.current = next
+      setProviderAuthStatus(next)
+    })
+  }, [])
 
   useEffect(() => {
     saveManualServers(manualServers)
@@ -904,26 +1061,27 @@ export default function App() {
   // mixed-content restriction) so every card can show live lobby and player
   // counts even when a provider has no VAULTED relay presence.
   useEffect(() => {
-    if (!onlineToken) setCommunityServers([])
     let cancelled = false
     let timer = 0
     const poll = async () => {
-      // Refresh every 15 seconds and bypass the failure cooldown so the counts
+      // Refresh every 10 seconds and bypass the failure cooldown so the counts
       // on every card are the directories' current populations, not a cache.
+      // Public endpoints are polled even without a VAULTED token; the relay
+      // endpoint simply skips account auth when no token exists.
       const directory = await fetchCommunityDirectory({ token: onlineToken, force: true })
       if (!cancelled) {
         setCommunityServers(directory.servers)
         setCommunityStatuses(directory.statuses)
         setCommunityDirectories(directory.directories)
       }
-      if (!cancelled) timer = window.setTimeout(() => void poll(), 15_000)
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 10_000)
     }
     void poll()
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [onlineToken])
+  }, [onlineToken, activeKey, selectedServerValue])
 
   // heartbeat the season being viewed, then show live counts
   useEffect(() => {
@@ -1125,7 +1283,7 @@ export default function App() {
     setToasts((prev) => [...prev, { ...toast, id }])
     window.setTimeout(() => {
       setToasts((prev) => prev.filter((item) => item.id !== id))
-    }, TOAST_TTL)
+    }, toast.ttlMs ?? TOAST_TTL)
   }, [])
 
   const dismissToast = useCallback((id: string) => {
@@ -1689,7 +1847,6 @@ export default function App() {
         /** true when this target belongs to a different season */
         fallback?: boolean
       },
-      authCode?: string,
     ): Promise<boolean> => {
       if (!window.arc?.launchOnlineProvider) {
         pushToast({
@@ -1700,12 +1857,32 @@ export default function App() {
         return false
       }
 
-      const oauthSignedIn =
-        provider.auth === 'oauth' &&
-        Boolean(providerAuthRef.current[provider.id]?.signedIn || session?.user.providerId === provider.id)
-      if ((provider.auth === 'exchangeCode' && !authCode) || (provider.auth === 'oauth' && !oauthSignedIn)) {
+      if (provider.auth !== 'oauth') {
+        pushToast({
+          tone: 'info',
+          title: 'Verified sign-in only',
+          description: 'VAULTED no longer supports manual provider codes. Use a verified in-app sign-in provider.',
+        })
+        return false
+      }
+      let oauthSignedIn = Boolean(
+        providerAuthRef.current[provider.id]?.signedIn ||
+          normalizeProviderId(session?.user.providerId) === provider.id,
+      )
+      if (!oauthSignedIn) {
+        // A provider session may already exist in the encrypted main-process
+        // store while the renderer is still starting. Refresh once before
+        // asking the player to link the same provider again.
+        await refreshProviderAuthStatus()
+        oauthSignedIn = Boolean(
+          providerAuthRef.current[provider.id]?.signedIn ||
+            normalizeProviderId(session?.user.providerId) === provider.id,
+        )
+      }
+      if (!oauthSignedIn) {
         setProviderAuthPrompt({ build, provider, server })
-        // Handled by the sign-in dialog, not a launch failure.
+        setSignInOpen(true)
+        // Handled by the secure account-link modal, not a launch failure.
         return true
       }
 
@@ -1720,7 +1897,7 @@ export default function App() {
           : `Starting ${build.season.label} in ${providerLabel}…`,
       )
       try {
-        const result = await launchOnlineProvider(build, provider, server, authCode)
+        const result = await launchOnlineProvider(build, provider, server)
         if (!result.launched) throw new Error(`${providerLabel} could not be started.`)
         const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
           setRunningId(build.id)
@@ -1748,16 +1925,51 @@ export default function App() {
         return applied || result.launched
       } catch (error) {
         launchAttempts.commitIfCurrent(attemptToken, () => {
-          const message = error instanceof Error ? error.message : `${providerLabel} could not be started.`
-          setLaunchFailure({ id: build.id, message })
+          const parsedIssue = parseProviderAccountIssue(error)
+          const providerIssue = parsedIssue?.issue
+          const message =
+            parsedIssue?.message ||
+            (error instanceof Error ? error.message : `${providerLabel} could not be started.`)
+          const verificationUrl =
+            providerIssue?.verificationRequired === true
+              ? providerIssue.website || (providerIssue.providerId === 'era' ? 'https://erafn.dev' : '')
+              : undefined
+          setLaunchFailure({
+            id: build.id,
+            message,
+            ...(verificationUrl ? { verificationUrl } : {}),
+          })
           setPhase('error')
           setLaunchStage(null)
-          pushToast({ tone: 'error', title: `${providerLabel} launch failed`, description: message })
+          pushToast({
+            tone: 'error',
+            title:
+              providerIssue?.verificationRequired === true
+                ? `${providerLabel} verification needed`
+                : providerIssue
+                  ? `${providerLabel} account needs attention`
+                  : `${providerLabel} launch failed`,
+            description: message,
+            ...(verificationUrl
+              ? {
+                  action: {
+                    label: `Open ${providerLabel} & retry`,
+                    onClick: () => {
+                      openExternalUrl(verificationUrl)
+                      // The toast is a one-click recovery path: open the
+                      // verification page and immediately retry the launch.
+                      void startOnlineProvider(build, provider, server)
+                    },
+                  },
+                  ttlMs: 20_000,
+                }
+              : {}),
+          })
         })
         return false
       }
     },
-    [launchAttempts, pushToast, shop.sets],
+    [launchAttempts, pushToast, refreshProviderAuthStatus, session?.user.providerId, shop.sets],
   )
 
   /** Re-scan every configured external directory immediately before Play. */
@@ -1775,6 +1987,10 @@ export default function App() {
       join?: { host: string; port: number },
       _options: { promptOnEmpty?: boolean } = {},
     ) => {
+      if (!signedIn) {
+        setSignInOpen(true)
+        return
+      }
       if (phase === 'launching') return
       // A paused entry is an invitation to resume, not an active download.
       if (downloads[build.id] && downloads[build.id].phase !== 'paused') return
@@ -1831,9 +2047,7 @@ export default function App() {
       const route = routeExternalServer(build, allAvailable)
       const selection = !join ? serverSelections[build.id] : undefined
       const selectedGlobal = selection?.startsWith('global:')
-        ? providerCatalog.find(
-            (provider) => `global:${provider.id}` === selection && provider.global,
-          ) ?? null
+        ? verifiedOAuthProviders.find((provider) => `global:${provider.id}` === selection) ?? null
         : null
       const selectedIp = selection && !selection.startsWith('global:') ? selection : null
       const preferredIp = selectedIp
@@ -1841,9 +2055,7 @@ export default function App() {
         : undefined
       const seasonKey = artKeyFor(build.season)
       const globalOptions = seasonKey
-        ? providerCatalog.filter(
-            (provider) => provider.global && provider.supportedSeasons.includes(seasonKey),
-          )
+        ? verifiedOAuthProviders.filter((provider) => provider.supportedSeasons.includes(seasonKey))
         : []
       const autoGlobal =
         globalOptions.find((provider) => provider.id === build.onlineProvider?.id) ??
@@ -1879,7 +2091,6 @@ export default function App() {
                 fallback: Boolean(fallbackNote),
               }
             : undefined,
-          providerCodes[globalTarget.id],
         )
         if (started) return
         setLaunchStage(null)
@@ -2040,10 +2251,10 @@ export default function App() {
       communityServers,
       relayLobbies,
       manualLobbies,
-      providerCatalog,
-      providerCodes,
+      verifiedOAuthProviders,
       providerAuthPrompt,
       refreshCommunityServers,
+      signedIn,
       builds,
       account.username,
       serverSelections,
@@ -2083,6 +2294,8 @@ export default function App() {
         seasonId: activeKey,
         addedAt: Date.now(),
         pingMs: probe.pingMs,
+        online: true,
+        lastSeen: Date.now(),
       }
       setManualServers((prev) => {
         const existing = prev[activeKey] ?? []
@@ -2105,41 +2318,13 @@ export default function App() {
     [activeBuild, activeKey, pushToast],
   )
 
-    const handleOpenProviderSignIn = useCallback(
+  const handleOpenProviderSignIn = useCallback(
     (provider: GlobalBackend) => {
-      if (!activeBuild) return
-      if (provider.auth === 'exchangeCode' && installed[activeBuild.id] !== true) {
-        const downloading = Boolean(downloads[activeBuild.id])
-        pushToast({
-          tone: 'info',
-          title: `Install ${activeBuild.season.label} first`,
-          description: downloading
-            ? `${activeBuild.season.label} is still downloading. Finish the install, then open ${provider.label} sign-in for a fresh exchange code. No code is requested before then.`
-            : `${provider.label} exchange codes expire quickly. Download ${activeBuild.season.label} first, then open sign-in for a fresh code. No code is requested before then.`,
-        })
-        return
-      }
+      if (!activeBuild || provider.auth !== 'oauth') return
       setProviderAuthPrompt({ build: activeBuild, provider })
+      setSignInOpen(true)
     },
-    [activeBuild, downloads, installed, pushToast],
-  )
-
-  const handleProviderCodeSubmit = useCallback(
-    (code: string): string | undefined => {
-      const pending = providerAuthPrompt
-      if (!pending) return
-      if (pending.provider.auth === 'exchangeCode' && installed[pending.build.id] !== true) {
-        const message = downloads[pending.build.id]
-          ? `${pending.build.season.label} is still downloading. ${pending.provider.label} codes expire quickly; finish the install, then reopen sign-in for a fresh code. The pasted code was not saved.`
-          : `${pending.provider.label} exchange codes expire quickly. Install ${pending.build.season.label} first, then reopen sign-in for a fresh code. The pasted code was not saved.`
-        pushToast({ tone: 'info', title: 'Install the season first', description: message })
-        return message
-      }
-      setProviderCodes((prev) => ({ ...prev, [pending.provider.id]: code }))
-      setProviderAuthPrompt(null)
-      void startOnlineProvider(pending.build, pending.provider, pending.server, code)
-    },
-    [downloads, installed, providerAuthPrompt, pushToast, startOnlineProvider],
+    [activeBuild],
   )
 
   const handleProviderOAuthAuthenticated = useCallback(
@@ -2184,6 +2369,14 @@ export default function App() {
     ],
   )
 
+  const handleSignInProviderAuthenticated = useCallback(
+    (providerId: string, status: ProviderAuthStatus) => {
+      if (providerAuthPrompt?.provider.id !== providerId) return
+      handleProviderOAuthAuthenticated(status)
+    },
+    [handleProviderOAuthAuthenticated, providerAuthPrompt],
+  )
+
   // A public-lobby join can resolve successfully at the process level and then
   // fail once Fortnite tries to connect. Main watches the client log after the
   // launch; this closes the doomed client and points the player back at the
@@ -2223,6 +2416,10 @@ export default function App() {
   const handlePrimary = useCallback(async () => {
     const build = activeBuild
     if (!build) return
+    if (!signedIn) {
+      setSignInOpen(true)
+      return
+    }
 
     // running -> close the client
     if (runningId === build.id) {
@@ -2248,7 +2445,7 @@ export default function App() {
     }
 
     await startBuild(build, undefined, { promptOnEmpty: true })
-  }, [activeBuild, downloads, phase, providerOnly, pushToast, runningId, startBuild])
+  }, [activeBuild, downloads, phase, providerOnly, pushToast, runningId, signedIn, startBuild])
 
   const handlePlayChallengeBuild = useCallback(
     (buildId: string) => {
@@ -2716,7 +2913,47 @@ export default function App() {
     })
   }, [native, profilesLoaded, profiles.defaultBuildsRoot, pushToast, scanExistingBuilds])
 
+  const handleSignInAuthenticated = useCallback(
+    (next: RiftSession) => {
+      const providerId = normalizeProviderId(next.user.providerId)
+      const normalized = providerId
+        ? { ...next, user: { ...next.user, providerId } }
+        : next
+      saveSession(normalized)
+      setSession(normalized)
+      setSignInOpen(false)
+      setProviderAuthPrompt(null)
+      if (providerId) {
+        const previous = providerAuthRef.current[providerId]
+        const nextStatuses = {
+          ...providerAuthRef.current,
+          [providerId]: {
+            providerId,
+            signedIn: true,
+            displayName: normalized.user.username,
+            avatarUrl: normalized.user.avatarUrl ?? previous?.avatarUrl ?? null,
+            accountId: previous?.accountId ?? null,
+            expiresAt: previous?.expiresAt ?? null,
+          },
+        }
+        providerAuthRef.current = nextStatuses
+        setProviderAuthStatus(nextStatuses)
+        void refreshProviderAuthStatus()
+      }
+      pushToast({
+        tone: 'success',
+        title: next.user.providerLabel ? `Signed in with ${next.user.providerLabel}` : 'Signed in',
+        description: 'Download and Play are unlocked across every season.',
+      })
+    },
+    [pushToast, refreshProviderAuthStatus],
+  )
+
   const handleOpenFriends = useCallback(() => {
+    if (!signedIn) {
+      setSignInOpen(true)
+      return
+    }
     if (providerOnly) {
       pushToast({
         tone: 'info',
@@ -2727,16 +2964,15 @@ export default function App() {
       return
     }
     setView((current) => (current === 'friends' ? 'home' : 'friends'))
-  }, [providerOnly, pushToast])
+  }, [providerOnly, pushToast, signedIn])
 
   const handleLogout = useCallback(async () => {
-    if (!session) return
     const providerIds = new Set(
       providerCatalog
         .filter(
           (provider) =>
             provider.auth === 'oauth' &&
-            (providerAuthStatus[provider.id]?.signedIn || provider.id === session.user.providerId),
+            (providerAuthStatus[provider.id]?.signedIn || provider.id === session?.user.providerId),
         )
         .map((provider) => provider.id),
     )
@@ -2744,9 +2980,13 @@ export default function App() {
     if (logout) {
       await Promise.all([...providerIds].map((providerId) => logout(providerId).catch(() => undefined)))
     }
-    if (providerOnly) clearNetworkSession()
-    else await signOut(session.token)
+    if (session) {
+      if (providerOnly) clearNetworkSession()
+      else await signOut(session.token)
+    }
     setSession(null)
+    setSignInOpen(false)
+    setProviderAuthPrompt(null)
     setDrawerOpen(false)
     setDialogOpen(false)
     setView('home')
@@ -2841,27 +3081,6 @@ export default function App() {
     }
   }, [session, account.username])
 
-  if (!session) {
-    return (
-      <AuthScreen
-        providers={providerCatalog}
-        onAuthenticated={(next) => {
-          saveSession(next)
-          setSession(next)
-          if (next.user.providerId) {
-            void refreshProviderAuthStatus()
-            pushToast({
-              tone: 'success',
-              title: `Signed in to ${next.user.providerLabel || 'your live account'}`,
-              description:
-                'Your VAULTED profile and global matchmaking are linked. Choose a season and press Play when you are ready.',
-            })
-          }
-        }}
-      />
-    )
-  }
-
   return (
     <div className="relative h-screen overflow-hidden">
       {/* full-width drag handle: the frameless window can be moved from anywhere along the top */}
@@ -2892,6 +3111,7 @@ export default function App() {
           onlineStatus={onlineStatus}
           communityOnline={onlineSeasonCount}
           providerOnly={providerOnly}
+          signedIn={signedIn}
           settingsActive={view === 'settings'}
           shopActive={view === 'shop'}
           friendsActive={view === 'friends'}
@@ -2900,6 +3120,7 @@ export default function App() {
           onOpenSettings={() => setView((current) => (current === 'settings' ? 'home' : 'settings'))}
           onOpenShop={() => setView((current) => (current === 'shop' ? 'home' : 'shop'))}
           onOpenFriends={handleOpenFriends}
+          onSignIn={() => setSignInOpen(true)}
         />
 
         <main className="mt-5 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 sm:mt-6">
@@ -3008,18 +3229,18 @@ export default function App() {
                   Boolean(
                     (selectedGlobalBackend &&
                       (selectedGlobalBackend.auth === 'none' ||
-                        providerCodes[selectedGlobalBackend.id] ||
                         providerAuthStatus[selectedGlobalBackend.id]?.signedIn ||
                         (selectedGlobalBackend.auth === 'oauth' &&
-                          session.user.providerId === selectedGlobalBackend.id))) ||
+                          session?.user.providerId === selectedGlobalBackend.id))) ||
                       (autoGlobalBackend &&
                         (autoGlobalBackend.auth === 'none' ||
-                          providerCodes[autoGlobalBackend.id] ||
                           providerAuthStatus[autoGlobalBackend.id]?.signedIn ||
                           (autoGlobalBackend.auth === 'oauth' &&
-                            session.user.providerId === autoGlobalBackend.id))),
+                            session?.user.providerId === autoGlobalBackend.id))),
                   )
                 }
+                signedIn={signedIn}
+                onSignIn={() => setSignInOpen(true)}
                 selectedServer={activeServerSelection}
                 onSelectServer={(address) => {
                   if (!activeBuild) return
@@ -3044,6 +3265,9 @@ export default function App() {
                 launchStage={launchStage}
                 launchError={activeLaunchFailure}
                 launchErrorLocal={activeLaunchFailureLocal}
+                launchVerificationUrl={activeLaunchVerificationUrl}
+                onOpenVerification={openExternalUrl}
+                onRetryLaunch={() => void handlePrimary()}
                 hostedLobby={activeBuild && hostedLobby?.buildId === activeBuild.id ? hostedLobby : null}
                 verify={activeVerifyJob}
                 onVerify={handleVerifyBuild}
@@ -3112,12 +3336,15 @@ export default function App() {
 
       <AddBuildDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onAdd={handleAdd} />
 
-      <ProviderSignInDialog
-        provider={providerAuthPrompt?.provider ?? null}
-        seasonLabel={providerAuthPrompt?.build.season.label ?? activeBuild?.season.label ?? ''}
-        onClose={() => setProviderAuthPrompt(null)}
-        onSubmit={handleProviderCodeSubmit}
-        onAuthenticated={handleProviderOAuthAuthenticated}
+      <SignInModal
+        open={signInOpen}
+        providers={verifiedOAuthProviders}
+        onClose={() => {
+          setSignInOpen(false)
+          setProviderAuthPrompt(null)
+        }}
+        onAuthenticated={handleSignInAuthenticated}
+        onProviderAuthenticated={handleSignInProviderAuthenticated}
       />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />

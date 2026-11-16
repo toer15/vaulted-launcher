@@ -32,6 +32,18 @@ export function ToastStack({ toasts, onDismiss }: ToastStackProps) {
             <div className="min-w-0 flex-1">
               <p className="text-[12.5px] font-semibold text-mist">{toast.title}</p>
               {toast.description && <p className="mt-0.5 text-[11.5px] leading-relaxed text-fog">{toast.description}</p>}
+              {toast.action && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toast.action?.onClick()
+                    onDismiss(toast.id)
+                  }}
+                  className="mt-2.5 inline-flex items-center rounded-lg border border-emerald-400/35 bg-emerald-400/10 px-2.5 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.06em] text-emerald-200 transition-colors duration-200 hover:border-emerald-400/65 hover:bg-emerald-400/20 hover:text-white"
+                >
+                  {toast.action.label}
+                </button>
+              )}
             </div>
             <button
               type="button"

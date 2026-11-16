@@ -5,6 +5,7 @@ const http = require('node:http')
 const { WebSocketServer } = require('ws')
 const { botFillPreferences } = require('../electron/botFill.cjs')
 const {
+  dedupeStatusesAgainstServers,
   fetchCommunityServers,
   mergeCommunityServers,
   normalizeCommunityPayload,
@@ -102,6 +103,54 @@ function testStatusOnlyFields() {
   assert.equal(statuses[0].maxPlayers, 200)
   assert.equal(statuses[0].servers, 2)
   assert.equal(normalizeCommunityPayload({ servers: [] }, eon).length, 0)
+}
+
+function testStatusServerDedupe() {
+  const eon = endpoint({
+    id: 'eon-server-status',
+    kind: 'eon-server-status',
+    statusOnly: true,
+    alsoServers: true,
+    providerId: 'eon',
+    providerLabel: 'Eon',
+    providerIds: ['eon'],
+    seasonIds: ['ch2-s7'],
+    defaultSeasonId: 'ch2-s7',
+    entriesPath: 'servers',
+    fields: {
+      address: 'Ip',
+      port: 'Port',
+      players: 'Joined',
+      maxPlayers: 'MaxPlayers',
+      online: 'Joinable',
+    },
+  })
+  const payload = {
+    servers: [
+      { ServerName: 'EU-1', Ip: '203.0.113.61', Port: 7777, Joined: 42, MaxPlayers: 100, Joinable: true },
+      { ServerName: 'EU-2', Ip: '203.0.113.62', Port: 7777, Joined: 3, MaxPlayers: 100, Joinable: true },
+      { ServerName: 'EU-3', Ip: '203.0.113.63', Port: 7777, Joined: 99, MaxPlayers: 100, Joinable: false },
+      // A status-only row has population but no join address. Its players must
+      // remain in the aggregate because no server row can represent them.
+      { ServerName: 'status-only', Joined: 7, MaxPlayers: 100, Joinable: true },
+    ],
+  }
+  const servers = normalizeCommunityPayload(payload, { ...eon, statusOnly: false })
+  const statuses = normalizeStatusPayload(payload, eon)
+  const deduped = dedupeStatusesAgainstServers(statuses, servers)
+
+  assert.equal(servers.length, 2)
+  assert.equal(servers.reduce((total, server) => total + server.players, 0), 45)
+  assert.equal(deduped.length, 1)
+  assert.equal(deduped[0].players, 7)
+  assert.equal(deduped[0].servers, 1)
+  assert.equal(deduped[0].maxPlayers, 100)
+  // Joinable rows (45) plus the status-only residual (7) equals the directory
+  // total (52), not 97 (the old status + server double count).
+  assert.equal(
+    servers.reduce((total, server) => total + server.players, 0) + deduped[0].players,
+    52,
+  )
 }
 
 function testMeteorSchema() {
@@ -466,6 +515,7 @@ async function main() {
 
   testLobbyAndPlayerFields()
   testStatusOnlyFields()
+  testStatusServerDedupe()
   testMeteorSchema()
   testRebootSchema()
   testMarkdownDirectories()

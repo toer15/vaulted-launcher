@@ -6,12 +6,111 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
+const VERIFICATION_TIMEOUT_MS = 5 * 60 * 1000
+const VERIFICATION_POLL_MS = 5_000
 const REQUEST_TIMEOUT_MS = 20_000
 const TOKEN_FILE = 'provider-auth.bin'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function safeText(value, limit = 300) {
   return typeof value === 'string' ? value.trim().slice(0, limit) : ''
+}
+
+// Provider account APIs use these status codes when the signed-in account is
+// valid but still needs a Discord/account action before it can request a game
+// code. Keep them structured so the launch UI can explain the next step
+// instead of leaking a machine code or treating it as an expired session.
+const VERIFICATION_STATUS_CODES = new Set([
+  'verification_required',
+  'verification_pending',
+  'pending_verification',
+  'account_verification_required',
+  'account_not_verified',
+  'account_unverified',
+  'email_verification_required',
+  'discord_verification_required',
+  'guild_verification_required',
+  'discord_required',
+  'discord_membership_required',
+  'not_in_guild',
+  'guild_member_required',
+  'membership_required',
+])
+const ACCOUNT_STATUS_CODES = new Set([
+  ...VERIFICATION_STATUS_CODES,
+  'account_banned',
+  'account_suspended',
+  'account_restricted',
+  'account_locked',
+  'account_disabled',
+  'account_not_found',
+  'account_missing',
+  'account_link_required',
+  'account_status',
+  'account_status_error',
+  'whitelist_required',
+  'role_required',
+])
+const ACCOUNT_STATUS_PATTERN =
+  /^(?:account|user|discord|guild|membership|whitelist|verification|verify|not_verified|unverified|banned|suspended|restricted|locked|disabled)/
+
+function accountStatusCode(json) {
+  if (!json || typeof json !== 'object') return ''
+  const error = json.error && typeof json.error === 'object' ? json.error : null
+  const details = error?.details && typeof error.details === 'object' ? error.details : null
+  const candidates = [
+    error?.code,
+    error?.type,
+    error?.status,
+    error?.reason,
+    details?.code,
+    details?.type,
+    error?.message,
+    typeof json.error === 'string' ? json.error : '',
+    json.code,
+    json.status,
+    json.reason,
+  ]
+  for (const candidate of candidates) {
+    const raw = safeText(candidate, 80)
+    if (!raw || /\s/.test(raw)) continue
+    const code = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '')
+    if (/^[a-z][a-z0-9_-]{2,}$/.test(code)) return code
+  }
+  return ''
+}
+
+function accountStatusFor(json, status, detail) {
+  const code = accountStatusCode(json)
+  if (code && (ACCOUNT_STATUS_CODES.has(code) || ACCOUNT_STATUS_PATTERN.test(code))) return code
+  if (
+    status >= 400 &&
+    status < 500 &&
+    /verification[_ -]?required|verification[_ -]?pending|verify your account|not[_ -]?verified|discord server|guild|membership|whitelist/i.test(detail)
+  ) {
+    return 'verification_required'
+  }
+  return ''
+}
+
+function isVerificationStatus(code) {
+  return (
+    VERIFICATION_STATUS_CODES.has(code) ||
+    /verification|verify|verified|discord|guild|membership|whitelist/i.test(code)
+  )
+}
+
+function isVerificationFailure(error) {
+  return Boolean(
+    error?.verificationRequired === true ||
+      (error?.accountStatus && isVerificationStatus(String(error.accountStatus))) ||
+      (error?.code && isVerificationStatus(String(error.code))),
+  )
+}
+
+/** Provider sessions are global to an account, never to a season/build. */
+function normalizeProviderId(value) {
+  return safeText(value, 120).toLowerCase().split(':')[0].trim()
 }
 
 function escapeHtml(value) {
@@ -78,10 +177,25 @@ function createProviderAuth({
 
   /** providerId -> in-flight login promise */
   const activeLogins = new Map()
+  /** providerId|buildId -> short-lived code created by the post-login check */
+  const verificationCodes = new Map()
   let tokenCache = null
 
   function tokenFilePath() {
     return path.join(app.getPath('userData'), TOKEN_FILE)
+  }
+
+  function normalizeStore(value) {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+    const normalized = {}
+    for (const [rawId, record] of Object.entries(source)) {
+      const id = normalizeProviderId(rawId)
+      if (!id || !record || typeof record !== 'object' || Array.isArray(record)) continue
+      // Old builds wrote `providerId:seasonId` keys. Collapse those to the
+      // provider account so every season shares the same encrypted session.
+      if (!normalized[id]) normalized[id] = record
+    }
+    return normalized
   }
 
   function readStore() {
@@ -89,8 +203,7 @@ function createProviderAuth({
     try {
       if (!safeStorage.isEncryptionAvailable()) return {}
       const text = safeStorage.decryptString(fs.readFileSync(tokenFilePath()))
-      const parsed = JSON.parse(text)
-      tokenCache = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+      tokenCache = normalizeStore(JSON.parse(text))
     } catch {
       tokenCache = {}
     }
@@ -104,27 +217,29 @@ function createProviderAuth({
       )
     }
     const target = tokenFilePath()
+    const normalized = normalizeStore(store)
     fs.mkdirSync(path.dirname(target), { recursive: true })
     const temporary = `${target}.${process.pid}.${Date.now()}.tmp`
     try {
-      fs.writeFileSync(temporary, safeStorage.encryptString(JSON.stringify(store)), { mode: 0o600 })
+      fs.writeFileSync(temporary, safeStorage.encryptString(JSON.stringify(normalized)), { mode: 0o600 })
       fs.rmSync(target, { force: true })
       fs.renameSync(temporary, target)
-      tokenCache = store
+      tokenCache = normalized
     } finally {
       fs.rmSync(temporary, { force: true })
     }
   }
 
   function clearToken(providerId) {
+    const id = normalizeProviderId(providerId)
     const store = { ...readStore() }
-    if (!Object.prototype.hasOwnProperty.call(store, providerId)) return
-    delete store[providerId]
+    if (!id || !Object.prototype.hasOwnProperty.call(store, id)) return
+    delete store[id]
     writeStore(store)
   }
 
   function providerConfig(providerId) {
-    const id = safeText(providerId, 80)
+    const id = normalizeProviderId(providerId)
     let profile
     try {
       profile = profileForId(id)
@@ -183,6 +298,16 @@ function createProviderAuth({
       }
     }
 
+    const methods = {}
+    if (oauth.methods && typeof oauth.methods === 'object' && !Array.isArray(oauth.methods)) {
+      for (const method of ['discord', 'google']) {
+        const endpoint = oauth.methods[method]
+        if (typeof endpoint !== 'string') continue
+        const candidate = endpoint.trim()
+        if (/^\/[A-Za-z0-9/_-]{1,200}$/.test(candidate)) methods[method] = candidate
+      }
+    }
+
     return {
       id: profile.id,
       label: profile.label || profile.name || profile.id,
@@ -191,34 +316,41 @@ function createProviderAuth({
         tokenUrl: tokenUrl.toString(),
         clientId,
         scope: safeText(oauth.scope, 256) || 'launcher.all',
+        methods,
       },
       apiBaseUrl: apiBaseUrl.origin,
       buildsPath: safePath(profile.buildsPath, '/launcher/v1/builds'),
       exchangeCodePath: safePath(profile.exchangeCodePath, '/launcher/v1/game/exchange-code'),
       profilePath: safeText(profile.profilePath, 220),
+      verificationUrl:
+        httpsUrl(profile.verificationUrl) || (profile.id === 'era' ? 'https://discord.gg/erafn' : ''),
+      supportedSeasons: Array.isArray(profile.supportedSeasons)
+        ? profile.supportedSeasons.filter((season) => /^ch\d{1,2}(?:-s\d{1,2}|-remix|-mini\d+)$/.test(season))
+        : [],
       buildIds,
     }
   }
 
   function tokenStatus(providerId) {
-    const record = readStore()[providerId]
+    const id = normalizeProviderId(providerId)
+    const record = readStore()[id]
     if (!record || typeof record !== 'object') {
-      return {
-        providerId,
+            return {
+        providerId: id,
         signedIn: false,
-        displayName: null,
-        avatarUrl: null,
-        accountId: null,
-        expiresAt: null,
-      }
+      displayName: null,
+      avatarUrl: null,
+      accountId: null,
+      expiresAt: null,
     }
+  }
     const signedIn = Boolean(
       safeText(record.refresh_token, 4096) ||
         (safeText(record.access_token, 8192) &&
           (!Number.isFinite(record.expires_at) || record.expires_at > Date.now())),
     )
     return {
-      providerId,
+      providerId: id,
       signedIn,
       displayName: safeText(record.display_name, 120) || null,
       avatarUrl: safeText(record.avatar_url, 2048) || null,
@@ -259,6 +391,25 @@ function createProviderAuth({
       fallback
     const error = new Error(String(detail || `The provider answered HTTP ${status}.`))
     error.status = status
+    const accountStatus = accountStatusFor(json, status, String(detail || ''))
+    if (accountStatus) {
+      error.code = accountStatus
+      error.accountStatus = accountStatus
+      error.verificationRequired = isVerificationStatus(accountStatus)
+    }
+    // Some providers attach the exact interactive verification destination to
+    // the rejection. Use it when it is a safe HTTPS URL; otherwise the provider
+    // profile supplies the default page.
+    const verificationUrl = httpsUrl(
+      json?.verification_url ||
+        json?.verificationUrl ||
+        json?.details?.verification_url ||
+        json?.details?.verificationUrl ||
+        (json?.error && typeof json.error === 'object'
+          ? json.error.verification_url || json.error.verificationUrl
+          : ''),
+    )
+    if (verificationUrl) error.verificationUrl = verificationUrl
     return error
   }
 
@@ -316,6 +467,12 @@ function createProviderAuth({
       display_name: safeText(previous.display_name, 120) || null,
       avatar_url: httpsUrl(previous.avatar_url),
       account_id: safeText(previous.account_id, 120) || null,
+      // Remember how the OAuth session was created so an interactive Era
+      // verification step can open the account-link page for Google sessions
+      // and the Discord server page for Discord sessions.
+      auth_method: ['discord', 'google'].includes(previous.auth_method)
+        ? previous.auth_method
+        : null,
       updated_at: Date.now(),
     }
   }
@@ -537,6 +694,387 @@ function createProviderAuth({
     return build
   }
 
+  async function gameCode(config, token, build) {
+    let response
+    try {
+      response = await requestJson(
+        new URL(config.exchangeCodePath, config.apiBaseUrl),
+        {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ build_id: build.id }),
+        },
+        `${config.label} could not create a game login code.`,
+      )
+    } catch (error) {
+      // A 403 can mean the account is valid but needs verification. That is a
+      // fixable account state, not an expired session, so preserve the
+      // structured status for the interactive verification flow instead of
+      // clearing the token or surfacing a raw provider code.
+      if (error?.accountStatus || error?.verificationRequired) throw error
+      if (error?.status === 401 || error?.status === 403) {
+        clearToken(config.id)
+        throw new Error(`Your ${config.label} session expired. Sign in again from the season card.`)
+      }
+      throw error
+    }
+
+    const payload = response?.data ?? response
+    // Some APIs return an account-status error in a 200 envelope. Preserve it
+    // before failing on the missing one-time code.
+    if (payload?.error || accountStatusFor(payload, 200, '')) {
+      const envelopeError = responseError(
+        payload,
+        200,
+        `${config.label} could not create a game login code.`,
+      )
+      if (envelopeError.accountStatus) throw envelopeError
+    }
+    const code = safeText(payload?.code, 4096)
+    if (!code || !/^[A-Za-z0-9._~+/=-]{8,4096}$/.test(code)) {
+      throw new Error(`${config.label} returned an invalid one-time login code. Try Play again.`)
+    }
+
+    return {
+      code,
+      expiresIn: Number(payload?.expires_in) > 0 ? Number(payload.expires_in) : 300,
+      buildId: build.id,
+      buildName: buildLabel(build),
+    }
+  }
+
+  function verificationBuild(builds, config) {
+    const available = Array.isArray(builds) ? builds : []
+    for (const seasonId of config.supportedSeasons) {
+      try {
+        return chooseBuild(available, config, seasonId, '')
+      } catch {
+        /* try the next configured season */
+      }
+    }
+    return (
+      available.find(
+        (build) =>
+          UUID.test(String(build?.id || '')) && build?.access !== 'restricted' && build?.public !== false,
+      ) ||
+      available.find((build) => UUID.test(String(build?.id || '')) && build?.access !== 'restricted') ||
+      null
+    )
+  }
+
+  function verificationPageFor(config, method, error = null) {
+    const supplied = httpsUrl(error?.verificationUrl)
+    if (supplied) return supplied
+    // Era's launcher OAuth has no separate verification endpoint. The public
+    // exchange endpoint is the authoritative gate. If it reports a pending
+    // account, use Era's own sign-in-methods page for a Google session (to
+    // confirm/link Discord) and the official Discord invite for a Discord
+    // session (to complete the guild step). Both run in the branded embedded
+    // window; the poll below decides when the account is actually ready.
+    if (config.id === 'era') {
+      return method === 'google' ? 'https://id.erafn.dev/logins' : 'https://discord.gg/erafn'
+    }
+    return config.verificationUrl
+  }
+
+  function openVerificationWindow(config, url, parentWindow = null) {
+    const state = {
+      closed: false,
+      failure: null,
+      close: () => {},
+    }
+    const parent =
+      parentWindow && !parentWindow.isDestroyed()
+        ? parentWindow
+        : typeof getParentWindow === 'function'
+          ? getParentWindow()
+          : null
+    const hasParent = Boolean(parent && !parent.isDestroyed())
+    // A verification window opened from the sign-in modal cannot itself be a
+    // modal child of that transient modal on every Electron version. Keep it
+    // parented/centered and non-blocking in that case; launch-time verification
+    // (parented to the main window) remains modal.
+    const parentIsModal = Boolean(
+      parent && typeof parent.isModal === 'function' && parent.isModal(),
+    )
+    const width = 560
+    const height = 760
+    const bounds = hasParent ? parent.getBounds() : null
+    let win = null
+    let authView = null
+    let viewReady = false
+    let closing = false
+
+    const close = () => {
+      if (closing) return
+      closing = true
+      state.closed = true
+      try {
+        if (authView) {
+          try {
+            if (win && !win.isDestroyed()) win.contentView.removeChildView(authView)
+          } catch {
+            /* the window is already gone */
+          }
+          authView.webContents.close()
+        }
+      } catch {
+        /* already closed */
+      }
+      authView = null
+      try {
+        if (win && !win.isDestroyed()) win.destroy()
+      } catch {
+        /* already gone */
+      }
+    }
+    state.close = close
+
+    try {
+      win = new BrowserWindow({
+        width,
+        height,
+        minWidth: 420,
+        minHeight: 580,
+        show: false,
+        frame: false,
+        autoHideMenuBar: true,
+        backgroundColor: '#0B0F14',
+        title: 'VAULTED · SECURE ACCOUNT LINK',
+        parent: hasParent ? parent : undefined,
+        modal: hasParent && !parentIsModal,
+        center: !hasParent,
+        ...(bounds
+          ? {
+              x: Math.max(0, Math.round(bounds.x + (bounds.width - width) / 2)),
+              y: Math.max(0, Math.round(bounds.y + (bounds.height - height) / 2)),
+            }
+          : {}),
+        roundedCorners: true,
+        hasShadow: true,
+        webPreferences: {
+          preload: path.join(__dirname, 'providerAuthShell.cjs'),
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      })
+    } catch (error) {
+      state.failure = new Error(
+        `VAULTED could not open the ${config.label} verification window: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+      state.closed = true
+      return state
+    }
+
+    win.setMenuBarVisibility(false)
+    win.once('ready-to-show', () => {
+      if (!state.closed && win && !win.isDestroyed()) win.show()
+    })
+    win.on('closed', () => {
+      state.closed = true
+      try {
+        authView?.webContents.close()
+      } catch {
+        /* already closed */
+      }
+      authView = null
+    })
+    if (hasParent) parent.once('closed', close)
+    win.webContents.on('before-input-event', (event, input) => {
+      if (input.type === 'keyDown' && input.key === 'Escape' && !state.closed) {
+        event.preventDefault()
+        close()
+      }
+    })
+
+    if (typeof WebContentsView === 'function') {
+      const layout = () => {
+        if (!authView || state.closed || !win || win.isDestroyed()) return
+        const [contentWidth, contentHeight] = win.getContentSize()
+        authView.setBounds({
+          x: 0,
+          y: 54,
+          width: Math.max(0, contentWidth),
+          height: Math.max(0, contentHeight - 54),
+        })
+      }
+      const attachView = () => {
+        if (state.closed || viewReady) return
+        viewReady = true
+        try {
+          win.contentView.addChildView(authView)
+          layout()
+        } catch (error) {
+          state.failure = new Error(
+            `VAULTED could not show the ${config.label} verification page: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+          close()
+        }
+      }
+
+      win.on('resize', layout)
+      authView = new WebContentsView({
+        webPreferences: {
+          partition: `persist:provider-auth-${config.id}`,
+          nodeIntegration: false,
+          contextIsolation: true,
+          sandbox: true,
+        },
+      })
+      authView.setBackgroundColor?.('#0B0F14')
+      const contents = authView.webContents
+      contents.setWindowOpenHandler(({ url: openedUrl }) => {
+        if (/^https?:\/\//i.test(openedUrl)) void contents.loadURL(openedUrl).catch(() => {})
+        return { action: 'deny' }
+      })
+      contents.on('did-finish-load', attachView)
+      contents.on('did-fail-load', (_event, codeValue, description, _url, isMainFrame) => {
+        if (isMainFrame && codeValue !== -3 && !state.closed) {
+          state.failure = new Error(
+            `${config.label} verification page could not load (${description || codeValue}).`,
+          )
+          close()
+        }
+      })
+
+      void win
+        .loadFile(path.join(__dirname, 'providerAuthShell.html'), {
+          query: { provider: config.label, mode: 'verification' },
+        })
+        .catch((error) => {
+          state.failure = new Error(
+            `VAULTED could not open its verification window: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          )
+          close()
+        })
+      void contents.loadURL(url).catch((error) => {
+        state.failure = new Error(
+          `${config.label} verification page could not load: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+        close()
+      })
+    } else {
+      void win.loadURL(url).catch((error) => {
+        state.failure = new Error(
+          `${config.label} verification page could not load: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+        close()
+      })
+    }
+
+    return state
+  }
+
+  async function completeVerification(config, token, build, originalError, parentWindow = null) {
+    const method = safeText(readStore()[config.id]?.auth_method, 20)
+    const url = verificationPageFor(config, method, originalError)
+    if (!url) throw originalError
+    const window = openVerificationWindow(config, url, parentWindow)
+    try {
+      const deadline = Date.now() + VERIFICATION_TIMEOUT_MS
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, VERIFICATION_POLL_MS))
+        if (window.failure) throw window.failure
+        if (window.closed) {
+          throw new Error(`${config.label} verification was closed before it finished.`)
+        }
+        try {
+          const result = await gameCode(config, token, build)
+          if (window.closed) {
+            throw new Error(`${config.label} verification was closed before it finished.`)
+          }
+          return result
+        } catch (error) {
+          if (isVerificationFailure(error)) continue
+          // A short verification poll can hit the exchange rate limit. Keep
+          // the window open and try again on the next interval.
+          if (error?.status === 429) continue
+          throw error
+        }
+      }
+      throw new Error(
+        `${config.label} verification is still pending. Complete it in the verification window, then try Play again.`,
+      )
+    } finally {
+      window.close()
+    }
+  }
+
+  function codeCacheKey(config, build) {
+    return `${config.id}|${build.id}`
+  }
+
+  function takeVerificationCode(config, build) {
+    const key = codeCacheKey(config, build)
+    const cached = verificationCodes.get(key)
+    if (!cached) return null
+    verificationCodes.delete(key)
+    if (cached.cachedUntil <= Date.now()) return null
+    const { cachedUntil: _cachedUntil, ...result } = cached
+    return result
+  }
+
+  function cacheVerificationCode(config, build, result) {
+    const expiresIn = Number(result?.expiresIn) > 0 ? Number(result.expiresIn) : 300
+    verificationCodes.set(codeCacheKey(config, build), {
+      ...result,
+      cachedUntil: Date.now() + Math.max(0, expiresIn * 1000 - 10_000),
+    })
+  }
+
+  async function verifyAfterLogin(config, token, parentWindow = null) {
+    if (!config.verificationUrl) return
+    let build = null
+    try {
+      const buildsJson = await requestJson(
+        new URL(config.buildsPath, config.apiBaseUrl),
+        {
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+        },
+        `${config.label} could not list its live builds.`,
+      )
+      const builds = Array.isArray(buildsJson?.data)
+        ? buildsJson.data
+        : Array.isArray(buildsJson)
+          ? buildsJson
+          : []
+      build = verificationBuild(builds, config)
+    } catch {
+      // A transient build-list failure must not fail an otherwise valid link.
+      return
+    }
+    if (!build) return
+
+    let result
+    try {
+      result = await gameCode(config, token, build)
+    } catch (error) {
+      if (!isVerificationFailure(error)) return
+      result = await completeVerification(config, token, build, error, parentWindow)
+    }
+    // Keep the verified code for the launch that normally follows sign-in, so
+    // the immediate Play/auto-launch does not spend a second exchange request.
+    cacheVerificationCode(config, build, result)
+  }
+
   async function exchangeCode(providerId, options = {}) {
     const config = providerConfig(providerId)
     const token = await accessToken(config)
@@ -560,50 +1098,28 @@ function createProviderAuth({
         : []
     const build = chooseBuild(builds, config, seasonId, version)
 
-    let response
+    const cached = takeVerificationCode(config, build)
+    if (cached) return cached
+
     try {
-      response = await requestJson(
-        new URL(config.exchangeCodePath, config.apiBaseUrl),
-        {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ build_id: build.id }),
-        },
-        `${config.label} could not create a game login code.`,
-      )
+      return await gameCode(config, token, build)
     } catch (error) {
-      if (error?.status === 401 || error?.status === 403) {
-        clearToken(config.id)
-        throw new Error(`Your ${config.label} session expired. Sign in again from the season card.`)
-      }
-      throw error
-    }
-
-    const payload = response?.data ?? response
-    const code = safeText(payload?.code, 4096)
-    if (!code || !/^[A-Za-z0-9._~+/=-]{8,4096}$/.test(code)) {
-      throw new Error(`${config.label} returned an invalid one-time login code. Try Play again.`)
-    }
-
-    return {
-      code,
-      expiresIn: Number(payload?.expires_in) > 0 ? Number(payload.expires_in) : 300,
-      buildId: build.id,
-      buildName: buildLabel(build),
+      if (!isVerificationFailure(error) || !verificationPageFor(config, '', error)) throw error
+      return await completeVerification(config, token, build, error)
     }
   }
 
-  function login(providerId) {
-    const id = safeText(providerId, 80)
+  function login(providerId, options = {}) {
+    const id = normalizeProviderId(providerId)
+    const method = safeText(options?.method, 20)
     if (activeLogins.has(id)) {
       return Promise.reject(new Error('A provider sign-in window is already open. Finish it first.'))
     }
 
     const config = providerConfig(id)
+    for (const key of verificationCodes.keys()) {
+      if (key.startsWith(`${id}|`)) verificationCodes.delete(key)
+    }
     const state = crypto.randomBytes(32).toString('base64url')
     const verifier = crypto.randomBytes(64).toString('base64url')
     const challenge = crypto.createHash('sha256').update(verifier).digest('base64url')
@@ -667,7 +1183,17 @@ function createProviderAuth({
           record.display_name = identity.displayName || null
           record.avatar_url = identity.avatarUrl || null
           record.account_id = identity.accountId || null
+          record.auth_method = ['discord', 'google'].includes(method) ? method : null
           writeStore({ ...readStore(), [id]: record })
+          // Check the account immediately after the OAuth handoff. Era's
+          // exchange endpoint is the only public endpoint that distinguishes a
+          // valid-but-unverified account from a normal session. If it asks for
+          // verification, keep this whole sign-in operation pending while the
+          // embedded verification window is open.
+          // Keep the branded sign-in modal open behind the verification page;
+          // the verification window is parented to it so closing the modal
+          // also cancels the pending check.
+          await verifyAfterLogin(config, record.access_token, win)
           settle(null, tokenStatus(id))
         } catch (error) {
           settle(error instanceof Error ? error : new Error('The provider sign-in failed.'))
@@ -744,7 +1270,9 @@ function createProviderAuth({
             ),
           )
         }
-        if (win && !win.isDestroyed()) win.hide()
+        // Do not hide the branded modal here: finishLogin keeps it open while
+        // the post-OAuth verification check runs, and settle() closes it after
+        // the account is ready (or after a verification failure).
         void finishLogin(code)
       }
 
@@ -791,6 +1319,14 @@ function createProviderAuth({
         authorize.searchParams.set('code_challenge_method', 'S256')
         if (config.oauth.scope) authorize.searchParams.set('scope', config.oauth.scope)
 
+        let loginUrl = authorize.toString()
+        const methodPath = config.oauth.methods?.[method]
+        if (methodPath) {
+          const methodUrl = new URL(methodPath, new URL(config.oauth.authorizeUrl).origin)
+          methodUrl.searchParams.set('return', `${authorize.pathname}${authorize.search}`)
+          loginUrl = methodUrl.toString()
+        }
+
         const parent = typeof getParentWindow === 'function' ? getParentWindow() : null
         const hasParent = Boolean(parent && !parent.isDestroyed())
         const width = 560
@@ -805,7 +1341,7 @@ function createProviderAuth({
           frame: false,
           autoHideMenuBar: true,
           backgroundColor: '#0B0F14',
-          title: 'VAULTED · Sign In',
+          title: 'VAULTED · SECURE ACCOUNT LINK',
           parent: hasParent ? parent : undefined,
           modal: hasParent,
           center: !hasParent,
@@ -918,7 +1454,7 @@ function createProviderAuth({
                 ),
               )
             })
-          void contents.loadURL(authorize.toString()).catch((error) => {
+          void contents.loadURL(loginUrl).catch((error) => {
             settle(
               new Error(
                 `${config.label} sign-in page could not load: ${error instanceof Error ? error.message : String(error)}`,
@@ -943,7 +1479,7 @@ function createProviderAuth({
               )
             }
           })
-          void win.loadURL(authorize.toString()).catch((error) => {
+          void win.loadURL(loginUrl).catch((error) => {
             settle(
               new Error(
                 `${config.label} sign-in page could not load: ${error instanceof Error ? error.message : String(error)}`,
@@ -964,16 +1500,19 @@ function createProviderAuth({
   }
 
   function logout(providerId) {
-    const id = safeText(providerId, 80)
+    const id = normalizeProviderId(providerId)
     const config = providerConfig(id)
     clearToken(config.id)
+    for (const key of verificationCodes.keys()) {
+      if (key.startsWith(`${id}|`)) verificationCodes.delete(key)
+    }
     return tokenStatus(config.id)
   }
 
   return {
     statuses,
     status: (providerId) => {
-      const id = safeText(providerId, 80)
+      const id = normalizeProviderId(providerId)
       providerConfig(id)
       return tokenStatus(id)
     },

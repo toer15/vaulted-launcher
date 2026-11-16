@@ -54,11 +54,22 @@ function parseOAuth(raw) {
       }
     }
   }
+  const methods = {}
+  if (raw.methods && typeof raw.methods === 'object' && !Array.isArray(raw.methods)) {
+    for (const method of ['discord', 'google']) {
+      const endpoint = raw.methods[method]
+      if (typeof endpoint !== 'string') continue
+      const candidate = endpoint.trim()
+      if (/^\/[A-Za-z0-9/_-]{1,200}$/.test(candidate)) methods[method] = candidate
+    }
+  }
+
   return {
     authorizeUrl: authorizeUrl.toString(),
     tokenUrl: tokenUrl.toString(),
     clientId,
     scope: typeof raw.scope === 'string' ? raw.scope.trim().slice(0, 256) : 'launcher.all',
+    methods,
     buildIds,
   }
 }
@@ -156,6 +167,8 @@ function catalogData() {
       buildsPath: safeApiPath(entry.buildsPath, '/launcher/v1/builds'),
       exchangeCodePath: safeApiPath(entry.exchangeCodePath, '/launcher/v1/game/exchange-code'),
       profilePath: safeApiPath(entry.profilePath, ''),
+      verificationUrl:
+        typeof entry.verificationUrl === 'string' ? entry.verificationUrl.trim() : '',
       global: entry.global !== false,
       seasons,
       redirectDllName:
@@ -323,6 +336,10 @@ function providerProfile(id) {
       catalogEntry?.exchangeCodePath ||
       safeApiPath(raw?.exchangeCodePath, '/launcher/v1/game/exchange-code'),
     profilePath: catalogEntry?.profilePath || safeApiPath(raw?.profilePath, ''),
+    verificationUrl:
+      (typeof raw?.verificationUrl === 'string' && raw.verificationUrl.trim()) ||
+      catalogEntry?.verificationUrl ||
+      '',
     signInUrl:
       (typeof raw?.signInUrl === 'string' && raw.signInUrl.trim()) || catalogEntry?.signInUrl || '',
     website: (typeof raw?.website === 'string' && raw.website.trim()) || catalogEntry?.website || '',

@@ -12,6 +12,7 @@ import {
   Globe2,
   HardDrive,
   Loader2,
+  LogIn,
   Pause,
   Play,
   Plus,
@@ -68,6 +69,10 @@ interface ActiveBuildCardProps {
   onAddManualServer?: (address: string) => Promise<string | null>
   /** open the provider account-link dialog */
   onProviderSignIn?: (provider: GlobalBackend) => void
+  /** whether a VAULTED or verified provider session is active */
+  signedIn?: boolean
+  /** open the in-app VAULTED sign-in modal */
+  onSignIn?: () => void
   account: Account
   sourceKeys?: Set<string>
   downloadSize?: number | null
@@ -84,6 +89,10 @@ interface ActiveBuildCardProps {
   launchError?: string | null
   /** local-host fallback: never show it as a raw crash report */
   launchErrorLocal?: boolean
+  /** provider account verification URL for an actionable launch failure */
+  launchVerificationUrl?: string | null
+  onOpenVerification?: (url: string) => void
+  onRetryLaunch?: () => void
   /** this PC's currently published lobby, if it is hosting this build */
   hostedLobby?: { address: string; port: number; public: boolean; label: string; players?: number } | null
   verify?: { phase: 'running' | 'done'; report?: BuildVerifyReport; error?: string } | null
@@ -113,6 +122,7 @@ function formatEta(seconds: number | null | undefined): string | null {
 }
 
 function serverPlayerLabel(server: CommunityServer): string {
+  if (server.playersKnown === false) return 'players unknown'
   const players = lobbyPlayers(server)
   return `${players} player${players === 1 ? '' : 's'}`
 }
@@ -138,9 +148,45 @@ function globalBadge(provider: GlobalBackend): string {
   return provider.mode === 'global_live' ? 'GLOBAL LIVE' : 'GLOBAL ONLINE'
 }
 
+function serverCountLabel(servers: number): string {
+  return `${Math.max(0, Math.floor(servers))} ${servers === 1 ? 'server' : 'servers'}`
+}
+
+function playerCountLabel(players: number): string {
+  return `${Math.max(0, Math.floor(players))} ${players === 1 ? 'player' : 'players'}`
+}
+
+function backendCounts(provider: GlobalBackend | null | undefined): {
+  servers: number
+  players: number
+  state: 'live' | 'offline' | 'checking' | 'none'
+} {
+  if (!provider) return { servers: 0, players: 0, state: 'none' }
+  const live = provider.live
+  if (!live) return { servers: 1, players: 0, state: 'checking' }
+  if (!live.online) return { servers: 0, players: 0, state: 'offline' }
+  return {
+    servers: Math.max(1, Math.floor(live.servers || 1)),
+    players: Math.max(0, Math.floor(live.players ?? 0)),
+    state: 'live',
+  }
+}
+
+function backendPingLabel(provider: GlobalBackend): string {
+  const ping = provider.live?.pingMs
+  return typeof ping === 'number' && Number.isFinite(ping) ? `${Math.max(0, Math.round(ping))} ms` : 'ping —'
+}
+
 function globalOptionLabel(provider: GlobalBackend): string {
   const account = provider.auth === 'none' ? '' : ' · sign-in required'
-  return `${globalBadge(provider)} · ${provider.label}${account}`
+  const counts = backendCounts(provider)
+  const state =
+    counts.state === 'offline'
+      ? 'OFFLINE'
+      : counts.state === 'checking'
+        ? 'CHECKING LIVE STATUS'
+        : globalBadge(provider)
+  return `${state} · ${provider.label} · ${serverCountLabel(counts.servers)} · ${playerCountLabel(counts.players)} · ${backendPingLabel(provider)}${account}`
 }
 
 const STATE_PILL: Record<BuildState, { label: string; dot: string; text: string }> = {
@@ -171,6 +217,8 @@ export function ActiveBuildCard({
   onSelectServer,
   onAddManualServer,
   onProviderSignIn,
+  signedIn = true,
+  onSignIn,
   account,
   sourceKeys,
   downloadSize,
@@ -183,6 +231,9 @@ export function ActiveBuildCard({
   launchStage,
   launchError,
   launchErrorLocal,
+  launchVerificationUrl,
+  onOpenVerification,
+  onRetryLaunch,
   hostedLobby,
   verify,
   onVerify,
@@ -226,12 +277,18 @@ export function ActiveBuildCard({
 
   const { season } = build
   const busy = state === 'launching' || state === 'downloading'
-  const pill = launchErrorLocal
-    ? { label: 'Unavailable', dot: 'bg-amber-400', text: 'text-amber-300' }
-    : STATE_PILL[state]
+  const verificationRequired = Boolean(launchVerificationUrl)
+  const pill = verificationRequired
+    ? { label: 'Verification needed', dot: 'bg-amber-400', text: 'text-amber-300' }
+    : launchErrorLocal
+      ? { label: 'Unavailable', dot: 'bg-amber-400', text: 'text-amber-300' }
+      : STATE_PILL[state]
   const isOnlineProvider = Boolean(build.onlineProvider)
   const showLocateExisting = !busy && state !== 'running' && !isOnlineProvider
   const isInstalled = Boolean(installed?.[build.id])
+  const signedOut = signedIn === false
+  const requiresSignIn = signedOut && ['missing', 'paused', 'ready', 'error'].includes(state)
+  const signInTarget = isInstalled ? 'Play' : 'Download'
 
   const hasDownloadSource = Boolean(artKeyFor(season) && sourceKeys?.has(artKeyFor(season)!))
   const etaLabel = download?.phase === 'downloading' ? formatEta(download.etaSeconds) : null
@@ -253,15 +310,42 @@ export function ActiveBuildCard({
   const onlinePlayers = onlinePlayerCount(playMode)
   const onlineServers = seasonServerCount(playMode)
   const activeGlobalBadge = activeGlobalBackend ? globalBadge(activeGlobalBackend) : 'GLOBAL ONLINE'
-  const onlineStatus =
-    activeGlobalBackend?.mode === 'global_live'
-      ? `${activeGlobalBadge} · ${activeGlobalBackend.label}`
-      : activeGlobalBackend && onlinePlayers === 0 && onlineServers === 0
-        ? `${activeGlobalBadge} · ${activeGlobalBackend.label}`
-        : onlineStatusLabel(onlinePlayers, onlineServers)
   const exactOptions = exactServerOptions ?? serverOptions ?? []
   const otherOptions = fallbackServerOptions ?? []
   const globalOptions = globalBackends ?? []
+  const allServerOptions = [...exactOptions, ...otherOptions]
+  const selectedIpServer = !selectedGlobalBackend && selectedServer
+    ? allServerOptions.find((server) => server.address === selectedServer) ?? null
+    : null
+  const selectedBackend = selectedGlobalBackend ?? autoGlobalBackend
+  const selectedBackendCounts = backendCounts(selectedBackend)
+  const autoRouteBackendCounts = backendCounts(autoGlobalBackend)
+  const autoOptionGlobalBackend = autoServer ? null : autoGlobalBackend ?? selectedGlobalBackend
+  const autoOptionBackendCounts = autoGlobalBackend ? autoRouteBackendCounts : selectedBackendCounts
+  // The hero pill follows the exact row currently selected. Auto follows the
+  // real route Auto would take; only a true season-wide Auto shows the sum.
+  let liveServers = onlineServers
+  let livePlayers = onlinePlayers
+  if (selectedGlobalBackend) {
+    liveServers = selectedBackendCounts.servers
+    livePlayers = selectedBackendCounts.players
+  } else if (selectedServer) {
+    liveServers = selectedIpServer ? 1 : 0
+    livePlayers = selectedIpServer ? lobbyPlayers(selectedIpServer) : 0
+  } else if (autoServer) {
+    liveServers = 1
+    livePlayers = lobbyPlayers(autoServer)
+  } else if (activeGlobalBackend) {
+    liveServers = autoRouteBackendCounts.servers
+    livePlayers = autoRouteBackendCounts.players
+  } else if (fallbackServer) {
+    liveServers = 1
+    livePlayers = lobbyPlayers(fallbackServer)
+  }
+  const activeBackendOffline = activeGlobalBackend?.live?.online === false
+  const onlineStatus = activeBackendOffline
+    ? `${activeGlobalBadge} · ${activeGlobalBackend.label} · OFFLINE`
+    : onlineStatusLabel(livePlayers, liveServers)
   const lobbyCount = playMode?.lobbyCount ?? (hostedLobby?.public ? 1 : 0)
   const playerCount = playMode?.playerCount ?? (hostedLobby?.public ? Math.max(0, hostedLobby.players ?? 0) : 0)
   const communityPlayers = playMode?.communityPlayerCount ?? 0
@@ -349,8 +433,8 @@ export function ActiveBuildCard({
     ready: {
       label: 'Play',
       icon: Play,
-      background: 'linear-gradient(120deg, #7c8cff, #a855f7)',
-      glow: 'rgba(124,140,255,0.6)',
+      background: 'linear-gradient(120deg, #34d399, #059669)',
+      glow: 'rgba(16,185,129,0.55)',
     },
     launching: {
       label: 'Starting…',
@@ -372,9 +456,16 @@ export function ActiveBuildCard({
     },
   }[state]
 
-  const primary = statePrimary
-  const primaryBusy = busy
-  const primaryDisabled = busy || (state === 'missing' && !hasDownloadSource)
+  const primary = requiresSignIn
+    ? {
+        label: `Sign in to ${signInTarget}`,
+        icon: LogIn,
+        background: 'linear-gradient(120deg, #4b5563, #374151)',
+        glow: 'rgba(75,85,99,0.35)',
+      }
+    : statePrimary
+  const primaryBusy = busy && !requiresSignIn
+  const primaryDisabled = !requiresSignIn && (busy || (state === 'missing' && !hasDownloadSource))
 
   const PrimaryIcon = primary.icon
 
@@ -395,17 +486,19 @@ export function ActiveBuildCard({
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
     ready: onlineProviderLabel
-      ? onlineServers > 0
-        ? `Ready — ${onlineServers} live external ${onlineServers === 1 ? 'server' : 'servers'} · ${onlinePlayers} player${onlinePlayers === 1 ? '' : 's'} online.${autoServer ? ` Auto joins ${autoServer.name}.` : ''}`
-        : activeGlobalBackend
-          ? `Ready — ${activeGlobalBadge} on ${activeGlobalBackend.label}. Play queues you with real players worldwide.`
+      ? activeGlobalBackend && (selectedGlobalBackend || (!autoServer && !selectedIpServer))
+        ? activeBackendOffline
+          ? `Ready — ${activeGlobalBackend.label} is offline. Pick another backend or server and try again.`
+          : `Ready — ${activeGlobalBadge} on ${activeGlobalBackend.label}. ${serverCountLabel(liveServers)} · ${playerCountLabel(livePlayers)} live. Play queues you with real players worldwide.`
+        : liveServers > 0
+          ? `Ready — ${serverCountLabel(liveServers)} · ${playerCountLabel(livePlayers)} live.${autoServer ? ` Auto joins ${autoServer.name}.` : ''}`
           : fallbackServer
             ? `Ready — no live ${build.season.label} server. Play falls back to ${fallbackServer.name} (${seasonLabelForId(fallbackServer.seasonId)}).`
             : 'Ready — no real players are on live external servers for this season right now.'
       : lobbyCount > 0
         ? `Ready — ${lobbyCount} reachable VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} online${playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}. Play joins one automatically.`
-        : onlinePlayers > 0
-          ? `Ready — ${onlinePlayers} player${onlinePlayers === 1 ? '' : 's'} playing online.`
+        : livePlayers > 0
+          ? `Ready — ${livePlayers} player${livePlayers === 1 ? '' : 's'} playing online.`
           : 'Ready — online play is ready.',
     launching: launchStage ?? 'Fortnite is starting. Have fun.',
     running: hostedLobby
@@ -413,9 +506,11 @@ export function ActiveBuildCard({
         ? `Fortnite is running — your lobby is public at ${hostedLobby.address}:${hostedLobby.port}.`
         : 'Fortnite is running — your lobby is WiFi-only. Forward UDP 7777 or use a tunnel in Settings for internet play.'
       : 'Fortnite is running. Have fun.',
-    error: launchErrorLocal
-      ? 'No live external server was available — pick another server or try again.'
-      : 'Could not start the client. Check the build path and try again.',
+    error: verificationRequired
+      ? 'Account verification is required before the provider will issue a launch code.'
+      : launchErrorLocal
+        ? 'No live external server was available — pick another server or try again.'
+        : 'Could not start the client. Check the build path and try again.',
   }
 
   return (
@@ -455,7 +550,7 @@ export function ActiveBuildCard({
               aria-label={`Online status: ${onlineStatus}`}
               className={cx(
                 'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-emerald-200 backdrop-blur',
-                onlinePlayers > 0
+                livePlayers > 0
                   ? 'border-emerald-300/50 bg-emerald-400/[0.18] shadow-[0_0_26px_rgba(16,185,129,0.22)]'
                   : 'border-emerald-400/35 bg-emerald-400/[0.12] shadow-[0_0_22px_rgba(16,185,129,0.14)]',
               )}
@@ -463,7 +558,7 @@ export function ActiveBuildCard({
               <span
                 className={cx(
                   'h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.95)]',
-                  onlinePlayers > 0 && 'animate-pulse',
+                  livePlayers > 0 && 'animate-pulse',
                 )}
               />
               {onlineStatus}
@@ -481,21 +576,34 @@ export function ActiveBuildCard({
 
           <div className="flex flex-wrap items-center gap-2">
             {activeGlobalBackend &&
-              activeGlobalBackend.auth !== 'none' &&
+              activeGlobalBackend.auth === 'oauth' &&
               !providerSignedIn &&
               onProviderSignIn && (
                 <button
                   type="button"
-                  onClick={() => onProviderSignIn(activeGlobalBackend)}
+                  onClick={() => {
+                    if (signedOut) onSignIn?.()
+                    else onProviderSignIn(activeGlobalBackend)
+                  }}
                   className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/35 bg-emerald-400/[0.1] px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.1em] text-emerald-200 backdrop-blur transition-colors hover:border-emerald-400/65 hover:bg-emerald-400/20 hover:text-white"
                 >
                   <Globe2 className="h-3.5 w-3.5" />
                   Sign in to {activeGlobalBackend.label}
                 </button>
               )}
-            <span onClick={(event) => event.stopPropagation()}>
-              <AccountChip account={account} onLogout={onLogout} />
-            </span>
+            {signedOut ? (
+              <button
+                type="button"
+                onClick={onSignIn}
+                className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/35 bg-emerald-400/[0.1] px-3 py-2 text-[12px] font-semibold text-emerald-100 transition-colors duration-200 hover:border-emerald-400/65 hover:bg-emerald-400/15 hover:text-white"
+              >
+                <LogIn className="h-4 w-4" /> Sign in
+              </button>
+            ) : (
+              <span onClick={(event) => event.stopPropagation()}>
+                <AccountChip account={account} onLogout={onLogout} />
+              </span>
+            )}
             <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/35 px-3 py-1.5 text-[11px] font-medium text-mist/90 backdrop-blur">
               <span className={cx('h-1.5 w-1.5 rounded-full', pill.dot, busy && 'animate-pulse')} />
               {pill.label}
@@ -535,10 +643,13 @@ export function ActiveBuildCard({
                 >
                   Server
                 </label>
-                <span className="inline-flex items-center gap-1.5 text-[10px] font-medium text-emerald-300/90">
+                <span
+                  aria-live="polite"
+                  className="inline-flex items-center gap-1.5 text-[10px] font-medium text-emerald-300/90"
+                >
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
-                  {onlineServers} {onlineServers === 1 ? 'server' : 'servers'} · {onlinePlayers}{' '}
-                  {onlinePlayers === 1 ? 'player' : 'players'}
+                  {liveServers} {liveServers === 1 ? 'server' : 'servers'} · {livePlayers}{' '}
+                  {livePlayers === 1 ? 'player' : 'players'}
                 </span>
               </div>
               <div className="relative mt-1.5">
@@ -551,11 +662,11 @@ export function ActiveBuildCard({
                 >
                   <option value="" className="bg-ink text-mist">
                     {autoServer
-                      ? `Auto: Best Live Server (${autoServer.name} · ${autoServer.providerLabel || autoServer.providerId} · ${serverPlayerLabel(autoServer)})`
-                      : activeGlobalBackend
-                        ? `Auto: Global Matchmaking (${activeGlobalBackend.label} · ${activeGlobalBadge})`
+                      ? `Auto: Best Live Server (${autoServer.name} · ${autoServer.providerLabel || autoServer.providerId} · ${serverCountLabel(1)} · ${serverPlayerLabel(autoServer)} · ${serverPingLabel(autoServer)})`
+                      : autoOptionGlobalBackend
+                        ? `Auto: Global Matchmaking (${autoOptionGlobalBackend.label} · ${serverCountLabel(autoOptionBackendCounts.servers)} · ${playerCountLabel(autoOptionBackendCounts.players)} · ${backendPingLabel(autoOptionGlobalBackend)})`
                         : fallbackServer
-                          ? `Auto: Best Fallback (${fallbackServer.name} · ${fallbackServer.providerLabel || fallbackServer.providerId} · ${seasonLabelForId(fallbackServer.seasonId)})`
+                          ? `Auto: Best Fallback (${fallbackServer.name} · ${fallbackServer.providerLabel || fallbackServer.providerId} · ${seasonLabelForId(fallbackServer.seasonId)} · ${serverPlayerLabel(fallbackServer)} · ${serverPingLabel(fallbackServer)})`
                           : 'Auto: Start a VAULTED public lobby'}
                   </option>
                   {globalOptions.length > 0 && (
@@ -606,10 +717,8 @@ export function ActiveBuildCard({
                 {selectedGlobalBackend
                   ? `Play connects to ${selectedGlobalBackend.name}'s live global backend. ${
                       selectedGlobalBackend.auth === 'oauth'
-                        ? 'Sign in once; VAULTED fetches a fresh one-time code on every Play.'
-                        : selectedGlobalBackend.auth === 'exchangeCode'
-                          ? 'Sign in with a fresh exchange code first.'
-                          : 'No account link is required.'
+                        ? 'Sign in once; VAULTED requests a fresh game code automatically on every Play.'
+                        : 'No account link is required.'
                     }`
                   : selectedServer
                     ? `Play joins ${selectedServer} directly. The same address is saved for ${season.label}.`
@@ -623,12 +732,15 @@ export function ActiveBuildCard({
               </p>
 
               {activeGlobalBackend &&
-                activeGlobalBackend.auth !== 'none' &&
+                activeGlobalBackend.auth === 'oauth' &&
                 !providerSignedIn &&
                 onProviderSignIn && (
                   <button
                     type="button"
-                    onClick={() => onProviderSignIn(activeGlobalBackend)}
+                    onClick={() => {
+                      if (signedOut) onSignIn?.()
+                      else onProviderSignIn(activeGlobalBackend)
+                    }}
                     className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/35 bg-emerald-400/[0.09] px-3 py-2 text-[11px] font-bold uppercase tracking-[0.08em] text-emerald-200 transition-colors duration-200 hover:border-emerald-400/65 hover:bg-emerald-400/15 hover:text-white"
                   >
                     <Globe2 className="h-3.5 w-3.5" />
@@ -732,11 +844,11 @@ export function ActiveBuildCard({
                 {hostedLobby.public ? 'Your lobby is public' : 'Your lobby is WiFi-only'} ·{' '}
                 {hostedLobby.address}:{hostedLobby.port}
               </span>
-            ) : onlineServers > 0 ? (
+            ) : liveServers > 0 ? (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-2.5 py-1 text-[10.5px] font-semibold text-emerald-100">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
-                {onlineServers} live external {onlineServers === 1 ? 'server' : 'servers'} online
-                {onlinePlayers > 0 ? ` · ${onlinePlayers} player${onlinePlayers === 1 ? '' : 's'}` : ''}
+                {liveServers} live {liveServers === 1 ? 'server' : 'servers'} online
+                {livePlayers > 0 ? ` · ${livePlayers} player${livePlayers === 1 ? '' : 's'}` : ''}
               </span>
             ) : null}
           </div>
@@ -842,30 +954,64 @@ export function ActiveBuildCard({
             <div
               className={cx(
                 'mb-3 rounded-2xl border px-3.5 py-3 text-[11.5px] leading-relaxed backdrop-blur',
-                launchErrorLocal
-                  ? 'border-amber-400/30 bg-amber-400/[0.07] text-amber-100'
-                  : 'border-rose-400/30 bg-rose-500/[0.08] text-rose-100',
+                verificationRequired
+                  ? 'border-amber-400/35 bg-amber-400/[0.08] text-amber-100'
+                  : launchErrorLocal
+                    ? 'border-amber-400/30 bg-amber-400/[0.07] text-amber-100'
+                    : 'border-rose-400/30 bg-rose-500/[0.08] text-rose-100',
               )}
-              role={launchErrorLocal ? 'status' : 'alert'}
+              role={verificationRequired || launchErrorLocal ? 'status' : 'alert'}
             >
               <div className="flex items-start gap-2">
                 <TriangleAlert
-                  className={cx('mt-0.5 h-4 w-4 shrink-0', launchErrorLocal ? 'text-amber-300' : 'text-rose-300')}
+                  className={cx(
+                    'mt-0.5 h-4 w-4 shrink-0',
+                    verificationRequired || launchErrorLocal ? 'text-amber-300' : 'text-rose-300',
+                  )}
                 />
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold">
-                    {launchErrorLocal ? 'Local match unavailable' : 'Why the last launch stopped'}
+                    {verificationRequired
+                      ? 'Account verification needed'
+                      : launchErrorLocal
+                        ? 'Local match unavailable'
+                        : 'Why the last launch stopped'}
                   </p>
                   <p
                     className={cx(
                       'mt-1 break-words',
-                      launchErrorLocal
-                        ? 'text-[11px] text-amber-100/85'
-                        : 'max-h-40 overflow-y-auto whitespace-pre-wrap font-mono text-[9.5px] leading-relaxed text-rose-100/80',
+                      verificationRequired
+                        ? 'text-[11px] leading-relaxed text-amber-100/90'
+                        : launchErrorLocal
+                          ? 'text-[11px] text-amber-100/85'
+                          : 'max-h-40 overflow-y-auto whitespace-pre-wrap font-mono text-[9.5px] leading-relaxed text-rose-100/80',
                     )}
                   >
                     {launchError}
                   </p>
+                  {verificationRequired && launchVerificationUrl && onOpenVerification && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onOpenVerification(launchVerificationUrl)}
+                        title={`Open ${launchVerificationUrl}`}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300/40 bg-amber-300/15 px-2.5 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.05em] text-amber-100 transition-colors duration-200 hover:border-amber-200/70 hover:bg-amber-300/25 hover:text-white"
+                      >
+                        <Globe2 className="h-3.5 w-3.5" />
+                        Open {build.onlineProvider?.name || build.onlineProvider?.label || 'verification page'}
+                      </button>
+                      {onRetryLaunch && (
+                        <button
+                          type="button"
+                          onClick={onRetryLaunch}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.06] px-2.5 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.05em] text-mist transition-colors duration-200 hover:border-white/30 hover:bg-white/[0.12] hover:text-white"
+                        >
+                          <Play className="h-3.5 w-3.5" />
+                          Retry launch
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -898,29 +1044,39 @@ export function ActiveBuildCard({
                   <div
                     className={cx(
                       'inline-flex overflow-hidden rounded-xl transition-all duration-300',
-                      primaryBusy
-                        ? 'opacity-85'
-                        : 'hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]',
+                      requiresSignIn
+                        ? 'opacity-90'
+                        : primaryBusy
+                          ? 'opacity-85'
+                          : 'hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]',
                     )}
                     style={{
                       background: primary.background,
-                      boxShadow: primaryBusy ? undefined : `0 14px 34px -16px ${primary.glow}`,
+                      boxShadow: primaryBusy || requiresSignIn ? undefined : `0 14px 34px -16px ${primary.glow}`,
                     }}
                   >
                     <button
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation()
+                        if (requiresSignIn) {
+                          onSignIn?.()
+                          return
+                        }
                         if (primaryDisabled) return
                         onPrimary()
                       }}
                       disabled={primaryDisabled}
+                      aria-disabled={requiresSignIn || primaryDisabled}
+                      title={requiresSignIn ? `Sign in to ${signInTarget.toLowerCase()} ${season.label}` : undefined}
                       className={cx(
                         'group relative inline-flex items-center gap-2.5 overflow-hidden px-5 py-3 text-[13.5px] font-semibold text-white',
-                        primaryBusy ? 'cursor-progress' : '',
+                        requiresSignIn ? 'cursor-pointer' : primaryBusy ? 'cursor-progress' : '',
                       )}
                     >
-                      <span className="absolute inset-0 -translate-x-[120%] bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-[120%]" />
+                      {!requiresSignIn && (
+                        <span className="absolute inset-0 -translate-x-[120%] bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-[120%]" />
+                      )}
                       <PrimaryIcon className={cx('h-4 w-4', primaryBusy && 'animate-spin')} />
                       <span className="relative">{primary.label}</span>
                     </button>

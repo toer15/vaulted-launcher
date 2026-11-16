@@ -9,10 +9,15 @@
 
 import defaultBuilds from '../assets/builds.json'
 import { FRIENDS_API_BASE, type LobbyInfo } from './friends'
-import type { OnlineProviderConfig, ShopEquipped } from '../types'
+import type { OnlineProviderConfig, ProviderLiveStatus, ShopEquipped } from '../types'
 
 export const API_BASE =
   'https://site-c377de5341934c84b54b325555448242.freebuff.page'
+
+/** Provider identities are account-wide, never scoped to a season/build. */
+export function normalizeProviderId(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase().split(':')[0].trim() : ''
+}
 
 const SESSION_KEY = 'vaulted.session.v1'
 const MANIFEST_KEY = 'vaulted.manifest.v1'
@@ -88,6 +93,13 @@ function parseSession(raw: string | null): RiftSession | null {
   try {
     const parsed = JSON.parse(raw) as RiftSession
     if (!parsed?.user?.username) return null
+    // Provider sessions are looked up by providerId alone. Normalising here
+    // also repairs old `providerId:seasonId` values from previous builds.
+    if (parsed.user.providerId) {
+      const providerId = normalizeProviderId(parsed.user.providerId)
+      if (providerId) parsed.user.providerId = providerId
+      else delete parsed.user.providerId
+    }
     // Migrate sessions written by older provider builds; they used a
     // provider-prefixed placeholder token that looked like a VAULTED token.
     if (parsed.token?.startsWith('provider:') && parsed.user.providerId) {
@@ -131,7 +143,11 @@ export function loadSession(): RiftSession | null {
 }
 
 export function saveSession(session: RiftSession): void {
-  const raw = JSON.stringify(session)
+  const providerId = normalizeProviderId(session.user.providerId)
+  const normalized = providerId
+    ? { ...session, user: { ...session.user, providerId } }
+    : session
+  const raw = JSON.stringify(normalized)
   try {
     localStorage.setItem(SESSION_KEY, raw)
   } catch {
@@ -263,9 +279,9 @@ export interface CommunityServer extends LobbyInfo {
 }
 
 /**
- * A provider/season report from a directory that has player fields but no
- * joinable address. Kept separate from CommunityServer on purpose: these rows
- * must never be joined or counted as public lobbies.
+ * A provider/season report from a directory that is not fully represented by
+ * joinable rows. Kept separate from CommunityServer on purpose: these rows
+ * must never be joined, but their residual population is included in totals.
  */
 export interface CommunityProviderStatus {
   providerId: string
@@ -486,6 +502,44 @@ export async function fetchCommunityDirectory(
 
 export async function fetchCommunityServers(query: CommunityServerQuery = {}): Promise<CommunityServer[]> {
   return (await fetchCommunityDirectory(query)).servers
+}
+
+/** Refresh global backend health/population through the trusted main process. */
+export async function fetchProviderLiveStatuses(): Promise<Record<string, ProviderLiveStatus>> {
+  const result = await window.arc?.providerLiveStatus?.()
+  if (!result || typeof result !== 'object') return {}
+  const statuses: Record<string, ProviderLiveStatus> = {}
+  for (const [providerId, value] of Object.entries(result)) {
+    const raw = value as Partial<ProviderLiveStatus>
+    if (!providerId || typeof raw !== 'object' || raw === null || raw.online !== true) continue
+    const players = Number(raw.players)
+    const servers = Number(raw.servers)
+    const pingMs = Number(raw.pingMs)
+    statuses[providerId] = {
+      providerId,
+      online: true,
+      players: Number.isFinite(players) && players >= 0 ? Math.floor(players) : undefined,
+      servers:
+        Number.isFinite(servers) && servers > 0
+          ? Math.floor(servers)
+          : 1,
+      pingMs: Number.isFinite(pingMs) && pingMs >= 0 ? Math.round(pingMs) : undefined,
+      checkedAt: typeof raw.checkedAt === 'string' ? raw.checkedAt : new Date().toISOString(),
+    }
+  }
+  // An explicitly offline backend still needs to clear the previous sample.
+  for (const [providerId, value] of Object.entries(result)) {
+    if (!providerId || statuses[providerId]) continue
+    const raw = value as Partial<ProviderLiveStatus>
+    if (!raw || typeof raw !== 'object' || raw.online !== false) continue
+    statuses[providerId] = {
+      providerId,
+      online: false,
+      servers: 0,
+      checkedAt: typeof raw.checkedAt === 'string' ? raw.checkedAt : new Date().toISOString(),
+    }
+  }
+  return statuses
 }
 
 export async function fetchActive(): Promise<ActiveCounts> {

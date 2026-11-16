@@ -51,6 +51,10 @@ export function LibraryRail({
       ),
     [builds, playModes],
   )
+  const activePlayerTotal = useMemo(
+    () => activeBuilds.reduce((total, build) => total + onlinePlayerCount(playModes[build.id]), 0),
+    [activeBuilds, playModes],
+  )
   const visibleBuilds =
     filter === 'installed' ? installedBuilds : filter === 'active' ? activeBuilds : builds
 
@@ -114,6 +118,7 @@ export function LibraryRail({
         <button
           type="button"
           aria-pressed={filter === 'active'}
+          aria-label={`Active Players Now (${activePlayerTotal} online)`}
           onClick={() => setFilter('active')}
           className={tabClass(filter === 'active', true)}
         >
@@ -122,7 +127,7 @@ export function LibraryRail({
           )}
           <span className="flex flex-col">
             <span>Active Players</span>
-            <span>Now</span>
+            <span>Now · {activePlayerTotal}</span>
           </span>
         </button>
       </div>

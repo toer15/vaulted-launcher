@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
-  <title>VAULTED · Sign In</title>
+  <title>VAULTED · SECURE ACCOUNT LINK</title>
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
@@ -126,7 +126,7 @@
       <span class="mark" aria-hidden="true">V</span>
       <div class="copy">
         <div class="eyebrow">VAULTED · Secure account link</div>
-        <div class="title" id="provider-title">Sign In</div>
+        <div class="title" id="provider-title">VAULTED · SECURE ACCOUNT LINK</div>
       </div>
     </div>
     <div class="actions">
@@ -144,9 +144,13 @@
   </main>
   <script>
     (() => {
-      const provider = new URLSearchParams(location.search).get('provider') || 'live account'
-      document.getElementById('provider-title').textContent = 'Sign in to ' + provider
-      document.getElementById('stage-copy').textContent = 'Opening ' + provider + '’s secure sign-in page…'
+      const params = new URLSearchParams(location.search)
+      const provider = params.get('provider') || 'live account'
+      document.getElementById('provider-title').textContent = 'VAULTED · SECURE ACCOUNT LINK'
+      document.getElementById('stage-copy').textContent =
+        params.get('mode') === 'verification'
+          ? 'Complete verification to continue…'
+          : 'Opening ' + provider + '’s secure sign-in page…'
       document.getElementById('close').addEventListener('click', () => window.vaultedAuth?.close())
       document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') window.vaultedAuth?.close()

@@ -11,12 +11,16 @@ export interface SeasonPlayMode {
   /** joinable live servers included in playerCount */
   lobbyCount: number
   playerCount: number
-  /** status-only provider servers included in communityPlayerCount */
+  /** provider servers not represented by joinable rows, included in totals */
   communityServerCount?: number
   /** community provider pre-mapped in builds.json, e.g. EZFN */
   providerLabel?: string
-  /** players reported by an external directory that has no joinable address */
+  /** directory population not represented by joinable rows */
   communityPlayerCount?: number
+  /** players reported by the global backend health/population probe */
+  backendPlayerCount?: number
+  /** reachable global backend servers (at least one when online) */
+  backendServerCount?: number
   communityProviderLabel?: string
   /** external directories that list this season */
   directoryProviders?: string[]
@@ -46,7 +50,11 @@ export function onlinePlayerCount(mode: SeasonPlayMode | null | undefined): numb
     typeof mode?.communityPlayerCount === 'number' && Number.isFinite(mode.communityPlayerCount)
       ? mode.communityPlayerCount
       : 0
-  return Math.max(0, Math.floor(joinable + statusOnly))
+  const backend =
+    typeof mode?.backendPlayerCount === 'number' && Number.isFinite(mode.backendPlayerCount)
+      ? mode.backendPlayerCount
+      : 0
+  return Math.max(0, Math.floor(joinable + statusOnly + backend))
 }
 
 /** Total live external servers counted in the same season total. */
@@ -56,7 +64,11 @@ export function seasonServerCount(mode: SeasonPlayMode | null | undefined): numb
     typeof mode?.communityServerCount === 'number' && Number.isFinite(mode.communityServerCount)
       ? mode.communityServerCount
       : 0
-  return Math.max(0, Math.floor(joinable + statusOnly))
+  const backend =
+    typeof mode?.backendServerCount === 'number' && Number.isFinite(mode.backendServerCount)
+      ? mode.backendServerCount
+      : 0
+  return Math.max(0, Math.floor(joinable + statusOnly + backend))
 }
 
 export function onlineStatusLabel(players: number, servers = 0): string {
@@ -446,9 +458,10 @@ export function playModesForBuilds(
     }
   }
 
-  // A configured global backend is a real live destination even when it does
-  // not expose a public per-lobby player count. It is separate from the relay
-  // and directory populations so the UI never invents a player number.
+  // A configured global backend is a real live destination. Its reachability
+  // and population come from the 10-second main-process probe; a missing probe
+  // is treated as online (still checking) so the UI never flashes "offline"
+  // during startup. A reachable backend always contributes one server.
   for (const build of builds) {
     const seasonKey = artKeyFor(build.season)
     if (!seasonKey) continue
@@ -456,18 +469,32 @@ export function playModesForBuilds(
       (backend) => backend.global && backend.supportedSeasons.includes(seasonKey),
     )
     if (backends.length > 0) {
+      const known = backends.filter((backend) => backend.live)
+      const onlineBackends = backends.filter((backend) => backend.live?.online !== false)
+      const globalOnline = onlineBackends.length > 0
+      const backendPlayers = onlineBackends.reduce(
+        (total, backend) => total + Math.max(0, Math.floor(backend.live?.players ?? 0)),
+        0,
+      )
+      const backendServers = onlineBackends.reduce(
+        (total, backend) => total + Math.max(1, Math.floor(backend.live?.servers ?? 1)),
+        0,
+      )
       modes[build.id] = {
         ...(modes[build.id] ?? DEFAULT_PLAY_MODE),
-        online: true,
-        globalOnline: true,
+        globalOnline,
         globalProviderLabel: backends.map((backend) => backend.label).join(' / '),
+        ...(globalOnline && (known.length > 0 || backendServers > 0)
+          ? { backendPlayerCount: backendPlayers, backendServerCount: backendServers }
+          : {}),
       }
     }
   }
 
-  // A directory can publish live player counts for a provider without
-  // publishing an IP. Keep those numbers separate from lobby counts so the UI
-  // never implies there is an address to join.
+  // A directory can publish live player counts without a joinable address (or
+  // a status API can include both). The main-process directory fetch removes
+  // addresses already represented as joinable rows; keep the residual separate
+  // so the UI never implies there is an address to join.
   for (const build of builds) {
     const seasonKey = artKeyFor(build.season)
     if (!seasonKey) continue

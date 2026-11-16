@@ -6,6 +6,7 @@ import type {
   GlobalBackend,
   OnlineProviderConfig,
   ProviderAuthStatus,
+  ProviderLiveStatus,
   ShopEquipped,
   ShopItemType,
 } from '../types'
@@ -214,11 +215,15 @@ export interface LauncherBridge {
   fetchCommunityServers?(query: CommunityServerQuery): Promise<CommunityServerResult>
   /** live global OGFN backends from resources/providers/provider.json */
   providerCatalog?(): Promise<GlobalBackend[]>
+  /** health and population sampled from the configured global backends */
+  providerLiveStatus?(): Promise<Record<string, ProviderLiveStatus>>
   /** native provider account link for global_live backends */
   providerAuth?: {
     status(): Promise<Record<string, ProviderAuthStatus>>
-    login(providerId: string): Promise<ProviderAuthStatus>
+    login(providerId: string, method?: 'discord' | 'google'): Promise<ProviderAuthStatus>
     logout(providerId: string): Promise<ProviderAuthStatus>
+    /** main broadcasts a provider-wide status after any account link change */
+    onProviderAuthChanged?(callback: (status: ProviderAuthStatus) => void): () => void
   }
   /** validate and measure a public manual game-server address */
   probeServer?(payload: { host: string; port: number }): Promise<{
@@ -256,7 +261,6 @@ export interface LauncherBridge {
     buildFolderPath: string
     joinHost?: string
     joinPort?: number
-    authCode?: string
   }): Promise<OnlineProviderLaunchResult>
   window?: WindowControls
 }
@@ -373,7 +377,6 @@ export async function launchOnlineProvider(
   build: Build,
   provider: OnlineProviderConfig,
   server?: Pick<CommunityServer, 'host' | 'port'> | null,
-  authCode?: string,
 ): Promise<OnlineProviderLaunchResult> {
   if (!window.arc?.launchOnlineProvider) {
     throw new Error('Online play needs the desktop app.')
@@ -386,7 +389,6 @@ export async function launchOnlineProvider(
       version: build.version,
       buildFolderPath: build.path,
       ...(server ? { joinHost: server.host, joinPort: server.port } : {}),
-      ...(authCode ? { authCode } : {}),
     })
   } catch (error) {
     throw cleanIpcError(error)

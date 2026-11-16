@@ -40,10 +40,12 @@ contextBridge.exposeInMainWorld('arc', {
   fetchText: (url, options) => ipcRenderer.invoke('arc:fetch-text', url, options),
   fetchCommunityServers: (query) => ipcRenderer.invoke('arc:community-servers', query),
   providerCatalog: () => ipcRenderer.invoke('arc:provider-catalog'),
+  providerLiveStatus: () => ipcRenderer.invoke('arc:provider-live-status'),
   providerAuth: {
     status: () => ipcRenderer.invoke('arc:provider-auth-status'),
-    login: (providerId) => ipcRenderer.invoke('arc:provider-auth-login', providerId),
+    login: (providerId, method) => ipcRenderer.invoke('arc:provider-auth-login', providerId, method),
     logout: (providerId) => ipcRenderer.invoke('arc:provider-auth-logout', providerId),
+    onProviderAuthChanged: (callback) => subscribe('arc:provider-auth-changed', callback),
   },
   probeServer: (payload) => ipcRenderer.invoke('arc:probe-server', payload),
   openExternal: (url) => ipcRenderer.invoke('arc:open-external', url),

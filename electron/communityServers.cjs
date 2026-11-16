@@ -594,6 +594,51 @@ function normalizeStatusPayload(payload, endpoint, hint) {
   return aggregateStatuses(statuses)
 }
 
+/**
+ * Status APIs that also publish join addresses produce two representations of
+ * the same live servers. Remove the portion already represented by joinable
+ * rows, grouped by endpoint/provider/season, so the UI sums each population
+ * once. A residual status remains when a status API reports servers without a
+ * usable address.
+ */
+function dedupeStatusesAgainstServers(statuses, servers) {
+  const covered = new Map()
+  for (const server of Array.isArray(servers) ? servers : []) {
+    const key = `${String(server.source || '').toLowerCase()}|${String(server.providerId || 'community').toLowerCase()}|${String(server.seasonId || 'all').toLowerCase()}`
+    let current = covered.get(key)
+    if (!current) {
+      current = { servers: 0, players: 0, maxPlayers: 0 }
+      covered.set(key, current)
+    }
+    current.servers += 1
+    if (server.playersKnown !== false && Number.isFinite(server.players)) {
+      current.players += Math.max(0, Math.floor(server.players))
+    }
+    if (Number.isFinite(server.maxPlayers)) current.maxPlayers += Math.max(0, Math.floor(server.maxPlayers))
+  }
+
+  return (Array.isArray(statuses) ? statuses : []).flatMap((status) => {
+    const key = `${String(status.source || '').toLowerCase()}|${String(status.providerId || 'community').toLowerCase()}|${String(status.seasonId || 'all').toLowerCase()}`
+    const represented = covered.get(key)
+    if (!represented) return [status]
+
+    const players = Math.max(0, (status.players ?? 0) - represented.players)
+    const servers = Math.max(0, (status.servers ?? 0) - represented.servers)
+    if (players === 0 && servers === 0) return []
+    return [
+      {
+        ...status,
+        players: players > 0 ? players : undefined,
+        maxPlayers:
+          status.maxPlayers !== undefined
+            ? Math.max(0, status.maxPlayers - represented.maxPlayers)
+            : undefined,
+        servers,
+      },
+    ]
+  })
+}
+
 function cleanMarkdown(value) {
   return value
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
@@ -832,7 +877,8 @@ function readConfig() {
       providerParam: safeString(endpoint.providerParam, 24),
       statusOnly: endpoint.statusOnly === true,
       // Some status APIs also include direct join addresses. Capture those as
-      // servers when present, while keeping status-only rows for the badge.
+      // servers when present; fetchCommunityServers removes the overlapping
+      // status population so totals are not double counted.
       alsoServers: endpoint.alsoServers === true,
       timeoutMs: Math.min(15_000, Math.max(1000, safeNumber(endpoint.timeoutMs, DEFAULT_TIMEOUT_MS))),
       freshnessMs: Math.min(86_400_000, Math.max(0, safeNumber(endpoint.freshnessMs, DEFAULT_FRESHNESS_MS))),
@@ -1261,7 +1307,10 @@ async function fetchCommunityServers(input = {}) {
 
   return {
     servers: ranked.slice(0, config.maxServers),
-    statuses,
+    // `alsoServers` endpoints expose the same live rows as both aggregate
+    // status and joinable addresses. Remove the overlap before returning so
+    // every hero/dropdown/Active Players total counts each server once.
+    statuses: dedupeStatusesAgainstServers(statuses, servers),
     directories: dedupeDirectories(directories),
     errors,
     checkedAt: new Date().toISOString(),
@@ -1270,6 +1319,7 @@ async function fetchCommunityServers(input = {}) {
 
 module.exports = {
   compareCommunityServers,
+  dedupeStatusesAgainstServers,
   fetchCommunityServers,
   mergeCommunityServers,
   normalizeCommunityPayload,
