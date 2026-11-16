@@ -125,18 +125,24 @@ function addressFor(raw, endpoint) {
     'endpoint',
     'host',
     'ip',
+    'Host',
+    'IP',
+    'Ip',
   ])
   const explicitAddress = safeString(configuredAddress, 255)
     .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
     .split('/')[0]
   if (explicitAddress) {
-    const parsed = normalizeHostPort(explicitAddress, safeNumber(configuredValue(raw, endpoint, 'port', ['port']), 7777))
+    const parsed = normalizeHostPort(
+      explicitAddress,
+      safeNumber(configuredValue(raw, endpoint, 'port', ['port', 'Port']), 7777),
+    )
     if (parsed) return parsed
   }
 
-  const host = safeString(configuredValue(raw, endpoint, 'host', ['host', 'ip']), 253)
+  const host = safeString(configuredValue(raw, endpoint, 'host', ['host', 'ip', 'Host', 'IP', 'Ip']), 253)
   if (!host) return null
-  return normalizeHostPort(host, safeNumber(configuredValue(raw, endpoint, 'port', ['port']), 7777))
+  return normalizeHostPort(host, safeNumber(configuredValue(raw, endpoint, 'port', ['port', 'Port']), 7777))
 }
 
 function updatedAt(raw, endpoint) {
@@ -234,6 +240,8 @@ function seasonFor(raw, hint, endpoint) {
     if (exact) return exact
     const fromVersion = seasonFromVersion(version)
     if (fromVersion) return fromVersion
+    const versionText = safeString(String(version), 64)
+    if (versionText) warnUnmappedVersion(endpoint, versionText)
   }
 
   const label = String(
@@ -266,27 +274,91 @@ function seasonFor(raw, hint, endpoint) {
 }
 
 /**
+ * Exact Fortnite major -> VAULTED season id. Keep this in lockstep with
+ * SEASON_TABLE in src/lib/seasons.ts. The old arithmetic ranges silently
+ * shifted every build from 18 onward and had no entries for 36-43.
+ */
+const SEASON_BY_MAJOR = {
+  1: 'ch1-s1',
+  2: 'ch1-s2',
+  3: 'ch1-s3',
+  4: 'ch1-s4',
+  5: 'ch1-s5',
+  6: 'ch1-s6',
+  7: 'ch1-s7',
+  8: 'ch1-s8',
+  9: 'ch1-s9',
+  10: 'ch1-s10',
+  11: 'ch2-s1',
+  12: 'ch2-s2',
+  13: 'ch2-s3',
+  14: 'ch2-s4',
+  15: 'ch2-s5',
+  16: 'ch2-s6',
+  17: 'ch2-s7',
+  18: 'ch2-s8',
+  19: 'ch3-s1',
+  20: 'ch3-s2',
+  21: 'ch3-s3',
+  22: 'ch3-s4',
+  23: 'ch4-s1',
+  24: 'ch4-s2',
+  25: 'ch4-s3',
+  26: 'ch4-s4',
+  27: 'ch4-s5',
+  28: 'ch5-s1',
+  29: 'ch5-s2',
+  30: 'ch5-s3',
+  31: 'ch5-s4',
+  32: 'ch5-remix',
+  33: 'ch6-s1',
+  34: 'ch6-s2',
+  35: 'ch6-mini1',
+  36: 'ch6-s3',
+  37: 'ch6-s4',
+  38: 'ch6-mini2',
+  39: 'ch7-s1',
+  40: 'ch7-s2',
+  41: 'ch7-s3',
+  42: 'ch7-s4',
+  43: 'ch7-mini1',
+}
+
+/** version strings already reported as unmappable, to avoid a 15s log flood */
+const warnedVersions = new Set()
+/** endpoint failures are logged once; the scan still returns them every poll */
+const warnedFetchErrors = new Set()
+
+function warnUnmappedVersion(endpoint, version) {
+  const key = `${endpoint.id}|${version}`
+  if (warnedVersions.has(key)) return
+  warnedVersions.add(key)
+  console.warn(
+    `[community] ${endpoint.id}: could not map build version "${version}" to a VAULTED season`,
+  )
+}
+
+function warnFetchError(endpoint, message) {
+  const key = `${endpoint.id}|${message}`
+  if (warnedFetchErrors.has(key)) return
+  warnedFetchErrors.add(key)
+  console.warn(`[community] ${endpoint.id} (${endpoint.url}) failed: ${message}`)
+}
+
+/**
  * Fortnite build major to season mapping, used when a directory publishes a
  * version instead of a season id. A config seasonMap can override any entry.
+ * Handles bare versions (7.40), launcher strings (++Fortnite+Release-14.60-CL-…)
+ * and full build labels; the minor is only needed to split 1.10 from 1.11.
  */
 function seasonFromVersion(value) {
-  const text = safeString(value, 32)
-  const match = /^(\d{1,2})(?:\.(\d{1,3}))?/.exec(text)
+  const text = safeString(typeof value === 'string' ? value : String(value ?? ''), 64)
+  const match = /(?<!\d)(\d{1,2})\.(\d{1,2})(?:\.\d{1,3})?(?!\d)/.exec(text)
   if (!match) return null
   const major = Number(match[1])
-  const minor = match[2] === undefined ? null : Number(match[2])
-
-  if (major === 1) {
-    if (minor !== null && minor >= 11) return 'ch1-s2'
-    return 'ch1-s1'
-  }
-  if (major === 2) return 'ch1-s2'
-  if (major >= 3 && major <= 10) return `ch1-s${major}`
-  if (major >= 11 && major <= 17) return `ch2-s${major - 10}`
-  if (major >= 18 && major <= 24) return `ch3-s${major - 17}`
-  if (major >= 25 && major <= 30) return `ch4-s${major - 24}`
-  if (major >= 31 && major <= 35) return `ch5-s${major - 30}`
-  return null
+  const minor = Number(match[2])
+  if (major === 1) return minor >= 11 ? 'ch1-s2' : 'ch1-s1'
+  return SEASON_BY_MAJOR[major] ?? null
 }
 
 function providerFor(raw, endpoint) {
@@ -645,6 +717,30 @@ function dedupeDirectories(entries) {
   return result
 }
 
+function ensureVaultedEndpoint(endpoints) {
+  const relayUrl = FALLBACK_ENDPOINTS[0].url
+  const relay = endpoints.find(
+    (endpoint) =>
+      endpoint &&
+      (endpoint.id === 'vaulted-public' || String(endpoint.url || '').startsWith(relayUrl)),
+  )
+  if (relay) {
+    return endpoints.map((endpoint) =>
+      endpoint === relay
+        ? {
+            ...endpoint,
+            id: 'vaulted-public',
+            label: endpoint.label || 'VAULTED Public',
+            enabled: true,
+            auth: 'account',
+            kind: 'vaulted-summary',
+          }
+        : endpoint,
+    )
+  }
+  return [{ ...FALLBACK_ENDPOINTS[0] }, ...endpoints]
+}
+
 function readConfig() {
   const file = path.join(providerRoot(), 'community.json')
   let raw = null
@@ -665,6 +761,10 @@ function readConfig() {
       /* keep the bundled directory */
     }
   }
+
+  // The shared VAULTED relay is the canonical lobby source. It is fetched on
+  // every scan even when a custom directory list omits or disables it.
+  endpoints = ensureVaultedEndpoint(endpoints)
 
   const valid = []
   for (const endpoint of endpoints) {
@@ -731,6 +831,9 @@ function readConfig() {
       seasonParam: safeString(endpoint.seasonParam, 24) || 'season',
       providerParam: safeString(endpoint.providerParam, 24),
       statusOnly: endpoint.statusOnly === true,
+      // Some status APIs also include direct join addresses. Capture those as
+      // servers when present, while keeping status-only rows for the badge.
+      alsoServers: endpoint.alsoServers === true,
       timeoutMs: Math.min(15_000, Math.max(1000, safeNumber(endpoint.timeoutMs, DEFAULT_TIMEOUT_MS))),
       freshnessMs: Math.min(86_400_000, Math.max(0, safeNumber(endpoint.freshnessMs, DEFAULT_FRESHNESS_MS))),
       entriesPath: Array.isArray(endpoint.entriesPath)
@@ -861,8 +964,17 @@ async function fetchEndpoint(endpoint, options) {
       maxBytes: MAX_BODY_BYTES,
     })
     if (endpoint.statusOnly) {
+      let servers = []
+      if (endpoint.alsoServers) {
+        const serverEndpoint = { ...endpoint, statusOnly: false }
+        servers = normalizeCommunityPayload(payload, serverEndpoint, options.seasonId || undefined)
+        if (options.seasonId) servers = servers.filter((server) => server.seasonId === options.seasonId)
+        if (options.providerId) {
+          servers = servers.filter((server) => providerMatches(server.providerId, options.providerId))
+        }
+      }
       return {
-        servers: [],
+        servers,
         statuses: normalizeStatusPayload(payload, endpoint, options.seasonId || undefined),
         directories: [],
       }
@@ -903,7 +1015,13 @@ async function fetchEndpoint(endpoint, options) {
   if (text.length > MAX_BODY_BYTES) throw new Error('Community directory returned an oversized response.')
 
   if (endpoint.kind === 'awesome-ogfn' || endpoint.kind === 'fortnite-versions-directory') {
-    return { servers: [], statuses: [], directories: parseDirectoryPayload(text, endpoint) }
+    const directories = parseDirectoryPayload(text, endpoint)
+    if (directories.length === 0) {
+      console.warn(
+        `[community] ${endpoint.id}: directory response had no recognised project entries (${text.length} bytes)`,
+      )
+    }
+    return { servers: [], statuses: [], directories }
   }
 
   let payload
@@ -917,8 +1035,17 @@ async function fetchEndpoint(endpoint, options) {
   }
 
   if (endpoint.statusOnly || endpoint.kind === 'eon-server-status') {
+    let servers = []
+    if (endpoint.alsoServers) {
+      const serverEndpoint = { ...endpoint, statusOnly: false }
+      servers = normalizeCommunityPayload(payload, serverEndpoint, options.seasonId || undefined)
+      if (options.seasonId) servers = servers.filter((server) => server.seasonId === options.seasonId)
+      if (options.providerId) {
+        servers = servers.filter((server) => providerMatches(server.providerId, options.providerId))
+      }
+    }
     return {
-      servers: [],
+      servers,
       statuses: normalizeStatusPayload(payload, endpoint, options.seasonId || undefined),
       directories: [],
     }
@@ -1057,6 +1184,7 @@ async function fetchCommunityServers(input = {}) {
 
   const settled = await Promise.all(
     endpoints.map(async (endpoint) => {
+      const startedAt = Date.now()
       try {
         const result = await fetchEndpoint(endpoint, {
           token,
@@ -1066,7 +1194,7 @@ async function fetchCommunityServers(input = {}) {
           fetchImpl: input.fetchImpl,
         })
         endpointRetryAt.delete(endpoint.id)
-        return result
+        return { ...result, endpointId: endpoint.id, latencyMs: Date.now() - startedAt }
       } catch (error) {
         const message =
           error?.name === 'AbortError'
@@ -1074,6 +1202,7 @@ async function fetchCommunityServers(input = {}) {
             : error instanceof Error
               ? error.message
               : 'Community directory was unreachable.'
+        warnFetchError(endpoint, message)
         if (config.failureCooldownMs > 0) {
           endpointRetryAt.set(endpoint.id, Date.now() + config.failureCooldownMs)
         }
@@ -1081,6 +1210,8 @@ async function fetchCommunityServers(input = {}) {
           servers: [],
           statuses: [],
           directories: [],
+          endpointId: endpoint.id,
+          latencyMs: Date.now() - startedAt,
           error: { endpoint: endpoint.id, message },
         }
       }
@@ -1096,6 +1227,14 @@ async function fetchCommunityServers(input = {}) {
 
   for (const result of settled) {
     if (result.error) errors.push(result.error)
+    // Relay rows do not carry a direct game-server ping. The round-trip to the
+    // relay that just served the heartbeat is still useful and real; label it
+    // as a relay ping in the dropdown rather than leaving every row blank.
+    if (result.endpointId === 'vaulted-public' && Number.isFinite(result.latencyMs)) {
+      for (const server of result.servers) {
+        if (server.pingMs === undefined) server.pingMs = Math.max(0, Math.round(result.latencyMs))
+      }
+    }
     for (const server of result.servers) servers.push(server)
     for (const status of result.statuses) {
       if (seasonId && status.seasonId !== seasonId) continue

@@ -3,7 +3,9 @@ import type {
   Build,
   BuildExitInfo,
   BuildVerifyReport,
+  GlobalBackend,
   OnlineProviderConfig,
+  ProviderAuthStatus,
   ShopEquipped,
   ShopItemType,
 } from '../types'
@@ -210,6 +212,25 @@ export interface LauncherBridge {
   }>
   /** configured public community directories, resolved in the main process */
   fetchCommunityServers?(query: CommunityServerQuery): Promise<CommunityServerResult>
+  /** live global OGFN backends from resources/providers/provider.json */
+  providerCatalog?(): Promise<GlobalBackend[]>
+  /** native provider account link for global_live backends */
+  providerAuth?: {
+    status(): Promise<Record<string, ProviderAuthStatus>>
+    login(providerId: string): Promise<ProviderAuthStatus>
+    logout(providerId: string): Promise<ProviderAuthStatus>
+  }
+  /** validate and measure a public manual game-server address */
+  probeServer?(payload: { host: string; port: number }): Promise<{
+    reachable: boolean
+    pingMs?: number
+    host?: string
+    port?: number
+    method?: 'tcp' | 'icmp'
+    error?: string
+  }>
+  /** open a provider sign-in page in the default browser */
+  openExternal?(url: string): Promise<{ ok: boolean; error?: string }>
   /** configured install root where one-click downloads are unpacked */
   getBuildsRoot?(): Promise<string>
   scanBuilds?(roots?: string[]): Promise<string[]>
@@ -235,6 +256,7 @@ export interface LauncherBridge {
     buildFolderPath: string
     joinHost?: string
     joinPort?: number
+    authCode?: string
   }): Promise<OnlineProviderLaunchResult>
   window?: WindowControls
 }
@@ -351,6 +373,7 @@ export async function launchOnlineProvider(
   build: Build,
   provider: OnlineProviderConfig,
   server?: Pick<CommunityServer, 'host' | 'port'> | null,
+  authCode?: string,
 ): Promise<OnlineProviderLaunchResult> {
   if (!window.arc?.launchOnlineProvider) {
     throw new Error('Online play needs the desktop app.')
@@ -363,6 +386,7 @@ export async function launchOnlineProvider(
       version: build.version,
       buildFolderPath: build.path,
       ...(server ? { joinHost: server.host, joinPort: server.port } : {}),
+      ...(authCode ? { authCode } : {}),
     })
   } catch (error) {
     throw cleanIpcError(error)

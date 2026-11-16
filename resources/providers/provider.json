@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "runtime": {
+    "redirectDllName": "Tellurium.dll",
+    "redirectDllSha256": "60bb57de6ac8f0e8f92396b96880dbd35bc6df8216726c541da8b214d8721f42"
+  },
+  "providers": [
+    {
+      "id": "era",
+      "name": "Project Era",
+      "label": "Era",
+      "mode": "global_live",
+      "backendUrl": "https://game.erafn.dev",
+      "website": "https://erafn.dev/",
+      "signInUrl": "https://erafn.dev/",
+      "auth": "oauth",
+      "oauth": {
+        "authorizeUrl": "https://id.erafn.dev/oauth/authorize",
+        "tokenUrl": "https://id.erafn.dev/oauth/token",
+        "clientId": "era-launcher",
+        "scope": "launcher.all"
+      },
+      "apiBaseUrl": "https://api.erafn.dev",
+      "buildsPath": "/launcher/v1/builds",
+      "exchangeCodePath": "/launcher/v1/game/exchange-code",
+      "profilePath": "/launcher/v1/me",
+      "global": true,
+      "seasons": ["ch1-s6"]
+    },
+    {
+      "id": "ezfn",
+      "name": "EZFN",
+      "label": "EZFN",
+      "backendUrl": "https://fortnite-master-server.ezfn.dev",
+      "website": "https://ezfn.dev/",
+      "signInUrl": "https://ezfn.dev/",
+      "auth": "exchangeCode",
+      "global": true,
+      "seasons": ["ch2-s2"]
+    },
+    {
+      "id": "ezfn-hybrid",
+      "name": "EZFN Hybrid",
+      "label": "EZFN Hybrid",
+      "backendUrl": "https://fortnite-master-server.ezfn.dev",
+      "website": "https://ezfn.dev/",
+      "signInUrl": "https://ezfn.dev/",
+      "auth": "exchangeCode",
+      "global": true,
+      "seasons": [
+        "ch5-s1",
+        "ch5-s2",
+        "ch5-s3",
+        "ch5-s4",
+        "ch5-remix",
+        "ch6-s1",
+        "ch6-s2",
+        "ch6-mini1",
+        "ch6-s3",
+        "ch6-s4",
+        "ch6-mini2",
+        "ch7-s1",
+        "ch7-s2",
+        "ch7-s3",
+        "ch7-s4",
+        "ch7-mini1"
+      ]
+    },
+    {
+      "id": "neo",
+      "name": "Project Neo",
+      "label": "Neo",
+      "backendUrl": "https://api.neofn.dev",
+      "website": "https://neofn.dev/",
+      "signInUrl": "https://neofn.dev/",
+      "auth": "exchangeCode",
+      "global": true,
+      "seasons": ["ch1-s3", "ch1-s4", "ch1-s7", "ch1-s10"]
+    },
+    {
+      "id": "retrac",
+      "name": "Retrac",
+      "label": "Retrac",
+      "backendUrl": "https://api.retrac.site",
+      "website": "https://retrac.site/",
+      "signInUrl": "https://retrac.site/",
+      "auth": "exchangeCode",
+      "global": false,
+      "seasons": ["ch2-s4"]
+    },
+    {
+      "id": "stellar",
+      "name": "Stellar",
+      "label": "Stellar",
+      "backendUrl": "https://prod-api-v1.stellarfn.dev",
+      "website": "https://stellarfn.dev/",
+      "signInUrl": "https://stellarfn.dev/",
+      "auth": "exchangeCode",
+      "global": true,
+      "seasons": ["ch2-s2"]
+    },
+    {
+      "id": "nova",
+      "name": "Project Nova",
+      "label": "Nova",
+      "backendUrl": "https://api.novafn.dev",
+      "website": "https://novafn.dev/",
+      "signInUrl": "https://novafn.dev/",
+      "auth": "exchangeCode",
+      "global": true,
+      "seasons": ["ch1-s9", "ch1-s10"]
+    }
+  ]
+}

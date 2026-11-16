@@ -20,6 +20,48 @@ const BUNDLED_MANIFEST = require('../src/assets/builds.json')
 const SAFE_PROVIDER_ID = /^[a-z0-9][a-z0-9-]*$/i
 const SAFE_DLL_NAME = /^[^\\/:*?"<>|]+\.dll$/i
 const SAFE_EXE_NAME = /^[^\\/:*?"<>|]+\.exe$/i
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function parseHttpUrl(value, originOnly = false) {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw || raw.length > 2048) return null
+  try {
+    const url = new URL(raw)
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.hash) return null
+    if (originOnly && (url.search || (url.pathname && url.pathname !== '/'))) return null
+    return url
+  } catch {
+    return null
+  }
+}
+
+function safeApiPath(value, fallback) {
+  const candidate = typeof value === 'string' ? value.trim() : ''
+  return /^\/[A-Za-z0-9/_-]{1,200}$/.test(candidate) ? candidate : fallback
+}
+
+function parseOAuth(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const authorizeUrl = parseHttpUrl(raw.authorizeUrl)
+  const tokenUrl = parseHttpUrl(raw.tokenUrl)
+  const clientId = typeof raw.clientId === 'string' ? raw.clientId.trim() : ''
+  if (!authorizeUrl || !tokenUrl || !/^[A-Za-z0-9._-]{1,128}$/.test(clientId)) return null
+  const buildIds = {}
+  if (raw.buildIds && typeof raw.buildIds === 'object' && !Array.isArray(raw.buildIds)) {
+    for (const [season, buildId] of Object.entries(raw.buildIds)) {
+      if (/^ch\d{1,2}(?:-s\d{1,2}|-remix|-mini\d+)$/.test(season) && UUID.test(String(buildId))) {
+        buildIds[season] = String(buildId)
+      }
+    }
+  }
+  return {
+    authorizeUrl: authorizeUrl.toString(),
+    tokenUrl: tokenUrl.toString(),
+    clientId,
+    scope: typeof raw.scope === 'string' ? raw.scope.trim().slice(0, 256) : 'launcher.all',
+    buildIds,
+  }
+}
 
 const PROVIDERS = new Map()
 for (const season of Object.values(BUNDLED_MANIFEST.seasons || {})) {
@@ -38,6 +80,120 @@ function providerRoot() {
   const packaged = process.resourcesPath ? path.join(process.resourcesPath, 'providers') : ''
   if (packaged && fs.existsSync(packaged)) return packaged
   return path.join(__dirname, '..', 'resources', 'providers')
+}
+
+let catalogCache = null
+
+/**
+ * The central provider.json is the source of truth for global backends. It is
+ * deliberately separate from the per-provider folder so new projects can be
+ * added without duplicating a redirect DLL or a launch profile.
+ */
+function catalogData() {
+  if (catalogCache) return catalogCache
+  let raw = null
+  try {
+    raw = JSON.parse(fs.readFileSync(path.join(providerRoot(), 'provider.json'), 'utf8'))
+  } catch {
+    raw = null
+  }
+  const runtime = raw?.runtime && typeof raw.runtime === 'object' ? raw.runtime : {}
+  const defaults = {
+    redirectDllName:
+      typeof runtime.redirectDllName === 'string' && SAFE_DLL_NAME.test(runtime.redirectDllName)
+        ? runtime.redirectDllName
+        : 'Tellurium.dll',
+    redirectDllSha256: /^[a-f0-9]{64}$/i.test(runtime.redirectDllSha256 || '')
+      ? String(runtime.redirectDllSha256).toLowerCase()
+      : '',
+  }
+  const providers = []
+  for (const entry of Array.isArray(raw?.providers) ? raw.providers : []) {
+    if (!entry || typeof entry !== 'object') continue
+    const id = typeof entry.id === 'string' ? entry.id.trim() : ''
+    const name = typeof entry.name === 'string' ? entry.name.trim() : ''
+    const label = typeof entry.label === 'string' ? entry.label.trim() : ''
+    const backendUrl = typeof entry.backendUrl === 'string' ? entry.backendUrl.trim() : ''
+    if (!id || !SAFE_PROVIDER_ID.test(id) || !name || !label || !backendUrl) continue
+    try {
+      const parsed = new URL(backendUrl)
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) continue
+      if (parsed.search || parsed.hash || (parsed.pathname && parsed.pathname !== '/')) continue
+    } catch {
+      continue
+    }
+    const seasons = Array.isArray(entry.seasons)
+      ? [
+          ...new Set(
+            entry.seasons.filter(
+              (season) =>
+                typeof season === 'string' && /^ch\d{1,2}(?:-s\d{1,2}|-remix|-mini\d+)$/.test(season),
+            ),
+          ),
+        ]
+      : []
+    const oauth = entry.auth === 'oauth' ? parseOAuth(entry.oauth) : null
+    const auth =
+      entry.auth === 'oauth' && oauth
+        ? 'oauth'
+        : entry.auth === 'exchangeCode'
+          ? 'exchangeCode'
+          : 'none'
+    const mode = auth === 'oauth' && entry.mode === 'global_live' ? 'global_live' : 'download'
+    const apiBaseUrl = parseHttpUrl(entry.apiBaseUrl, true)
+
+    providers.push({
+      id,
+      name,
+      label,
+      backendUrl: new URL(backendUrl).origin,
+      website: typeof entry.website === 'string' ? entry.website.trim() : '',
+      signInUrl: typeof entry.signInUrl === 'string' ? entry.signInUrl.trim() : '',
+      auth,
+      mode,
+      oauth,
+      apiBaseUrl: apiBaseUrl ? apiBaseUrl.origin : '',
+      buildsPath: safeApiPath(entry.buildsPath, '/launcher/v1/builds'),
+      exchangeCodePath: safeApiPath(entry.exchangeCodePath, '/launcher/v1/game/exchange-code'),
+      profilePath: safeApiPath(entry.profilePath, ''),
+      global: entry.global !== false,
+      seasons,
+      redirectDllName:
+        typeof entry.redirectDllName === 'string' && SAFE_DLL_NAME.test(entry.redirectDllName)
+          ? entry.redirectDllName
+          : defaults.redirectDllName,
+      redirectDllSha256: /^[a-f0-9]{64}$/i.test(entry.redirectDllSha256 || '')
+        ? String(entry.redirectDllSha256).toLowerCase()
+        : defaults.redirectDllSha256,
+    })
+  }
+  catalogCache = { defaults, providers }
+  return catalogCache
+}
+
+for (const entry of catalogData().providers) {
+  const current = PROVIDERS.get(entry.id)
+  PROVIDERS.set(entry.id, {
+    id: entry.id,
+    name: entry.name || current?.name || entry.id,
+    label: entry.label || current?.label || entry.id,
+  })
+}
+
+/** Sanitised catalog consumed by the renderer and the provider launch path. */
+function providerCatalog() {
+  return catalogData().providers.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+    label: entry.label,
+    backendUrl: entry.backendUrl,
+    website: entry.website,
+    signInUrl: entry.signInUrl,
+    auth: entry.auth,
+    mode: entry.mode,
+    global: entry.global,
+    supportedSeasons: entry.seasons,
+  }))
 }
 
 /** Repair destination for an installed app whose packaged resources are read-only. */
@@ -91,11 +247,19 @@ function providerProfile(id) {
   if (!provider) throw new Error('That online provider is not in the bundled catalog.')
 
   const root = path.join(providerRoot(), provider.id)
-  const configPath = path.join(root, 'provider.json')
-  let raw
+  const localConfigPath = path.join(root, 'provider.json')
+  let raw = null
+  let configPath = localConfigPath
   try {
-    raw = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    raw = JSON.parse(fs.readFileSync(localConfigPath, 'utf8'))
   } catch {
+    const catalogEntry = catalogData().providers.find((entry) => entry.id === provider.id)
+    if (catalogEntry) {
+      raw = catalogEntry
+      configPath = path.join(providerRoot(), 'provider.json')
+    }
+  }
+  if (!raw) {
     throw new Error(`The ${provider.name} provider profile is missing. Reinstall VAULTED.`)
   }
 
@@ -115,12 +279,19 @@ function providerProfile(id) {
     )
   }
   const backendUrl = backend.origin
-  const redirectDllName = typeof raw?.redirectDllName === 'string' ? raw.redirectDllName.trim() : ''
+  const catalogEntry = catalogData().providers.find((entry) => entry.id === provider.id)
+  const redirectDllName =
+    typeof raw?.redirectDllName === 'string' && raw.redirectDllName.trim()
+      ? raw.redirectDllName.trim()
+      : catalogEntry?.redirectDllName || catalogData().defaults.redirectDllName
   if (!SAFE_DLL_NAME.test(redirectDllName) || path.basename(redirectDllName) !== redirectDllName) {
     throw new Error(`The ${provider.name} provider has no valid redirect DLL name.`)
   }
 
-  const configuredSha = typeof raw?.redirectDllSha256 === 'string' ? raw.redirectDllSha256.trim() : ''
+  const configuredSha =
+    typeof raw?.redirectDllSha256 === 'string' && raw.redirectDllSha256.trim()
+      ? raw.redirectDllSha256.trim()
+      : catalogEntry?.redirectDllSha256 || catalogData().defaults.redirectDllSha256
   const gameServerDllName = typeof raw?.gameServerDllName === 'string' ? raw.gameServerDllName.trim() : ''
   if (gameServerDllName && (!SAFE_DLL_NAME.test(gameServerDllName) || path.basename(gameServerDllName) !== gameServerDllName)) {
     throw new Error(`The ${provider.name} provider has no valid game server DLL name.`)
@@ -141,6 +312,22 @@ function providerProfile(id) {
       : '',
     root,
     configPath,
+    auth: catalogEntry?.auth || (raw?.auth === 'exchangeCode' ? 'exchangeCode' : 'none'),
+    mode:
+      catalogEntry?.mode ||
+      (raw?.mode === 'global_live' && raw?.auth === 'oauth' ? 'global_live' : 'download'),
+    oauth: catalogEntry?.oauth || parseOAuth(raw?.oauth),
+    apiBaseUrl: catalogEntry?.apiBaseUrl || parseHttpUrl(raw?.apiBaseUrl, true)?.origin || '',
+    buildsPath: catalogEntry?.buildsPath || safeApiPath(raw?.buildsPath, '/launcher/v1/builds'),
+    exchangeCodePath:
+      catalogEntry?.exchangeCodePath ||
+      safeApiPath(raw?.exchangeCodePath, '/launcher/v1/game/exchange-code'),
+    profilePath: catalogEntry?.profilePath || safeApiPath(raw?.profilePath, ''),
+    signInUrl:
+      (typeof raw?.signInUrl === 'string' && raw.signInUrl.trim()) || catalogEntry?.signInUrl || '',
+    website: (typeof raw?.website === 'string' && raw.website.trim()) || catalogEntry?.website || '',
+    supportedSeasons: catalogEntry?.seasons || [],
+    global: catalogEntry?.global === true,
   }
 }
 
@@ -296,6 +483,7 @@ function providerRuntime(profile) {
 
 module.exports = {
   ensureProviderRedirects,
+  providerCatalog,
   providerDllPath,
   providerForId,
   providerProfile,

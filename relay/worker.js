@@ -307,7 +307,7 @@ async function summaryFor(env, user) {
     `SELECT u.username AS name, s.address AS address, s.build_id, s.label, s.public, s.season_id, s.players, s.updated AS updated
        FROM sessions_v2 s
        JOIN users u ON u.lower = s.lower
-      WHERE s.updated > ? AND s.lower != ?
+      WHERE s.updated > ? AND s.lower != ? AND s.public = 1
       ORDER BY s.updated DESC
       LIMIT 60`,
   )

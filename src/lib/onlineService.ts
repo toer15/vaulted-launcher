@@ -5,7 +5,7 @@ import { FRIENDS_API_BASE, fetchFriends, publishSession, stopHosting, type Lobby
  * public lobbies. Users can point this at their own HTTP or WebSocket service.
  */
 export const DEFAULT_ONLINE_SERVICE_URL = FRIENDS_API_BASE
-export const ONLINE_POLL_MS = 12_000
+export const ONLINE_POLL_MS = 10_000
 
 export type OnlineStatus = 'checking' | 'connected' | 'offline'
 

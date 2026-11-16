@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   ArrowLeftRight,
   Ban,
@@ -8,10 +9,12 @@ import {
   FolderPlus,
   FolderOpen,
   FolderSearch,
+  Globe2,
   HardDrive,
   Loader2,
   Pause,
   Play,
+  Plus,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -32,7 +35,7 @@ import {
   type SeasonPlayMode,
 } from '../lib/playMode'
 import type { CommunityServer } from '../lib/network'
-import type { Account, Build, BuildState, BuildVerifyReport, DownloadState } from '../types'
+import type { Account, Build, BuildState, BuildVerifyReport, DownloadState, GlobalBackend } from '../types'
 
 interface ActiveBuildCardProps {
   build: Build | null
@@ -40,15 +43,31 @@ interface ActiveBuildCardProps {
   download: DownloadState | null
   /** shared live online state for this season */
   playMode?: SeasonPlayMode
-  /** live external servers for the selected season only, best first */
+  /** every live external server, selected season first */
   serverOptions?: CommunityServer[]
+  /** live external servers matching the selected season */
+  exactServerOptions?: CommunityServer[]
+  /** every other live external server, grouped below the season rows */
+  fallbackServerOptions?: CommunityServer[]
   /** best live server for the selected season, shown as the `Auto` entry */
   autoServer?: CommunityServer | null
   /** labelled different-season target Play uses only when the season is empty */
   fallbackServer?: CommunityServer | null
+  /** live global OGFN backends that host this season */
+  globalBackends?: GlobalBackend[]
+  /** backend Play uses automatically when no exact server is live */
+  autoGlobalBackend?: GlobalBackend | null
+  /** explicitly selected global backend, if any */
+  selectedGlobalBackend?: GlobalBackend | null
+  /** true when the selected/auto backend already has a launch code this session */
+  providerSignedIn?: boolean
   /** manually selected external server address, null = Auto */
   selectedServer?: string | null
   onSelectServer?: (address: string | null) => void
+  /** probe and persist a public community ip:port for this season */
+  onAddManualServer?: (address: string) => Promise<string | null>
+  /** open the provider account-link dialog */
+  onProviderSignIn?: (provider: GlobalBackend) => void
   account: Account
   sourceKeys?: Set<string>
   downloadSize?: number | null
@@ -104,6 +123,26 @@ function serverPingLabel(server: CommunityServer): string {
     : 'ping —'
 }
 
+function serverOptionLabel(server: CommunityServer): string {
+  const players = lobbyPlayers(server)
+  if (server.providerId === 'vaulted' || server.source === 'vaulted-relay') {
+    return `${server.username || 'VAULTED'} · VAULTED ONLINE · ${players} PLAYING · ${serverPingLabel(server)}`
+  }
+  if (server.providerId === 'manual' || server.source === 'manual') {
+    return `${server.name} · ${server.address} · SAVED IP · ${players > 0 ? `${players} playing` : 'players unknown'} · ${serverPingLabel(server)}`
+  }
+  return `${server.name} · ${server.providerLabel || server.providerId} · ${serverPlayerLabel(server)} · ${serverPingLabel(server)}`
+}
+
+function globalBadge(provider: GlobalBackend): string {
+  return provider.mode === 'global_live' ? 'GLOBAL LIVE' : 'GLOBAL ONLINE'
+}
+
+function globalOptionLabel(provider: GlobalBackend): string {
+  const account = provider.auth === 'none' ? '' : ' · sign-in required'
+  return `${globalBadge(provider)} · ${provider.label}${account}`
+}
+
 const STATE_PILL: Record<BuildState, { label: string; dot: string; text: string }> = {
   missing: { label: 'Not installed', dot: 'bg-amber-400', text: 'text-amber-300' },
   downloading: { label: 'Downloading', dot: 'bg-emerald-400', text: 'text-emerald-300' },
@@ -120,10 +159,18 @@ export function ActiveBuildCard({
   download,
   playMode,
   serverOptions,
+  exactServerOptions,
+  fallbackServerOptions,
   autoServer,
   fallbackServer,
+  globalBackends,
+  autoGlobalBackend,
+  selectedGlobalBackend,
+  providerSignedIn,
   selectedServer,
   onSelectServer,
+  onAddManualServer,
+  onProviderSignIn,
   account,
   sourceKeys,
   downloadSize,
@@ -149,6 +196,11 @@ export function ActiveBuildCard({
   onChangeBuild,
   onAddBuild,
 }: ActiveBuildCardProps) {
+  const [addingServer, setAddingServer] = useState(false)
+  const [serverAddress, setServerAddress] = useState('')
+  const [serverBusy, setServerBusy] = useState(false)
+  const [serverError, setServerError] = useState<string | null>(null)
+
   if (!build) {
     return (
       <section className="relative flex min-h-[460px] flex-col items-center justify-center overflow-hidden rounded-3xl border border-dashed border-line bg-panel/50 px-8 py-16 text-center">
@@ -191,14 +243,25 @@ export function ActiveBuildCard({
   const showOpenFolder = Boolean(isInstalled && onOpenFolder)
   // The hero and the sidebar read the same map. The hosted fallback keeps this
   // card correct if it is rendered in isolation during a transition.
+  const activeGlobalBackend = selectedGlobalBackend ?? autoGlobalBackend ?? null
   const onlineProviderLabel =
+    activeGlobalBackend?.label ||
     playMode?.providerLabel ||
     build.onlineProvider?.label ||
     build.onlineProvider?.name ||
     build.providerLabel
   const onlinePlayers = onlinePlayerCount(playMode)
   const onlineServers = seasonServerCount(playMode)
-  const onlineStatus = onlineStatusLabel(onlinePlayers, onlineServers)
+  const activeGlobalBadge = activeGlobalBackend ? globalBadge(activeGlobalBackend) : 'GLOBAL ONLINE'
+  const onlineStatus =
+    activeGlobalBackend?.mode === 'global_live'
+      ? `${activeGlobalBadge} · ${activeGlobalBackend.label}`
+      : activeGlobalBackend && onlinePlayers === 0 && onlineServers === 0
+        ? `${activeGlobalBadge} · ${activeGlobalBackend.label}`
+        : onlineStatusLabel(onlinePlayers, onlineServers)
+  const exactOptions = exactServerOptions ?? serverOptions ?? []
+  const otherOptions = fallbackServerOptions ?? []
+  const globalOptions = globalBackends ?? []
   const lobbyCount = playMode?.lobbyCount ?? (hostedLobby?.public ? 1 : 0)
   const playerCount = playMode?.playerCount ?? (hostedLobby?.public ? Math.max(0, hostedLobby.players ?? 0) : 0)
   const communityPlayers = playMode?.communityPlayerCount ?? 0
@@ -212,6 +275,27 @@ export function ActiveBuildCard({
   ]
     .filter(Boolean)
     .join(' ')
+  async function submitManualServer() {
+    if (!onAddManualServer || serverBusy) return
+    const address = serverAddress.trim()
+    if (!address) return
+    setServerBusy(true)
+    setServerError(null)
+    try {
+      const error = await onAddManualServer(address)
+      if (error) {
+        setServerError(error)
+        return
+      }
+      setAddingServer(false)
+      setServerAddress('')
+    } catch (error) {
+      setServerError(error instanceof Error ? error.message : 'The server could not be added.')
+    } finally {
+      setServerBusy(false)
+    }
+  }
+
   const verifyReport = verify?.report
   const verifyIssues = verifyReport
     ? [
@@ -313,9 +397,11 @@ export function ActiveBuildCard({
     ready: onlineProviderLabel
       ? onlineServers > 0
         ? `Ready — ${onlineServers} live external ${onlineServers === 1 ? 'server' : 'servers'} · ${onlinePlayers} player${onlinePlayers === 1 ? '' : 's'} online.${autoServer ? ` Auto joins ${autoServer.name}.` : ''}`
-        : fallbackServer
-          ? `Ready — no live ${build.season.label} server. Play falls back to ${fallbackServer.name} (${seasonLabelForId(fallbackServer.seasonId)}).`
-          : 'Ready — no real players are on live external servers for this season right now.'
+        : activeGlobalBackend
+          ? `Ready — ${activeGlobalBadge} on ${activeGlobalBackend.label}. Play queues you with real players worldwide.`
+          : fallbackServer
+            ? `Ready — no live ${build.season.label} server. Play falls back to ${fallbackServer.name} (${seasonLabelForId(fallbackServer.seasonId)}).`
+            : 'Ready — no real players are on live external servers for this season right now.'
       : lobbyCount > 0
         ? `Ready — ${lobbyCount} reachable VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} online${playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}. Play joins one automatically.`
         : onlinePlayers > 0
@@ -394,6 +480,19 @@ export function ActiveBuildCard({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {activeGlobalBackend &&
+              activeGlobalBackend.auth !== 'none' &&
+              !providerSignedIn &&
+              onProviderSignIn && (
+                <button
+                  type="button"
+                  onClick={() => onProviderSignIn(activeGlobalBackend)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/35 bg-emerald-400/[0.1] px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.1em] text-emerald-200 backdrop-blur transition-colors hover:border-emerald-400/65 hover:bg-emerald-400/20 hover:text-white"
+                >
+                  <Globe2 className="h-3.5 w-3.5" />
+                  Sign in to {activeGlobalBackend.label}
+                </button>
+              )}
             <span onClick={(event) => event.stopPropagation()}>
               <AccountChip account={account} onLogout={onLogout} />
             </span>
@@ -447,33 +546,157 @@ export function ActiveBuildCard({
                   id={`server-select-${build.id}`}
                   value={selectedServer ?? ''}
                   onChange={(event) => onSelectServer(event.target.value || null)}
-                  disabled={!serverOptions || serverOptions.length === 0}
+                  disabled={globalOptions.length === 0 && (!serverOptions || serverOptions.length === 0)}
                   className="w-full appearance-none rounded-xl border border-white/10 bg-[#0b131c]/90 py-2 pl-3 pr-9 text-[12px] font-medium text-mist outline-none transition-colors duration-200 hover:border-emerald-400/40 focus:border-emerald-400/60 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   <option value="" className="bg-ink text-mist">
                     {autoServer
-                      ? `Auto: Best Live Server (${autoServer.name} · ${serverPlayerLabel(autoServer)})`
-                      : 'Auto: Best Live Server (no servers for this season)'}
+                      ? `Auto: Best Live Server (${autoServer.name} · ${autoServer.providerLabel || autoServer.providerId} · ${serverPlayerLabel(autoServer)})`
+                      : activeGlobalBackend
+                        ? `Auto: Global Matchmaking (${activeGlobalBackend.label} · ${activeGlobalBadge})`
+                        : fallbackServer
+                          ? `Auto: Best Fallback (${fallbackServer.name} · ${fallbackServer.providerLabel || fallbackServer.providerId} · ${seasonLabelForId(fallbackServer.seasonId)})`
+                          : 'Auto: Start a VAULTED public lobby'}
                   </option>
-                  {(serverOptions ?? []).map((server) => (
-                    <option
-                      key={`${server.address}-${server.id}`}
-                      value={server.address}
-                      className="bg-ink text-mist"
-                    >
-                      {server.name} · {serverPlayerLabel(server)} · {serverPingLabel(server)}
-                    </option>
-                  ))}
+                  {globalOptions.length > 0 && (
+                    <optgroup label="Live global backends">
+                      {globalOptions.map((provider) => (
+                        <option
+                          key={`global-${provider.id}`}
+                          value={`global:${provider.id}`}
+                          className="bg-ink text-mist"
+                        >
+                          {globalOptionLabel(provider)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {exactOptions.length > 0 && (
+                    <optgroup label="Live servers · selected season">
+                      {exactOptions.map((server) => (
+                        <option
+                          key={`${server.address}-${server.id}`}
+                          value={server.address}
+                          className="bg-ink text-mist"
+                        >
+                          {serverOptionLabel(server)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {otherOptions.length > 0 && (
+                    <optgroup label="Other live servers · different season">
+                      {otherOptions.map((server) => (
+                        <option
+                          key={`${server.address}-${server.id}`}
+                          value={server.address}
+                          className="bg-ink text-mist"
+                        >
+                          {server.name} · {server.providerLabel || server.providerId} ·{' '}
+                          {seasonLabelForId(server.seasonId)} · {serverPlayerLabel(server)} ·{' '}
+                          {serverPingLabel(server)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
                 <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fog" />
               </div>
               <p className="mt-1.5 text-[10px] leading-relaxed text-fog/75">
-                {autoServer
-                  ? `Play joins ${autoServer.address} with Auto. Friends can pick the same server to land in the same match.`
-                  : fallbackServer
-                    ? `No live ${season.label} server is listed — Play uses the fallback target below.`
-                    : 'No live external server for this season right now — Play will scan every directory again before launching.'}
+                {selectedGlobalBackend
+                  ? `Play connects to ${selectedGlobalBackend.name}'s live global backend. ${
+                      selectedGlobalBackend.auth === 'oauth'
+                        ? 'Sign in once; VAULTED fetches a fresh one-time code on every Play.'
+                        : selectedGlobalBackend.auth === 'exchangeCode'
+                          ? 'Sign in with a fresh exchange code first.'
+                          : 'No account link is required.'
+                    }`
+                  : selectedServer
+                    ? `Play joins ${selectedServer} directly. The same address is saved for ${season.label}.`
+                    : autoServer
+                      ? `Play joins ${autoServer.address} with Auto. Friends can pick the same VAULTED lobby to land in the same match.`
+                      : activeGlobalBackend
+                        ? `No exact-season IP lobby is live. Auto queues for ${activeGlobalBackend.name} global matchmaking with real players.`
+                        : fallbackServer
+                          ? `No live ${season.label} server — Auto uses ${fallbackServer.name} (${seasonLabelForId(fallbackServer.seasonId)}). Pick any live server below or press Play.`
+                          : `No live ${season.label} server right now. Play starts a VAULTED public lobby and publishes it for other players.`}
               </p>
+
+              {activeGlobalBackend &&
+                activeGlobalBackend.auth !== 'none' &&
+                !providerSignedIn &&
+                onProviderSignIn && (
+                  <button
+                    type="button"
+                    onClick={() => onProviderSignIn(activeGlobalBackend)}
+                    className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/35 bg-emerald-400/[0.09] px-3 py-2 text-[11px] font-bold uppercase tracking-[0.08em] text-emerald-200 transition-colors duration-200 hover:border-emerald-400/65 hover:bg-emerald-400/15 hover:text-white"
+                  >
+                    <Globe2 className="h-3.5 w-3.5" />
+                    Sign in to {activeGlobalBackend.label}
+                  </button>
+                )}
+
+              {onAddManualServer && (
+                <div className="mt-2 border-t border-white/10 pt-2">
+                  {!addingServer ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAddingServer(true)
+                        setServerError(null)
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-1 py-1 text-[10.5px] font-semibold text-emerald-300/90 transition-colors duration-200 hover:text-emerald-200"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Add Server IP
+                    </button>
+                  ) : (
+                    <div>
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          value={serverAddress}
+                          onChange={(event) => {
+                            setServerAddress(event.target.value)
+                            setServerError(null)
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' && !serverBusy) {
+                              event.preventDefault()
+                              void submitManualServer()
+                            }
+                          }}
+                          autoFocus
+                          spellCheck={false}
+                          placeholder="play.example.com:7777"
+                          className="min-w-0 flex-1 rounded-lg border border-white/10 bg-black/50 px-2.5 py-2 font-mono text-[11px] text-mist placeholder:text-fog/45 focus:border-emerald-400/60 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          disabled={serverBusy || !serverAddress.trim()}
+                          onClick={() => void submitManualServer()}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-400/35 bg-emerald-400/10 px-2.5 py-2 text-[10.5px] font-bold text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {serverBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                          {serverBusy ? 'Probing…' : 'Add'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={serverBusy}
+                          onClick={() => {
+                            setAddingServer(false)
+                            setServerError(null)
+                          }}
+                          aria-label="Cancel adding a server"
+                          className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-fog transition-colors hover:bg-white/10 hover:text-white"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      {serverError && <p className="mt-1.5 text-[10px] leading-relaxed text-rose-300">{serverError}</p>}
+                    </div>
+                  )}
+                </div>
+              )}
               {!selectedServer && fallbackServer && (
                 <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.07] px-2.5 py-2 text-[10px] leading-relaxed text-amber-100/90">
                   <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" />

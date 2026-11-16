@@ -58,6 +58,7 @@
       "kind": "generic-server-status",
       "url": "http://5.175.164.163:9768/api/coral/gameserver/list",
       "statusOnly": true,
+      "alsoServers": true,
       "timeoutMs": 5000,
       "freshnessMs": 45000,
       "providerId": "meteor",
@@ -69,6 +70,8 @@
       "fields": {
         "id": "serverId",
         "name": "name",
+        "address": "ip",
+        "port": "port",
         "players": "playerCount",
         "maxPlayers": "maxPlayers",
         "region": "region",
@@ -83,6 +86,7 @@
       "kind": "eon-server-status",
       "url": "https://services.eonfn.net/api/servers",
       "statusOnly": true,
+      "alsoServers": true,
       "timeoutMs": 5000,
       "freshnessMs": 60000,
       "providerId": "eon",
@@ -94,6 +98,8 @@
       "fields": {
         "id": "ServerId",
         "name": "ServerName",
+        "address": "Ip",
+        "port": "Port",
         "players": "Joined",
         "maxPlayers": "MaxPlayers",
         "region": "Region",

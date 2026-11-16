@@ -32,6 +32,27 @@ export interface OnlineProviderConfig {
   label: string
 }
 
+/** A live global OGFN backend configured in resources/providers/provider.json. */
+export interface GlobalBackend extends OnlineProviderConfig {
+  backendUrl: string
+  website?: string
+  signInUrl?: string
+  auth: 'none' | 'exchangeCode' | 'oauth'
+  /** global_live means VAULTED signs in and fetches game codes natively */
+  mode?: 'download' | 'global_live'
+  global: boolean
+  supportedSeasons: string[]
+}
+
+export interface ProviderAuthStatus {
+  providerId: string
+  signedIn: boolean
+  displayName?: string | null
+  avatarUrl?: string | null
+  accountId?: string | null
+  expiresAt?: number | null
+}
+
 export interface Build {
   id: string
   /** parsed version, e.g. "3.6" */
@@ -58,6 +79,12 @@ export interface Account {
   outfit: string
   level: number
   cosmetics: number
+  /** provider avatar, shown in the top-right pill after a native sign-in */
+  avatarUrl?: string | null
+  /** e.g. Era, when this identity comes from a live provider account */
+  providerLabel?: string | null
+  /** provider-backed session without a VAULTED relay account */
+  providerOnly?: boolean
 }
 
 export type LaunchPhase = 'idle' | 'launching' | 'running' | 'error'

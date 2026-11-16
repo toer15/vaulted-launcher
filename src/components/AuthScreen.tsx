@@ -1,27 +1,33 @@
 import { useState } from 'react'
-import { ArrowRight, Loader2, LockKeyhole, Sparkles, UserRound } from 'lucide-react'
+import { ArrowRight, Loader2, LockKeyhole, ShieldCheck, Sparkles, UserRound } from 'lucide-react'
 import brandIcon from '../assets/brand-icon.png'
 import { artFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { hasWindowControls } from '../lib/launch'
 import { signIn, signUp, type RiftSession } from '../lib/network'
 import { seasonForMajor } from '../lib/seasons'
+import type { GlobalBackend } from '../types'
 import { WindowControls } from './WindowControls'
 import { Wordmark } from './Wordmark'
 
 interface AuthScreenProps {
+  providers?: GlobalBackend[]
   onAuthenticated: (session: RiftSession) => void
 }
 
 type Mode = 'signin' | 'signup'
 
-export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
+export function AuthScreen({ providers = [], onAuthenticated }: AuthScreenProps) {
   const [mode, setMode] = useState<Mode>('signin')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
+  const [providerBusy, setProviderBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const oauthProviders = providers.filter((provider) => provider.auth === 'oauth')
+  const providerAuthAvailable = Boolean(window.arc?.providerAuth?.login)
 
   const art = artFor(seasonForMajor(12))
 
@@ -32,8 +38,46 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     setConfirm('')
   }
 
+  const beginProviderSignIn = async (provider: GlobalBackend) => {
+    if (busy || providerBusy) return
+    if (!window.arc?.providerAuth?.login) {
+      setError('In-app sign-in needs the desktop app. Run "npm run app".')
+      return
+    }
+    setProviderBusy(provider.id)
+    setError(null)
+    try {
+      const status = await window.arc.providerAuth.login(provider.id)
+      if (!status?.signedIn) throw new Error(`${provider.label} did not return a session. Try again.`)
+      const displayName = status.displayName?.trim() || `${provider.label} Player`
+      const accountId =
+        status.accountId?.trim() ||
+        displayName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+          .slice(0, 40) ||
+        provider.id
+      onAuthenticated({
+        token: '',
+        providerOnly: true,
+        user: {
+          id: `${provider.id}:${accountId}`,
+          username: displayName,
+          avatarUrl: status.avatarUrl || undefined,
+          providerId: provider.id,
+          providerLabel: provider.label,
+        },
+      })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : `${provider.label} sign-in failed.`)
+    } finally {
+      setProviderBusy(null)
+    }
+  }
+
   const submit = async () => {
-    if (busy) return
+    if (busy || providerBusy) return
     setError(null)
 
     const name = username.trim()
@@ -91,8 +135,8 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         )}
       </header>
 
-      <main className="relative flex flex-1 items-center justify-center px-5 py-10 sm:px-8">
-        <div className="grid w-full max-w-[980px] items-center gap-10 lg:grid-cols-[1.05fr_0.95fr]">
+      <main className="relative flex flex-1 items-start justify-center overflow-y-auto px-5 py-10 sm:px-8">
+        <div className="my-auto grid w-full max-w-[980px] items-center gap-10 lg:grid-cols-[1.05fr_0.95fr]">
           <section className="max-w-md">
             <p className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/30 px-3 py-1.5 text-[10.5px] font-semibold uppercase tracking-[0.2em] text-mist/90 backdrop-blur">
               <Sparkles className="h-3 w-3 text-amber-300" />
@@ -123,6 +167,44 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           </section>
 
           <section className="w-full rounded-3xl border border-white/10 bg-ink/80 p-5 shadow-[0_40px_90px_-40px_rgba(0,0,0,0.95)] backdrop-blur-xl sm:p-6">
+            {oauthProviders.length > 0 && providerAuthAvailable && (
+              <div className="mb-5">
+                <p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-300">
+                  <ShieldCheck className="h-3.5 w-3.5" /> One sign-in · VAULTED + global play
+                </p>
+                <h2 className="mt-2 font-display text-xl font-semibold tracking-tight text-white">
+                  Continue with your live account.
+                </h2>
+                <p className="mt-1 text-[12px] leading-relaxed text-fog">
+                  Your Discord or Google profile becomes your VAULTED identity and authorizes live global matchmaking.
+                  No separate account to create.
+                </p>
+                <div className="mt-3 space-y-2">
+                  {oauthProviders.map((provider) => (
+                    <button
+                      key={provider.id}
+                      type="button"
+                      onClick={() => void beginProviderSignIn(provider)}
+                      disabled={Boolean(providerBusy) || busy}
+                      className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/35 bg-emerald-400/[0.1] px-4 py-3 text-[13px] font-semibold text-emerald-100 transition-all duration-200 hover:border-emerald-400/65 hover:bg-emerald-400/[0.16] hover:text-white disabled:cursor-wait disabled:opacity-65"
+                    >
+                      {providerBusy === provider.id ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ShieldCheck className="h-4 w-4" />
+                      )}
+                      {providerBusy === provider.id ? 'Waiting for sign-in…' : `Continue with ${provider.label}`}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-5 flex items-center gap-3 text-[9.5px] font-bold uppercase tracking-[0.18em] text-fog/60">
+                  <span className="h-px flex-1 bg-line" />
+                  or use a VAULTED account
+                  <span className="h-px flex-1 bg-line" />
+                </div>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-1 rounded-2xl border border-line bg-black/30 p-1">
               {(['signin', 'signup'] as Mode[]).map((value) => (
                 <button
@@ -220,7 +302,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             <button
               type="button"
               onClick={() => void submit()}
-              disabled={busy}
+              disabled={busy || Boolean(providerBusy)}
               className={cx(
                 'mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-[13.5px] font-semibold text-white transition-all duration-300',
                 busy

@@ -1,7 +1,7 @@
 import { artKeyFor } from './art'
 import { lobbyIsFresh, lobbyPlayers, type LobbyInfo } from './friends'
 import type { CommunityDirectoryEntry, CommunityProviderStatus, CommunityServer } from './network'
-import type { Build } from '../types'
+import type { Build, GlobalBackend } from '../types'
 
 export type PlayModeLabel = 'ONLINE READY' | 'ONLINE PLAY'
 
@@ -20,6 +20,10 @@ export interface SeasonPlayMode {
   communityProviderLabel?: string
   /** external directories that list this season */
   directoryProviders?: string[]
+  /** a live global OGFN backend accepts players for this season */
+  globalOnline?: boolean
+  /** compact label(s) for the global backend(s), e.g. "Era / Stellar" */
+  globalProviderLabel?: string
 }
 
 /** Shared neutral state so every one of the 43 cards renders an online badge. */
@@ -56,8 +60,10 @@ export function seasonServerCount(mode: SeasonPlayMode | null | undefined): numb
 }
 
 export function onlineStatusLabel(players: number, servers = 0): string {
-  if (players <= 0) return 'ONLINE READY'
   const total = Math.max(0, Math.floor(players))
+  if (total <= 0) {
+    return servers > 0 ? `ONLINE · 0 PLAYING · ${servers} server${servers === 1 ? '' : 's'}` : 'ONLINE READY'
+  }
   const serverText =
     servers > 0 ? ` · ${servers} server${servers === 1 ? '' : 's'}` : ''
   return `ONLINE · ${total} playing${serverText}`
@@ -151,16 +157,20 @@ export function providerMatches(serverProviderId: string | undefined, buildProvi
   return candidate === target || candidate.replace(/-hybrid$/, '') === target.replace(/-hybrid$/, '')
 }
 
-/** Only joinable rows reported by a configured external directory count. */
-export function isLiveExternalServer(server: CommunityServer): boolean {
+/** A public, fresh row with a real address can be joined directly. */
+export function isLiveLobby(server: CommunityServer): boolean {
   return (
-    server.external === true &&
     server.public !== false &&
     Boolean(server.host) &&
     Number.isInteger(server.port) &&
     server.port > 0 &&
     lobbyIsFresh(server)
   )
+}
+
+/** Only directory rows may be used as a cross-season fallback. */
+export function isLiveExternalServer(server: CommunityServer): boolean {
+  return server.external === true && server.source !== 'manual' && isLiveLobby(server)
 }
 
 export type ExternalServerTier = 'exact' | 'provider' | 'external' | 'none'
@@ -174,7 +184,11 @@ export interface ExternalServerRoute {
   fallbackServer: CommunityServer | null
   /** why that server won: exact sub-patch, same provider, or any provider */
   tier: ExternalServerTier
-  /** selectable servers for the selected season only, best first */
+  /** exact-season servers, best first, shown above the divider */
+  exactOptions: CommunityServer[]
+  /** every other live external server, shown below the divider */
+  fallbackOptions: CommunityServer[]
+  /** every selectable live external server: exact season first */
   options: CommunityServer[]
 }
 
@@ -192,24 +206,37 @@ export function routeExternalServer(
 ): ExternalServerRoute {
   const seasonKey = artKeyFor(build.season)
   const providerId = build.onlineProvider?.id
-  const live = rankLobbies((servers || []).filter(isLiveExternalServer)) as CommunityServer[]
+  const allLive = rankLobbies((servers || []).filter(isLiveLobby)) as CommunityServer[]
+  const live = allLive.filter(isLiveExternalServer)
   const providerServers = live.filter((server) => providerMatches(server.providerId, providerId))
   const exactProvider = seasonKey
-    ? providerServers.filter((server) => server.seasonId === seasonKey)
+    ? allLive.filter(
+        (server) => server.seasonId === seasonKey && providerMatches(server.providerId, providerId),
+      )
     : []
-  const exactAnywhere = seasonKey ? live.filter((server) => server.seasonId === seasonKey) : []
+  const exactAnywhere = seasonKey ? allLive.filter((server) => server.seasonId === seasonKey) : []
 
-  // The dropdown is season-only. Assigned-provider exact matches stay first,
-  // followed by exact matches on other providers. A provider fallback is never
-  // mixed into this list; it is exposed separately so the card can label it.
-  const options: CommunityServer[] = []
+  // Exact-season matches stay first (assigned provider, then any provider).
+  // Every other live external server follows below a divider, so the dropdown
+  // is never empty while a directory has an online server.
+  const exactOptions: CommunityServer[] = []
   const seen = new Set<string>()
   for (const server of [...exactProvider, ...exactAnywhere]) {
     const key = server.address.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
-    options.push(server)
+    exactOptions.push(server)
   }
+  const exactAddresses = new Set(exactOptions.map((server) => server.address.toLowerCase()))
+  const fallbackOptions = [
+    ...providerServers.filter((server) => !exactAddresses.has(server.address.toLowerCase())),
+    ...live.filter(
+      (server) =>
+        !exactAddresses.has(server.address.toLowerCase()) &&
+        !providerMatches(server.providerId, providerId),
+    ),
+  ]
+  const options = [...exactOptions, ...fallbackOptions]
 
   const exactServer = exactProvider[0] ?? exactAnywhere[0] ?? null
   const fallbackServer = exactServer ? null : providerServers[0] ?? live[0] ?? null
@@ -222,7 +249,7 @@ export function routeExternalServer(
         : live.length > 0
           ? 'external'
           : 'none'
-  return { server, exactServer, fallbackServer, tier, options }
+  return { server, exactServer, fallbackServer, tier, exactOptions, fallbackOptions, options }
 }
 
 /**
@@ -315,9 +342,9 @@ function addLobby(mode: SeasonPlayMode, players: number): SeasonPlayMode {
     ...mode,
     online: true,
     label: 'ONLINE PLAY',
-    // Empty listed lobbies do not inflate the server count; the badge only
-    // reports servers that currently contribute real players.
-    lobbyCount: mode.lobbyCount + (livePlayers > 0 ? 1 : 0),
+    // A live listed lobby is a real server even when it is empty. Player totals
+    // still use the reported count, while the server badge reflects the row.
+    lobbyCount: mode.lobbyCount + 1,
     playerCount: mode.playerCount + livePlayers,
   }
 }
@@ -362,6 +389,7 @@ export function playModesForBuilds(
   viewerUsername?: string | null,
   communityStatuses: CommunityProviderStatus[] = [],
   communityDirectories: CommunityDirectoryEntry[] = [],
+  globalBackends: GlobalBackend[] = [],
 ): Record<string, SeasonPlayMode> {
   const modes: Record<string, SeasonPlayMode> = {}
   for (const build of builds) {
@@ -418,6 +446,25 @@ export function playModesForBuilds(
     }
   }
 
+  // A configured global backend is a real live destination even when it does
+  // not expose a public per-lobby player count. It is separate from the relay
+  // and directory populations so the UI never invents a player number.
+  for (const build of builds) {
+    const seasonKey = artKeyFor(build.season)
+    if (!seasonKey) continue
+    const backends = globalBackends.filter(
+      (backend) => backend.global && backend.supportedSeasons.includes(seasonKey),
+    )
+    if (backends.length > 0) {
+      modes[build.id] = {
+        ...(modes[build.id] ?? DEFAULT_PLAY_MODE),
+        online: true,
+        globalOnline: true,
+        globalProviderLabel: backends.map((backend) => backend.label).join(' / '),
+      }
+    }
+  }
+
   // A directory can publish live player counts for a provider without
   // publishing an IP. Keep those numbers separate from lobby counts so the UI
   // never implies there is an address to join.
@@ -426,7 +473,7 @@ export function playModesForBuilds(
     if (!seasonKey) continue
 
     const statuses = communityStatuses.filter(
-      (status) => status.seasonId === seasonKey && (status.players ?? 0) > 0,
+      (status) => status.seasonId === seasonKey && status.online !== false,
     )
     const statusPlayers = statuses.reduce((total, status) => total + (status.players ?? 0), 0)
     const statusServers = statuses.reduce((total, status) => total + Math.max(0, status.servers ?? 0), 0)
@@ -439,10 +486,10 @@ export function playModesForBuilds(
       ),
     ]
 
-    if (statusPlayers > 0 || directoryLabels.length > 0) {
+    if (statusServers > 0 || statusPlayers > 0 || directoryLabels.length > 0) {
       modes[build.id] = {
         ...(modes[build.id] ?? DEFAULT_PLAY_MODE),
-        ...(statusPlayers > 0
+        ...(statusServers > 0 || statusPlayers > 0
           ? {
               communityPlayerCount: statusPlayers,
               communityServerCount: statusServers,

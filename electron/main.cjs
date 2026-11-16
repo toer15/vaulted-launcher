@@ -1,13 +1,15 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron')
+const { app, BrowserWindow, WebContentsView, dialog, ipcMain, safeStorage, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const crypto = require('node:crypto')
+const dns = require('node:dns')
 const net = require('node:net')
 const { spawn, execFile } = require('node:child_process')
 const { autoUpdater } = require('electron-updater')
 const {
   ensureProviderRedirects,
+  providerCatalog,
   providerDllPath,
   providerForId,
   providerProfile,
@@ -15,7 +17,9 @@ const {
   redirectDllMatchesProfile,
   redirectSupportsBackendParameter,
 } = require('./onlineProviders.cjs')
-const { fetchCommunityServers } = require('./communityServers.cjs')
+const { fetchCommunityServers, normalizeHostPort, probePing } = require('./communityServers.cjs')
+const { createProviderAuth } = require('./providerAuth.cjs')
+
 const { botFillPreferences } = require('./botFill.cjs')
 
 const DEV = process.argv.includes('--dev')
@@ -29,6 +33,17 @@ const SMOKE_SIZE = process.env.RIFT_SMOKE_SIZE ?? ''
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null
+
+/** Native OAuth account link for live global providers (Era). */
+const providerAuth = createProviderAuth({
+  app,
+  safeStorage,
+  BrowserWindow,
+  WebContentsView,
+  getParentWindow: () => mainWindow,
+  listProviders: () => providerCatalog(),
+  profileForId: (id) => providerProfile(id),
+})
 
 /** buildId -> { pid, injectorPid, startedAt, expectedExecutable } */
 const running = new Map()
@@ -1374,7 +1389,16 @@ function removeAftermathDlls(executable) {
   }
 }
 
-function providerFortniteArgs(backendUrl) {
+function normalizeProviderAuthCode(value) {
+  if (typeof value !== 'string') return ''
+  const code = value.trim()
+  if (code.length < 8 || code.length > 4096) return ''
+  // Exchange codes and one-time access tokens are URL-safe. Reject whitespace
+  // or shell-looking text before it becomes a process argument.
+  return /^[A-Za-z0-9._~+/=-]+$/.test(code) ? code : ''
+}
+
+function providerFortniteArgs(backendUrl, authCode = '') {
   const args = [
     '-epicapp=Fortnite',
     '-epicenv=Prod',
@@ -1384,6 +1408,13 @@ function providerFortniteArgs(backendUrl) {
     '-fltoken=none',
     '-skippatchcheck',
   ]
+  if (authCode) {
+    args.push(
+      '-AUTH_LOGIN=unused',
+      `-AUTH_PASSWORD=${authCode}`,
+      '-AUTH_TYPE=exchangecode',
+    )
+  }
   // Tellurium reads the value after -backend= from the raw command line, so
   // this must remain the final argument. The injector quotes it; the DLL strips
   // that closing quote before using the URL as its redirect origin.
@@ -3580,6 +3611,24 @@ async function launchOnlineProvider(payload) {
   const launchPayload = { ...payload, path: folder, executable }
   assertBuild(launchPayload)
 
+  let authCode = normalizeProviderAuthCode(payload?.authCode)
+  if (profile.auth === 'oauth') {
+    try {
+      const exchange = await providerAuth.exchangeCode(providerId, { seasonId, version })
+      authCode = normalizeProviderAuthCode(exchange.code)
+      if (!authCode) throw new Error('The provider returned an invalid login code.')
+    } catch (error) {
+      throw new Error(
+        `VAULTED could not get a fresh ${profile.label} login code.\n\n` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  } else if (profile.auth === 'exchangeCode' && !authCode) {
+    throw new Error(
+      `Sign in to ${profile.label} first. Open the provider in your browser, copy a fresh exchange code, then paste it on the season card.`,
+    )
+  }
+
   const join = joinTargetFromPayload(payload)
   if (join) writeJoinTarget(join.host, join.port)
   else clearJoinTarget()
@@ -3587,7 +3636,7 @@ async function launchOnlineProvider(payload) {
   const launched = await launchInjectedGame(launchPayload, {
     injector: runtime.injector,
     dll: redirectDll,
-    args: providerFortniteArgs(profile.backendUrl),
+    args: providerFortniteArgs(profile.backendUrl, authCode),
     env: {
       VAULTED_PROVIDER_ID: providerId,
       // Retained for diagnostics; the redirect itself receives -backend= below.
@@ -3643,6 +3692,80 @@ async function launchOnlineProvider(payload) {
     joined: join ? `${join.host}:${join.port}` : null,
     external: false,
     provider: providerId,
+  }
+}
+
+function privateIpAddress(value) {
+  const host = String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
+  if (!host) return true
+  if (host === 'localhost' || host.endsWith('.localhost')) return true
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(host)
+  if (mapped) return privateIpAddress(mapped[1])
+  if (host.includes(':')) {
+    return host === '::' || host === '::1' || /^(fc|fd|fe8|fe9|fea|feb)/i.test(host)
+  }
+  const parts = host.split('.').map((part) => Number(part))
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false
+  }
+  if (parts[0] === 10 || parts[0] === 127 || parts[0] === 0) return true
+  if (parts[0] === 169 && parts[1] === 254) return true
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true
+  if (parts[0] === 192 && parts[1] === 168) return true
+  if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true
+  if (parts[0] >= 224) return true
+  return false
+}
+
+function pingHost(host) {
+  return new Promise((resolve) => {
+    const args =
+      process.platform === 'win32'
+        ? ['-n', '1', '-w', '1400', host]
+        : ['-c', '1', '-W', '2', host]
+    execFile('ping', args, { windowsHide: true, timeout: 4000 }, (error, stdout) => {
+      if (error) return resolve(undefined)
+      const text = String(stdout || '')
+      const match = /(?:time[=<]\s*)([\d.]+)\s*ms/i.exec(text)
+      if (match && Number.isFinite(Number(match[1]))) return resolve(Math.max(0, Math.round(Number(match[1]))))
+      resolve(0)
+    })
+  })
+}
+
+async function probeCommunityAddress(inputHost, inputPort) {
+  const parsed = normalizeHostPort(
+    Number(inputPort) ? `${inputHost}:${inputPort}` : String(inputHost || ''),
+    7777,
+  )
+  if (!parsed || !/^[A-Za-z0-9.-]{1,253}$/.test(parsed.host)) {
+    return { reachable: false, error: 'Enter a public server address as ip:port.' }
+  }
+  if (privateIpAddress(parsed.host)) {
+    return { reachable: false, error: 'Use a public internet address, not localhost or a LAN IP.' }
+  }
+  try {
+    const records = await dns.promises.lookup(parsed.host, { all: true, verbatim: true })
+    if (records.some((record) => privateIpAddress(record.address))) {
+      return { reachable: false, error: 'That hostname resolves to a private network address.' }
+    }
+  } catch {
+    return { reachable: false, error: 'That hostname could not be resolved.' }
+  }
+
+  const tcpPing = await probePing(parsed.host, parsed.port, 900)
+  if (tcpPing !== undefined) {
+    return { reachable: true, pingMs: tcpPing, host: parsed.host, port: parsed.port, method: 'tcp' }
+  }
+  const icmpPing = await pingHost(parsed.host)
+  if (icmpPing !== undefined) {
+    return { reachable: true, pingMs: icmpPing, host: parsed.host, port: parsed.port, method: 'icmp' }
+  }
+  return {
+    reachable: false,
+    error: 'The host did not answer a TCP probe or ping. Check the IP and port, then try again.',
+    host: parsed.host,
+    port: parsed.port,
   }
 }
 
@@ -3756,21 +3879,30 @@ function registerIpc() {
     await ensureRuntimeInstalled()
 
     const id = typeof payload.id === 'string' ? payload.id : null
-    const join = joinTargetFromPayload(payload)
-    const joinFallback = join && payload.joinFallback === true
-    // VAULTED is a client-only launcher. Without an external destination it
-    // must refuse the launch instead of starting a 127.0.0.1 game server on
-    // this PC; the renderer selects a live community server before Play.
+    let join = joinTargetFromPayload(payload)
+    let localHost = false
     if (!join) {
-      throw new Error('VAULTED connects to live external servers only. Pick a live server and try again.')
+      // No live directory/manual/relay target was available. Bring the local
+      // auth backend up before the hidden host starts: the host has to sign in
+      // before it can open port 7777.
+      send('arc:launch-status', { id: id ?? undefined, message: 'Starting a VAULTED public lobby…' })
+      await ensureLocalBackend(payload.username)
+      await ensureGameServer(payload)
+      await awaitGameServerReady()
+      join = { host: '127.0.0.1', port: GAME_SERVER_PORT }
+      localHost = true
     }
+    const joinFallback = join && payload.joinFallback === true
     if (id) stopJoinWatchdog(id)
     let injector = null
     let gamePid = null
     let matchmakingReady = false
 
     try {
-      send('arc:launch-status', { id: id ?? undefined, message: 'Connecting to the live server…' })
+      send('arc:launch-status', {
+        id: id ?? undefined,
+        message: localHost ? 'Starting the VAULTED game server…' : 'Connecting to the live server…',
+      })
       writeJoinTarget(join.host, join.port)
       await ensureLocalBackend(payload.username)
       if (payload.inventory) {
@@ -3853,7 +3985,7 @@ function registerIpc() {
       send('arc:launch-status', { id: id ?? undefined, message: 'Signing in to the private server…' })
       return {
         pid: gamePid,
-        privateServer: false,
+        privateServer: localHost,
         matchmaking: matchmakingReady,
         joined: `${join.host}:${join.port}`,
       }
@@ -3870,6 +4002,40 @@ function registerIpc() {
   ipcMain.handle('arc:online-provider-launch', (_event, payload) =>
     launchOnlineProvider(payload),
   )
+
+  ipcMain.handle('arc:provider-catalog', () => providerCatalog())
+
+  ipcMain.handle('arc:provider-auth-status', () => providerAuth.statuses())
+
+  ipcMain.handle('arc:provider-auth-login', (_event, providerId) =>
+    providerAuth.login(providerId),
+  )
+
+  ipcMain.handle('arc:provider-auth-logout', (_event, providerId) =>
+    providerAuth.logout(providerId),
+  )
+
+  ipcMain.on('arc:provider-auth-close', (event) => {
+    const sender = BrowserWindow.fromWebContents(event.sender)
+    if (sender && sender !== mainWindow) sender.close()
+  })
+
+  ipcMain.handle('arc:probe-server', (_event, payload) =>
+    probeCommunityAddress(payload?.host, payload?.port),
+  )
+
+  ipcMain.handle('arc:open-external', async (_event, rawUrl) => {
+    const url = String(rawUrl || '').trim()
+    if (!/^https?:\/\//i.test(url) || url.length > 2048) {
+      return { ok: false, error: 'Only http(s) links are supported.' }
+    }
+    try {
+      await shell.openExternal(url)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : 'Could not open the link.' }
+    }
+  })
 
   /** Public community directories are allowlisted in resources/providers. */
   ipcMain.handle('arc:community-servers', async (_event, payload) => {

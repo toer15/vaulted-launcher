@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActiveBuildCard } from './components/ActiveBuildCard'
 import { AddBuildDialog } from './components/AddBuildDialog'
+import { ProviderSignInDialog } from './components/ProviderSignInDialog'
 import { AuthScreen } from './components/AuthScreen'
 import { BuildDrawer } from './components/BuildDrawer'
 import { FriendsView } from './components/FriendsView'
 import { ItemShopView } from './components/ItemShopView'
-import { ServerFallbackDialog } from './components/ServerFallbackDialog'
 import { LibraryRail } from './components/LibraryRail'
 import { SettingsView } from './components/SettingsView'
 import { ToastStack } from './components/Toast'
@@ -13,12 +13,10 @@ import { TopBar } from './components/TopBar'
 import { artKeyFor } from './lib/art'
 import { fetchFriends, type LobbyInfo } from './lib/friends'
 import {
-  findActiveServerChoice,
   mergeLobbies,
   playModesForBuilds,
   routeExternalServer,
   seasonLabelForId,
-  type ActiveServerChoice,
 } from './lib/playMode'
 import {
   clearOnlineLobby,
@@ -49,6 +47,7 @@ import {
   subscribeJoinFailed,
   verifyBuildFiles,
 } from './lib/launch'
+import { clearSession as clearNetworkSession } from './lib/network'
 import {
   clearSession,
   compareVersions,
@@ -98,8 +97,9 @@ import type {
   BuildState,
   BuildVerifyReport,
   DownloadState,
+  GlobalBackend,
   LaunchPhase,
-  OnlineProviderConfig,
+  ProviderAuthStatus,
   SeasonInfo,
   ToastMessage,
 } from './types'
@@ -124,6 +124,130 @@ function lobbyTarget(address: string): { host: string; port: number } | null {
   return host ? { host, port } : null
 }
 
+const MANUAL_SERVERS_KEY = 'vaulted.manualServers.v1'
+
+interface ManualServerRecord {
+  host: string
+  port: number
+  name: string
+  seasonId: string
+  addedAt: number
+  pingMs?: number
+}
+
+function readManualServers(): Record<string, ManualServerRecord[]> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(MANUAL_SERVERS_KEY) || '{}') as unknown
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    const result: Record<string, ManualServerRecord[]> = {}
+    for (const [seasonId, entries] of Object.entries(raw as Record<string, unknown>)) {
+      if (!/^ch\d{1,2}(?:-s\d{1,2}|-remix|-mini\d+)$/.test(seasonId) || !Array.isArray(entries)) continue
+      const valid = entries
+        .filter((entry): entry is ManualServerRecord => {
+          if (!entry || typeof entry !== 'object') return false
+          const candidate = entry as Partial<ManualServerRecord>
+          return (
+            typeof candidate.host === 'string' &&
+            /^[A-Za-z0-9.-]{1,253}$/.test(candidate.host) &&
+            Number.isInteger(candidate.port) &&
+            (candidate.port ?? 0) > 0 &&
+            (candidate.port ?? 0) <= 65535
+          )
+        })
+        .slice(0, 50)
+      if (valid.length > 0) result[seasonId] = valid
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+function saveManualServers(value: Record<string, ManualServerRecord[]>): void {
+  try {
+    localStorage.setItem(MANUAL_SERVERS_KEY, JSON.stringify(value))
+  } catch {
+    /* storage disabled */
+  }
+}
+
+function publicManualAddress(value: string): { host: string; port: number; address: string } | null {
+  const raw = String(value || '').trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+  const split = raw.lastIndexOf(':')
+  if (split <= 0) return null
+  const host = raw.slice(0, split).replace(/^\[|\]$/g, '')
+  const port = Number(raw.slice(split + 1))
+  if (!/^[A-Za-z0-9.-]{1,253}$/.test(host)) return null
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null
+  const parts = host.split('.').map((part) => Number(part))
+  const ipv4 = parts.length === 4 && parts.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+  if (ipv4) {
+    if (
+      parts[0] === 10 ||
+      parts[0] === 127 ||
+      parts[0] === 0 ||
+      (parts[0] === 169 && parts[1] === 254) ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) ||
+      (parts[0] === 192 && parts[1] === 168) ||
+      parts[0] >= 224
+    ) {
+      return null
+    }
+  }
+  if (host.toLowerCase() === 'localhost' || host.toLowerCase().endsWith('.localhost')) return null
+  return { host, port, address: `${host}:${port}` }
+}
+
+function manualServerOptions(
+  entries: Record<string, ManualServerRecord[]>,
+): CommunityServer[] {
+  const servers: CommunityServer[] = []
+  for (const [seasonId, records] of Object.entries(entries)) {
+    for (const record of records) {
+      servers.push({
+        id: `manual:${seasonId}:${record.host}:${record.port}`,
+        name: record.name || record.host,
+        username: 'saved',
+        address: `${record.host}:${record.port}`,
+        host: record.host,
+        port: record.port,
+        buildId: seasonId,
+        seasonId,
+        label: null,
+        public: true,
+        updated: new Date(record.addedAt).toISOString(),
+        freshForMs: 0,
+        playersKnown: false,
+        pingMs: record.pingMs,
+        providerId: 'manual',
+        providerLabel: 'Saved IP',
+        source: 'manual',
+        sourceLabel: 'Saved IP',
+        external: true,
+      })
+    }
+  }
+  return servers
+}
+
+function relayServer(lobby: LobbyInfo): CommunityServer | null {
+  const target = lobbyTarget(lobby.address)
+  if (!target) return null
+  return {
+    ...lobby,
+    id: `relay:${lobby.address}`,
+    name: lobby.label || `${lobby.username || 'VAULTED'} lobby`,
+    host: target.host,
+    port: target.port,
+    providerId: 'vaulted',
+    providerLabel: 'VAULTED',
+    source: 'vaulted-relay',
+    sourceLabel: 'VAULTED Public',
+    external: false,
+  }
+}
+
 interface VerifyJob {
   id: string
   phase: 'running' | 'done'
@@ -143,6 +267,15 @@ function formatDuration(ms: number): string {
   const minutes = Math.floor(seconds / 60)
   const rest = seconds % 60
   return rest ? `${minutes}m ${rest}s` : `${minutes}m`
+}
+
+function initialsFor(name: string): string {
+  const parts = String(name || '')
+    .trim()
+    .split(/[\s_.-]+/)
+    .filter(Boolean)
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+  return (parts[0] || 'VA').slice(0, 2).toUpperCase()
 }
 
 /** Short actionable summary of a failed build verification. */
@@ -202,12 +335,30 @@ export default function App() {
   >(null)
 
   const [session, setSession] = useState<RiftSession | null>(() => loadSession())
+  const providerOnly = Boolean(session?.providerOnly)
   const [manifest, setManifest] = useState<BuildManifest | null>(() => defaultBuilds as BuildManifest)
   const [sourcesStatus, setSourcesStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle')
   const [sourcesError, setSourcesError] = useState<string | null>(null)
   const [activeCounts, setActiveCounts] = useState<Record<string, number>>({})
   const [onlineLobbies, setOnlineLobbies] = useState<LobbyInfo[]>([])
   const [communityServers, setCommunityServers] = useState<CommunityServer[]>([])
+  const [providerCatalog, setProviderCatalog] = useState<GlobalBackend[]>([])
+  const [manualServers, setManualServers] = useState<Record<string, ManualServerRecord[]>>(() =>
+    readManualServers(),
+  )
+  // One-time provider codes stay in memory for this launch session only. They
+  // are never written to localStorage, settings or logs.
+  const [providerCodes, setProviderCodes] = useState<Record<string, string>>({})
+  // OAuth sessions are encrypted on disk by Electron main; the renderer only
+  // receives a signed-in flag and display name.
+  const [providerAuthStatus, setProviderAuthStatus] = useState<Record<string, ProviderAuthStatus>>({})
+  const providerAuthRef = useRef<Record<string, ProviderAuthStatus>>({})
+  providerAuthRef.current = providerAuthStatus
+  const [providerAuthPrompt, setProviderAuthPrompt] = useState<{
+    build: Build
+    provider: GlobalBackend
+    server?: { host: string; port: number; name?: string; seasonId?: string | null }
+  } | null>(null)
   // Per-season manual choice from the hero server dropdown. A missing entry
   // means the external router's automatic best live server.
   const [serverSelections, setServerSelections] = useState<Record<string, string>>({})
@@ -220,6 +371,8 @@ export default function App() {
   const onlineServiceUrlRef = useRef(cloudSettings.onlineServiceUrl)
   onlineServiceUrlRef.current = cloudSettings.onlineServiceUrl
   const [cloudLoaded, setCloudLoaded] = useState(false)
+  const manualServersRef = useRef(manualServers)
+  manualServersRef.current = manualServers
   const [cloudStatus, setCloudStatus] = useState<'idle' | 'syncing' | 'connected' | 'error'>('idle')
   const [cloudError, setCloudError] = useState<string | null>(null)
   const [cloudMode, setCloudMode] = useState<CloudSourceMode | null>(null)
@@ -247,11 +400,6 @@ export default function App() {
     /** false for a private host that should not be published */
     publish?: boolean
   } | null>(null)
-  const [serverFallback, setServerFallback] = useState<{
-    build: Build
-    choice: ActiveServerChoice
-  } | null>(null)
-
   // Link/build overlays are card-scoped in intent, even though they live at
   // the app root. Close them when the selected card, view, or library changes
   // so they cannot linger over a different build.
@@ -358,7 +506,7 @@ export default function App() {
     runningId,
     accountId: session?.user.id,
     username: session?.user.username,
-    token: session?.token,
+    token: providerOnly ? undefined : session?.token,
   })
 
   // silent auto-update events from main process
@@ -462,19 +610,38 @@ export default function App() {
   const activeLaunchFailure = launchFailure?.id === activeBuild?.id ? launchFailure.message : null
   const activeLaunchFailureLocal = launchFailure?.id === activeBuild?.id && launchFailure.local === true
 
+  const providerIdentity = useMemo(() => {
+    const signedIn = providerCatalog.filter(
+      (provider) => provider.auth === 'oauth' && providerAuthStatus[provider.id]?.signedIn,
+    )
+    const preferred =
+      signedIn.find((provider) => provider.id === activeBuild?.onlineProvider?.id) ?? signedIn[0]
+    if (!preferred) return null
+    const status = providerAuthStatus[preferred.id]
+    return {
+      id: preferred.id,
+      label: preferred.label,
+      displayName: status?.displayName || null,
+      avatarUrl: status?.avatarUrl || null,
+    }
+  }, [activeBuild?.onlineProvider?.id, providerAuthStatus, providerCatalog])
+
   const account: Account = useMemo(() => {
-    const username = session?.user.username ?? 'player'
+    const username = providerIdentity?.displayName || session?.user.username || 'player'
     const equippedOutfit = shop.equipped.outfit
       ? SHOP_CATALOG.find((item) => item.id === shop.equipped.outfit)
       : null
     return {
       username,
-      initials: username.slice(0, 2).toUpperCase(),
+      initials: initialsFor(username),
       outfit: equippedOutfit?.name ?? PROFILE.outfit,
       level: PROFILE.level,
       cosmetics: PROFILE.cosmetics + shop.owned.length,
+      avatarUrl: providerIdentity?.avatarUrl || session?.user.avatarUrl || null,
+      providerLabel: providerIdentity?.label || session?.user.providerLabel || null,
+      providerOnly,
     }
-  }, [session, shop.equipped.outfit, shop.owned.length])
+  }, [providerIdentity, providerOnly, session, shop.equipped.outfit, shop.owned.length])
 
   const activeKey = activeBuild ? artKeyFor(activeBuild.season) : null
 
@@ -482,9 +649,18 @@ export default function App() {
   // all 43 seasons, including builds that have not been downloaded yet.
   // Public directory results and relay echoes describe the same host often;
   // merge them by address so the card keeps the fullest count and lowest ping.
+  const manualLobbies = useMemo(() => manualServerOptions(manualServers), [manualServers])
+  const relayLobbies = useMemo(
+    () => onlineLobbies.map(relayServer).filter((server): server is CommunityServer => Boolean(server)),
+    [onlineLobbies],
+  )
+  const serverCatalog = useMemo(
+    () => mergeLobbies([...communityServers, ...relayLobbies, ...manualLobbies]) as CommunityServer[],
+    [communityServers, manualLobbies, relayLobbies],
+  )
   const discoverableLobbies = useMemo(
-    () => mergeLobbies([...communityServers, ...onlineLobbies]),
-    [communityServers, onlineLobbies],
+    () => mergeLobbies([...serverCatalog, ...onlineLobbies]),
+    [onlineLobbies, serverCatalog],
   )
 
   const playModes = useMemo(
@@ -497,6 +673,7 @@ export default function App() {
         account.username,
         communityStatuses,
         communityDirectories,
+        providerCatalog,
       ),
     [
       account.username,
@@ -506,28 +683,47 @@ export default function App() {
       discoverableLobbies,
       hostedLobby,
       lanIp,
+      providerCatalog,
     ],
   )
   const activePlayMode = activeBuild ? playModes[activeBuild.id] : undefined
 
-  // The hero dropdown and Play read the same external-only route. Exact-season
-  // servers rank first (assigned provider, then any provider), then the
-  // assigned provider, then any live external provider. A local address is
-  // never part of this result.
+  // The hero dropdown and Play read one route: exact-season relay/manual rows
+  // first, then external directories. A different-season external server is
+  // only a fallback when no global backend or exact lobby is available.
   const activeServerRoute = useMemo(
-    () => (activeBuild ? routeExternalServer(activeBuild, communityServers) : null),
-    [activeBuild, communityServers],
+    () => (activeBuild ? routeExternalServer(activeBuild, serverCatalog) : null),
+    [activeBuild, serverCatalog],
   )
+  const activeGlobalBackends = useMemo(() => {
+    if (!activeKey) return []
+    return providerCatalog.filter(
+      (provider) => provider.global && provider.supportedSeasons.includes(activeKey),
+    )
+  }, [activeKey, providerCatalog])
+  const selectedServerValue = activeBuild ? serverSelections[activeBuild.id] : undefined
+  const selectedGlobalBackend = selectedServerValue?.startsWith('global:')
+    ? activeGlobalBackends.find((provider) => provider.id === selectedServerValue.slice('global:'.length)) ?? null
+    : null
   const activeServerSelection =
     activeBuild &&
-    serverSelections[activeBuild.id] &&
-    activeServerRoute?.options.some((server) => server.address === serverSelections[activeBuild.id])
-      ? serverSelections[activeBuild.id]
+    selectedServerValue &&
+    (selectedGlobalBackend ||
+      activeServerRoute?.options.some((server) => server.address === selectedServerValue))
+      ? selectedServerValue
+      : null
+  const autoGlobalBackend =
+    activeBuild && !selectedServerValue && !activeServerRoute?.exactServer
+      ? activeGlobalBackends.find((provider) => provider.id === activeBuild.onlineProvider?.id) ??
+        activeGlobalBackends[0] ??
+        null
       : null
 
   // validate a cached session once; a 401 sends the user back to the gate
   useEffect(() => {
-    if (!session) return
+    // A native provider session is authenticated by Electron's encrypted store;
+    // the relay API has no account token to validate for it.
+    if (!session || providerOnly) return
     let cancelled = false
     void fetchMe(session.token)
       .then((user) => {
@@ -648,7 +844,42 @@ export default function App() {
 
   // Auto-connect to the configured matchmaking service on startup. HTTP(S)
   // endpoints are polled; ws:// services push their lobby list over the socket.
-  const onlineToken = session?.token ?? null
+  const onlineToken = session && !providerOnly ? session.token : null
+
+  useEffect(() => {
+    if (!window.arc?.providerCatalog) return
+    let cancelled = false
+    void window.arc
+      .providerCatalog()
+      .then((providers) => {
+        if (!cancelled && Array.isArray(providers)) setProviderCatalog(providers)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const refreshProviderAuthStatus = useCallback(async () => {
+    if (!window.arc?.providerAuth?.status) return
+    try {
+      const statuses = await window.arc.providerAuth.status()
+      if (!statuses || typeof statuses !== 'object') return
+      providerAuthRef.current = statuses
+      setProviderAuthStatus(statuses)
+    } catch {
+      /* the sign-in button will report a real error if authentication is unavailable */
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshProviderAuthStatus()
+  }, [refreshProviderAuthStatus])
+
+  useEffect(() => {
+    saveManualServers(manualServers)
+  }, [manualServers])
+
   useEffect(() => {
     if (!onlineToken) {
       setOnlineLobbies([])
@@ -696,7 +927,7 @@ export default function App() {
 
   // heartbeat the season being viewed, then show live counts
   useEffect(() => {
-    if (!session) return
+    if (!session || providerOnly) return
     let cancelled = false
 
     const poll = async () => {
@@ -1449,7 +1680,7 @@ export default function App() {
   const startOnlineProvider = useCallback(
     async (
       build: Build,
-      provider: OnlineProviderConfig,
+      provider: GlobalBackend,
       server?: {
         host: string
         port: number
@@ -1458,6 +1689,7 @@ export default function App() {
         /** true when this target belongs to a different season */
         fallback?: boolean
       },
+      authCode?: string,
     ): Promise<boolean> => {
       if (!window.arc?.launchOnlineProvider) {
         pushToast({
@@ -1466,6 +1698,15 @@ export default function App() {
           description: 'Run "npm run app".',
         })
         return false
+      }
+
+      const oauthSignedIn =
+        provider.auth === 'oauth' &&
+        Boolean(providerAuthRef.current[provider.id]?.signedIn || session?.user.providerId === provider.id)
+      if ((provider.auth === 'exchangeCode' && !authCode) || (provider.auth === 'oauth' && !oauthSignedIn)) {
+        setProviderAuthPrompt({ build, provider, server })
+        // Handled by the sign-in dialog, not a launch failure.
+        return true
       }
 
       const providerLabel = provider.label || provider.name
@@ -1479,7 +1720,7 @@ export default function App() {
           : `Starting ${build.season.label} in ${providerLabel}…`,
       )
       try {
-        const result = await launchOnlineProvider(build, provider, server)
+        const result = await launchOnlineProvider(build, provider, server, authCode)
         if (!result.launched) throw new Error(`${providerLabel} could not be started.`)
         const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
           setRunningId(build.id)
@@ -1499,7 +1740,7 @@ export default function App() {
               ? server.fallback
                 ? `No live ${build.season.label} server — ${server.name || server.host} is a ${seasonLabelForId(server.seasonId)} server.`
                 : `${build.season.label} · your client is pointed at ${server.host}:${server.port}`
-              : `${build.season.label} is starting through the bundled ${providerLabel} runtime.`,
+              : `${build.season.label} is starting on ${providerLabel}'s live global backend.`,
           })
         })
         // A stale attempt must not trigger the caller's local fallback: another
@@ -1532,7 +1773,7 @@ export default function App() {
     async (
       build: Build,
       join?: { host: string; port: number },
-      options: { promptOnEmpty?: boolean } = {},
+      _options: { promptOnEmpty?: boolean } = {},
     ) => {
       if (phase === 'launching') return
       // A paused entry is an invitation to resume, not an active download.
@@ -1579,53 +1820,67 @@ export default function App() {
         }
       }
 
-      // External-only routing: exact build on the assigned provider, then the
-      // same provider, then any live external provider. The router never
-      // returns a local address, so Play can never host a server on this PC.
-      const route = routeExternalServer(build, availableCommunityServers)
-      const preferred =
-        !join && serverSelections[build.id]
-          ? route.options.find((server) => server.address === serverSelections[build.id])
-          : undefined
-      const chosen = join ? null : preferred ?? route.server
-      const target = join ?? (chosen ? lobbyTarget(chosen.address) : null)
+      // One route for relay/manual/external rows. Exact-season rows win; a
+      // different-season external row is only a fallback when no global backend
+      // is configured for this season.
+      const allAvailable = mergeLobbies([
+        ...availableCommunityServers,
+        ...relayLobbies,
+        ...manualLobbies,
+      ]) as CommunityServer[]
+      const route = routeExternalServer(build, allAvailable)
+      const selection = !join ? serverSelections[build.id] : undefined
+      const selectedGlobal = selection?.startsWith('global:')
+        ? providerCatalog.find(
+            (provider) => `global:${provider.id}` === selection && provider.global,
+          ) ?? null
+        : null
+      const selectedIp = selection && !selection.startsWith('global:') ? selection : null
+      const preferredIp = selectedIp
+        ? allAvailable.find((server) => server.address === selectedIp)
+        : undefined
+      const seasonKey = artKeyFor(build.season)
+      const globalOptions = seasonKey
+        ? providerCatalog.filter(
+            (provider) => provider.global && provider.supportedSeasons.includes(seasonKey),
+          )
+        : []
+      const autoGlobal =
+        globalOptions.find((provider) => provider.id === build.onlineProvider?.id) ??
+        globalOptions[0] ??
+        null
+      const chosen = join
+        ? null
+        : selectedGlobal
+          ? null
+          : preferredIp ??
+            (selectedIp
+              ? null
+              : route.exactServer ?? (autoGlobal ? null : route.fallbackServer))
+      const target = join ?? (selectedIp ? lobbyTarget(selectedIp) : chosen ? lobbyTarget(chosen.address) : null)
+      const chosenIsFallback = Boolean(
+        chosen && route.exactOptions.every((server) => server.address !== chosen.address),
+      )
       const fallbackNote =
-        !join && route.tier !== 'exact' && chosen
+        !join && chosenIsFallback && chosen
           ? `No live ${build.season.label} server — ${chosen.name} is a ${seasonLabelForId(chosen.seasonId)} server.`
           : null
+      const globalTarget = target ? null : selectedGlobal ?? autoGlobal
 
-      if (!target) {
-        setLaunchStage(null)
-        if (options.promptOnEmpty) {
-          const choice = findActiveServerChoice(
-            builds,
-            mergeLobbies([...availableCommunityServers, ...onlineLobbies]),
-            installed,
-            build.id,
-            lanIp,
-            account.username,
-          )
-          if (choice) {
-            setServerFallback({ build, choice })
-            return
-          }
-        }
-        const message = `No live external server is hosting ${build.season.label} right now. Try again in a moment or pick another season.`
-        setLaunchFailure({ id: build.id, message })
-        setPhase('error')
-        pushToast({ tone: 'info', title: 'No live external servers', description: message })
-        return
-      }
-
-      // A provider season joins the chosen live server through the bundled
-      // open-source runtime. A failed provider launch is reported to the
-      // player; it never falls back to hosting the match on this PC.
-      if (build.onlineProvider) {
-        const started = await startOnlineProvider(build, build.onlineProvider, {
-          ...target,
-          ...(chosen ? { name: chosen.name, seasonId: chosen.seasonId } : {}),
-          fallback: Boolean(fallbackNote),
-        })
+      if (globalTarget) {
+        const started = await startOnlineProvider(
+          build,
+          globalTarget,
+          chosen
+            ? {
+                ...target!,
+                name: chosen.name,
+                seasonId: chosen.seasonId,
+                fallback: Boolean(fallbackNote),
+              }
+            : undefined,
+          providerCodes[globalTarget.id],
+        )
         if (started) return
         setLaunchStage(null)
         setLaunchFailure((current) =>
@@ -1633,7 +1888,7 @@ export default function App() {
             ? current
             : {
                 id: build.id,
-                message: `Could not connect to ${target.host}:${target.port}. Pick another live server and try again.`,
+                message: `${globalTarget.label} could not be reached. Pick another backend or server and try again.`,
               },
         )
         setPhase('error')
@@ -1668,17 +1923,24 @@ export default function App() {
         }
       }
 
-      const attemptToken = launchAttempts.start(build.id, 'join')
+      const hosting = !target
+      const attemptToken = launchAttempts.start(build.id, hosting ? 'host' : 'join')
       setPhase('launching')
-      setLaunchStage(chosen ? `Joining ${chosen.name}…` : 'Joining a live external server…')
+      setLaunchStage(
+        hosting
+          ? 'Starting a VAULTED public lobby…'
+          : chosen
+            ? `Joining ${chosen.name}…`
+            : 'Joining a live external server…',
+      )
       const sourceKey = artKeyFor(build.season)
       const runtimeProfile =
         (sourceKey ? seasonManifest[sourceKey]?.runtimeProfile : undefined) ??
         runtimeProfileFor(build.season.chapter, build.version)
 
       try {
-        // Bot fill stays off: the external server owns its population. The
-        // selected join target is mandatory, and main rejects a host launch.
+        // No join target means the main process starts the bundled listen
+        // server, then this PC's public address is published to the relay.
         await launchBuild(
           build,
           session?.user.username,
@@ -1686,11 +1948,49 @@ export default function App() {
             items: inventoryItemsFor(shop.owned),
             equipped: shop.equipped,
           },
-          target,
+          target ?? undefined,
           false,
           runtimeProfile,
           { botFill: false },
         )
+
+        if (hosting) {
+          const endpoint = await window.arc?.publicAddress?.().catch(() => null)
+          const address = endpoint?.address || lanIp || '127.0.0.1'
+          const port = endpoint?.port || 7777
+          setHostedLobby({
+            address,
+            port,
+            public: Boolean(endpoint?.public),
+            buildId: build.id,
+            label: build.season.label,
+            seasonId: sourceKey,
+            players: 1,
+            publish: providerOnly ? false : undefined,
+          })
+          if (providerOnly) {
+            pushToast({
+              tone: 'info',
+              title: 'Local lobby started',
+              description:
+                'Provider-only accounts can play locally and on LAN. The VAULTED relay needs a VAULTED account.',
+            })
+          } else if (endpoint?.public) {
+            pushToast({
+              tone: 'success',
+              title: 'Your VAULTED lobby is live',
+              description: `${build.season.label} · ${address}:${port} is being published for everyone.`,
+            })
+          } else {
+            pushToast({
+              tone: 'info',
+              title: 'Lobby started on this PC',
+              description:
+                'No public port mapping was available. Forward UDP 7777 or set a public address in Settings so other VAULTED users can join.',
+            })
+          }
+        }
+
         const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
           localSessionRef.current = null
           setRunningId(build.id)
@@ -1698,15 +1998,18 @@ export default function App() {
           setLaunchStage(null)
           setLaunchFailure((current) => (current?.id === build.id ? null : current))
           shop.sets.recordLaunch(build.id)
-          setHostedLobby(null)
-          pushToast({
-            tone: 'success',
-            title: fallbackNote
-              ? `Joining ${chosen?.name || target.host} (fallback)`
-              : `Joining ${chosen?.name || target.host}`,
-            description:
-              fallbackNote ?? `${build.season.label} · your client is pointed at ${target.host}:${target.port}.`,
-          })
+          if (!hosting) setHostedLobby(null)
+          if (!hosting) {
+            pushToast({
+              tone: 'success',
+              title: fallbackNote
+                ? `Joining ${chosen?.name || target?.host} (fallback)`
+                : `Joining ${chosen?.name || target?.host}`,
+              description:
+                fallbackNote ??
+                `${build.season.label} · your client is pointed at ${target?.host}:${target?.port}.`,
+            })
+          }
         })
         if (!applied) return
       } catch (error) {
@@ -1735,16 +2038,149 @@ export default function App() {
       runningId,
       lanIp,
       communityServers,
-      onlineLobbies,
+      relayLobbies,
+      manualLobbies,
+      providerCatalog,
+      providerCodes,
+      providerAuthPrompt,
       refreshCommunityServers,
       builds,
       account.username,
       serverSelections,
       seasonManifest,
       session?.user.username,
+      session?.user.providerId,
+      providerOnly,
       shop.sets,
       shop.owned,
       shop.equipped,
+    ],
+  )
+
+  const handleAddManualServer = useCallback(
+    async (input: string): Promise<string | null> => {
+      if (!activeBuild || !activeKey) return 'Pick a season first.'
+      const parsed = publicManualAddress(input)
+      if (!parsed) {
+        return 'Enter a public server address as ip:port. Localhost and private LAN addresses are not accepted.'
+      }
+      if (!window.arc?.probeServer) return 'Server probing needs the desktop app.'
+
+      let probe
+      try {
+        probe = await window.arc.probeServer({ host: parsed.host, port: parsed.port })
+      } catch (error) {
+        return error instanceof Error ? error.message : 'The server probe failed.'
+      }
+      if (!probe?.reachable) {
+        return probe?.error || 'That server did not answer. Check the IP and port, then try again.'
+      }
+
+      const record: ManualServerRecord = {
+        host: parsed.host,
+        port: parsed.port,
+        name: `${activeBuild.season.label} server`,
+        seasonId: activeKey,
+        addedAt: Date.now(),
+        pingMs: probe.pingMs,
+      }
+      setManualServers((prev) => {
+        const existing = prev[activeKey] ?? []
+        const next = [
+          record,
+          ...existing.filter(
+            (entry) => entry.host.toLowerCase() !== record.host.toLowerCase() || entry.port !== record.port,
+          ),
+        ].slice(0, 50)
+        return { ...prev, [activeKey]: next }
+      })
+      setServerSelections((prev) => ({ ...prev, [activeBuild.id]: parsed.address }))
+      pushToast({
+        tone: 'success',
+        title: 'Server saved',
+        description: `${parsed.address} is selected for ${activeBuild.season.label}.`,
+      })
+      return null
+    },
+    [activeBuild, activeKey, pushToast],
+  )
+
+    const handleOpenProviderSignIn = useCallback(
+    (provider: GlobalBackend) => {
+      if (!activeBuild) return
+      if (provider.auth === 'exchangeCode' && installed[activeBuild.id] !== true) {
+        const downloading = Boolean(downloads[activeBuild.id])
+        pushToast({
+          tone: 'info',
+          title: `Install ${activeBuild.season.label} first`,
+          description: downloading
+            ? `${activeBuild.season.label} is still downloading. Finish the install, then open ${provider.label} sign-in for a fresh exchange code. No code is requested before then.`
+            : `${provider.label} exchange codes expire quickly. Download ${activeBuild.season.label} first, then open sign-in for a fresh code. No code is requested before then.`,
+        })
+        return
+      }
+      setProviderAuthPrompt({ build: activeBuild, provider })
+    },
+    [activeBuild, downloads, installed, pushToast],
+  )
+
+  const handleProviderCodeSubmit = useCallback(
+    (code: string): string | undefined => {
+      const pending = providerAuthPrompt
+      if (!pending) return
+      if (pending.provider.auth === 'exchangeCode' && installed[pending.build.id] !== true) {
+        const message = downloads[pending.build.id]
+          ? `${pending.build.season.label} is still downloading. ${pending.provider.label} codes expire quickly; finish the install, then reopen sign-in for a fresh code. The pasted code was not saved.`
+          : `${pending.provider.label} exchange codes expire quickly. Install ${pending.build.season.label} first, then reopen sign-in for a fresh code. The pasted code was not saved.`
+        pushToast({ tone: 'info', title: 'Install the season first', description: message })
+        return message
+      }
+      setProviderCodes((prev) => ({ ...prev, [pending.provider.id]: code }))
+      setProviderAuthPrompt(null)
+      void startOnlineProvider(pending.build, pending.provider, pending.server, code)
+    },
+    [downloads, installed, providerAuthPrompt, pushToast, startOnlineProvider],
+  )
+
+  const handleProviderOAuthAuthenticated = useCallback(
+    (status?: ProviderAuthStatus) => {
+      const pending = providerAuthPrompt
+      if (!pending) return
+      const previous = providerAuthRef.current[pending.provider.id]
+      const next = {
+        ...providerAuthRef.current,
+        [pending.provider.id]: {
+          providerId: pending.provider.id,
+          signedIn: true,
+          displayName: status?.displayName ?? previous?.displayName ?? null,
+          avatarUrl: status?.avatarUrl ?? previous?.avatarUrl ?? null,
+          accountId: status?.accountId ?? previous?.accountId ?? null,
+          expiresAt: status?.expiresAt ?? previous?.expiresAt ?? null,
+        },
+      }
+      providerAuthRef.current = next
+      setProviderAuthStatus(next)
+      setProviderAuthPrompt(null)
+      if (installed[pending.build.id] !== true) {
+        pushToast({
+          tone: 'success',
+          title: `Signed in to ${pending.provider.label}`,
+          description: downloads[pending.build.id]
+            ? `${pending.build.season.label} is still downloading. Press Play when the install finishes.`
+            : `${pending.build.season.label} is not installed yet. Download it, then press Play when you are ready.`,
+        })
+      } else {
+        void startOnlineProvider(pending.build, pending.provider, pending.server)
+      }
+      void refreshProviderAuthStatus()
+    },
+    [
+      downloads,
+      installed,
+      providerAuthPrompt,
+      pushToast,
+      refreshProviderAuthStatus,
+      startOnlineProvider,
     ],
   )
 
@@ -1795,7 +2231,7 @@ export default function App() {
         setRunningId(null)
         setPhase('idle')
         setLaunchFailure((current) => (current?.id === build.id ? null : current))
-        void clearOnlineLobby(onlineServiceUrlRef.current).catch(() => {})
+        if (!providerOnly) void clearOnlineLobby(onlineServiceUrlRef.current).catch(() => {})
         pushToast({
           tone: closed ? 'info' : 'error',
           title: closed ? 'Fortnite closed' : 'Could not close Fortnite',
@@ -1812,7 +2248,7 @@ export default function App() {
     }
 
     await startBuild(build, undefined, { promptOnEmpty: true })
-  }, [activeBuild, downloads, phase, pushToast, runningId, startBuild])
+  }, [activeBuild, downloads, phase, providerOnly, pushToast, runningId, startBuild])
 
   const handlePlayChallengeBuild = useCallback(
     (buildId: string) => {
@@ -1839,28 +2275,10 @@ export default function App() {
     [builds, pushToast, runningId, startBuild],
   )
 
-  const handleJoinFallbackSeason = useCallback(() => {
-    const pending = serverFallback
-    if (!pending) return
-    const target = lobbyTarget(pending.choice.lobby.address)
-    if (!target) {
-      pushToast({
-        tone: 'error',
-        title: 'That lobby has no usable address',
-        description: 'Pick another live server from the hero dropdown instead.',
-      })
-      return
-    }
-    setServerFallback(null)
-    setActiveId(pending.choice.build.id)
-    setView('home')
-    void startBuild(pending.choice.build, target)
-  }, [pushToast, serverFallback, startBuild])
-
   // Keep the lobby listed while the host is up; the relay drops entries it has
   // not heard from for two minutes.
   useEffect(() => {
-    if (!hostedLobby || hostedLobby.publish === false) return
+    if (providerOnly || !hostedLobby || hostedLobby.publish === false) return
     const endpoint = cloudSettings.onlineServiceUrl.trim()
     if (!endpoint) return
     let closed = false
@@ -1873,9 +2291,9 @@ export default function App() {
         const status = window.arc?.sessionStatus
           ? await window.arc.sessionStatus().catch(() => null)
           : null
-        // Publish the injector's real population; never invent a player when
-        // the runtime has not reported one yet.
-        const players = Math.max(0, Math.floor(status?.players ?? hostedLobby.players ?? 0))
+        // The host itself is a real player even before the server DLL has
+        // reported its first population sample.
+        const players = Math.max(1, Math.floor(status?.players ?? hostedLobby.players ?? 1))
         if (hostedLobby.players !== players) {
           setHostedLobby((current) =>
             current && current.address === hostedLobby.address && current.port === hostedLobby.port
@@ -1903,7 +2321,7 @@ export default function App() {
       closed = true
       window.clearInterval(timer)
     }
-  }, [cloudSettings.onlineServiceUrl, hostedLobby])
+  }, [cloudSettings.onlineServiceUrl, hostedLobby, providerOnly])
 
   // A router can finish booting or receive UPnP later than the launch. Keep
   // trying the public mapping while the lobby is only visible on the LAN; once
@@ -2298,14 +2716,48 @@ export default function App() {
     })
   }, [native, profilesLoaded, profiles.defaultBuildsRoot, pushToast, scanExistingBuilds])
 
+  const handleOpenFriends = useCallback(() => {
+    if (providerOnly) {
+      pushToast({
+        tone: 'info',
+        title: 'Provider account',
+        description:
+          'Friends and the VAULTED relay are VAULTED-account features. Your provider identity still has global play.',
+      })
+      return
+    }
+    setView((current) => (current === 'friends' ? 'home' : 'friends'))
+  }, [providerOnly, pushToast])
+
   const handleLogout = useCallback(async () => {
     if (!session) return
-    await signOut(session.token)
+    const providerIds = new Set(
+      providerCatalog
+        .filter(
+          (provider) =>
+            provider.auth === 'oauth' &&
+            (providerAuthStatus[provider.id]?.signedIn || provider.id === session.user.providerId),
+        )
+        .map((provider) => provider.id),
+    )
+    const logout = window.arc?.providerAuth?.logout
+    if (logout) {
+      await Promise.all([...providerIds].map((providerId) => logout(providerId).catch(() => undefined)))
+    }
+    if (providerOnly) clearNetworkSession()
+    else await signOut(session.token)
     setSession(null)
     setDrawerOpen(false)
     setDialogOpen(false)
     setView('home')
-  }, [session])
+    if (providerIds.size > 0) void refreshProviderAuthStatus()
+  }, [
+    providerAuthStatus,
+    providerCatalog,
+    providerOnly,
+    refreshProviderAuthStatus,
+    session,
+  ])
 
   const checkForUpdates = useCallback(async () => {
     if (!window.arc?.checkUpdates) return
@@ -2372,7 +2824,7 @@ export default function App() {
   const canRemoveActive = Boolean(activeBuild && installed[activeBuild.id])
 
   useEffect(() => {
-    if (!session) return
+    if (!session || providerOnly) return
     let cancelled = false
     const refresh = () => {
       fetchFriends()
@@ -2392,9 +2844,19 @@ export default function App() {
   if (!session) {
     return (
       <AuthScreen
+        providers={providerCatalog}
         onAuthenticated={(next) => {
           saveSession(next)
           setSession(next)
+          if (next.user.providerId) {
+            void refreshProviderAuthStatus()
+            pushToast({
+              tone: 'success',
+              title: `Signed in to ${next.user.providerLabel || 'your live account'}`,
+              description:
+                'Your VAULTED profile and global matchmaking are linked. Choose a season and press Play when you are ready.',
+            })
+          }
         }}
       />
     )
@@ -2429,6 +2891,7 @@ export default function App() {
           native={native}
           onlineStatus={onlineStatus}
           communityOnline={onlineSeasonCount}
+          providerOnly={providerOnly}
           settingsActive={view === 'settings'}
           shopActive={view === 'shop'}
           friendsActive={view === 'friends'}
@@ -2436,7 +2899,7 @@ export default function App() {
           onOpenLibrary={() => setDrawerOpen(true)}
           onOpenSettings={() => setView((current) => (current === 'settings' ? 'home' : 'settings'))}
           onOpenShop={() => setView((current) => (current === 'shop' ? 'home' : 'shop'))}
-          onOpenFriends={() => setView((current) => (current === 'friends' ? 'home' : 'friends'))}
+          onOpenFriends={handleOpenFriends}
         />
 
         <main className="mt-5 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 sm:mt-6">
@@ -2481,6 +2944,24 @@ export default function App() {
               onDownloadUpdate={() => void downloadUpdate()}
               onRestartToUpdate={() => void window.arc?.installUpdate?.()}
             />
+          ) : view === 'friends' && providerOnly ? (
+            <section className="m-auto w-full max-w-xl rounded-3xl border border-amber-400/20 bg-ink/80 p-8 text-center shadow-2xl shadow-black/40">
+              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-amber-300">Provider-only account</p>
+              <h2 className="mt-3 font-display text-2xl font-semibold tracking-tight text-white">
+                Friends and relay stay gated.
+              </h2>
+              <p className="mx-auto mt-3 max-w-md text-[12.5px] leading-relaxed text-fog">
+                Your provider identity is signed in and global play is ready. Friends and the VAULTED relay need a
+                VAULTED account; VAULTED will not ask for a separate username or password here.
+              </p>
+              <button
+                type="button"
+                onClick={() => setView('home')}
+                className="mt-6 rounded-xl border border-line bg-white/[0.04] px-4 py-2.5 text-[12px] font-semibold text-mist transition-colors hover:bg-white/[0.08]"
+              >
+                Back to seasons
+              </button>
+            </section>
           ) : view === 'friends' ? (
             <FriendsView
               username={account.username}
@@ -2516,8 +2997,29 @@ export default function App() {
                 download={activeBuild ? downloads[activeBuild.id] ?? null : null}
                 playMode={activePlayMode}
                 serverOptions={activeServerRoute?.options ?? []}
+                exactServerOptions={activeServerRoute?.exactOptions ?? []}
+                fallbackServerOptions={activeServerRoute?.fallbackOptions ?? []}
                 autoServer={activeServerRoute?.exactServer ?? null}
-                fallbackServer={activeServerRoute?.fallbackServer ?? null}
+                fallbackServer={autoGlobalBackend ? null : activeServerRoute?.fallbackServer ?? null}
+                globalBackends={activeGlobalBackends}
+                autoGlobalBackend={autoGlobalBackend}
+                selectedGlobalBackend={selectedGlobalBackend}
+                providerSignedIn={
+                  Boolean(
+                    (selectedGlobalBackend &&
+                      (selectedGlobalBackend.auth === 'none' ||
+                        providerCodes[selectedGlobalBackend.id] ||
+                        providerAuthStatus[selectedGlobalBackend.id]?.signedIn ||
+                        (selectedGlobalBackend.auth === 'oauth' &&
+                          session.user.providerId === selectedGlobalBackend.id))) ||
+                      (autoGlobalBackend &&
+                        (autoGlobalBackend.auth === 'none' ||
+                          providerCodes[autoGlobalBackend.id] ||
+                          providerAuthStatus[autoGlobalBackend.id]?.signedIn ||
+                          (autoGlobalBackend.auth === 'oauth' &&
+                            session.user.providerId === autoGlobalBackend.id))),
+                  )
+                }
                 selectedServer={activeServerSelection}
                 onSelectServer={(address) => {
                   if (!activeBuild) return
@@ -2528,6 +3030,8 @@ export default function App() {
                     return next
                   })
                 }}
+                onAddManualServer={handleAddManualServer}
+                onProviderSignIn={handleOpenProviderSignIn}
                 account={account}
                 sourceKeys={sourceKeys}
                 downloadSize={activeDownloadSize}
@@ -2608,14 +3112,13 @@ export default function App() {
 
       <AddBuildDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onAdd={handleAdd} />
 
-      {serverFallback && (
-        <ServerFallbackDialog
-          selectedBuild={serverFallback.build}
-          choice={serverFallback.choice}
-          onJoinAlternative={handleJoinFallbackSeason}
-          onClose={() => setServerFallback(null)}
-        />
-      )}
+      <ProviderSignInDialog
+        provider={providerAuthPrompt?.provider ?? null}
+        seasonLabel={providerAuthPrompt?.build.season.label ?? activeBuild?.season.label ?? ''}
+        onClose={() => setProviderAuthPrompt(null)}
+        onSubmit={handleProviderCodeSubmit}
+        onAuthenticated={handleProviderOAuthAuthenticated}
+      />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />
     </div>

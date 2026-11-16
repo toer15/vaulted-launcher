@@ -438,7 +438,31 @@ async function main() {
   assert.equal(seasonFromVersion('7.20'), 'ch1-s7')
   assert.equal(seasonFromVersion('14.40'), 'ch2-s4')
   assert.equal(seasonFromVersion('17.50'), 'ch2-s7')
-  assert.equal(seasonFromVersion('25.00'), 'ch4-s1')
+  assert.equal(seasonFromVersion('18.00'), 'ch2-s8')
+  assert.equal(seasonFromVersion('19.01'), 'ch3-s1')
+  assert.equal(seasonFromVersion('25.00'), 'ch4-s3')
+  assert.equal(seasonFromVersion('27.00'), 'ch4-s5')
+  assert.equal(seasonFromVersion('31.40'), 'ch5-s4')
+  assert.equal(seasonFromVersion('32.00'), 'ch5-remix')
+  assert.equal(seasonFromVersion('33.20'), 'ch6-s1')
+  assert.equal(seasonFromVersion('35.30'), 'ch6-mini1')
+  assert.equal(seasonFromVersion('36.00'), 'ch6-s3')
+  assert.equal(seasonFromVersion('38.00'), 'ch6-mini2')
+  assert.equal(seasonFromVersion('39.00'), 'ch7-s1')
+  assert.equal(seasonFromVersion('43.00'), 'ch7-mini1')
+  assert.equal(seasonFromVersion('++Fortnite+Release-14.60-CL-14184942'), 'ch2-s4')
+  assert.equal(seasonFromVersion('++Fortnite+Release-25.30-CL-00000000'), 'ch4-s3')
+  assert.equal(seasonFromVersion('++Fortnite+Release-43.00-CL-00000000'), 'ch7-mini1')
+  assert.equal(seasonFromVersion('++Fortnite+Release-...'), null)
+
+  const catalogue = require('../src/assets/builds.json').seasons
+  for (const [seasonId, source] of Object.entries(catalogue)) {
+    assert.equal(
+      seasonFromVersion(source.buildVersion),
+      seasonId,
+      `${seasonId} build ${source.buildVersion} should map back to itself`,
+    )
+  }
 
   testLobbyAndPlayerFields()
   testStatusOnlyFields()

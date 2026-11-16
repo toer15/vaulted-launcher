@@ -72,7 +72,11 @@ export function BuildList({
         const sourceKey = artKeyFor(build.season)
         const playMode = playModes[build.id] ?? DEFAULT_PLAY_MODE
         const onlineProviderLabel =
-          playMode.providerLabel || build.onlineProvider?.label || build.onlineProvider?.name || build.providerLabel
+          playMode.globalProviderLabel ||
+          playMode.providerLabel ||
+          build.onlineProvider?.label ||
+          build.onlineProvider?.name ||
+          build.providerLabel
         const communityPlayers = playMode.communityPlayerCount ?? 0
         const communityProviderLabel = playMode.communityProviderLabel
         const directoryProviders = playMode.directoryProviders ?? []
@@ -92,7 +96,10 @@ export function BuildList({
         // presence heartbeat and no synthetic player placeholder.
         const onlinePlayers = onlinePlayerCount(playMode)
         const onlineServers = seasonServerCount(playMode)
-        const onlineStatus = onlineStatusLabel(onlinePlayers, onlineServers)
+        const onlineStatus =
+          playMode.globalOnline && onlinePlayers === 0 && onlineServers === 0
+            ? `GLOBAL ONLINE${playMode.globalProviderLabel ? ` · ${playMode.globalProviderLabel}` : ''}`
+            : onlineStatusLabel(onlinePlayers, onlineServers)
         const chapterChanged = index === 0 || builds[index - 1].season.chapter !== build.season.chapter
         const hasSource = Boolean(sourceKey && sourceKeys?.has(sourceKey))
         const sizeLabel = sourceKey && sourceSizes?.[sourceKey] ? formatDownloadSize(sourceSizes[sourceKey]) : null

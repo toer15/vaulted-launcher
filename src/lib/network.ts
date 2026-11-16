@@ -21,11 +21,18 @@ const REQUEST_TIMEOUT = 10_000
 export interface RiftUser {
   id: string
   username: string
+  /** provider profile fields, carried by a native provider session */
+  avatarUrl?: string
+  providerId?: string
+  providerLabel?: string
 }
 
 export interface RiftSession {
+  /** empty for a provider-backed session; never a fabricated VAULTED token */
   token: string
   user: RiftUser
+  /** true when the provider identity is the whole account (no VAULTED relay token) */
+  providerOnly?: boolean
 }
 
 export type ApiError = Error & { status?: number }
@@ -80,7 +87,14 @@ function parseSession(raw: string | null): RiftSession | null {
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as RiftSession
-    if (!parsed?.token || !parsed?.user?.username) return null
+    if (!parsed?.user?.username) return null
+    // Migrate sessions written by older provider builds; they used a
+    // provider-prefixed placeholder token that looked like a VAULTED token.
+    if (parsed.token?.startsWith('provider:') && parsed.user.providerId) {
+      parsed.providerOnly = true
+      parsed.token = ''
+    }
+    if (!parsed.token && !parsed.providerOnly) return null
     return parsed
   } catch {
     return null

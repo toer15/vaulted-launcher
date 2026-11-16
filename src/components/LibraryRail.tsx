@@ -44,7 +44,11 @@ export function LibraryRail({
     [builds, installed],
   )
   const activeBuilds = useMemo(
-    () => builds.filter((build) => onlinePlayerCount(playModes[build.id]) > 0),
+    () =>
+      builds.filter(
+        (build) =>
+          onlinePlayerCount(playModes[build.id]) > 0 || playModes[build.id]?.globalOnline === true,
+      ),
     [builds, playModes],
   )
   const visibleBuilds =
@@ -156,8 +160,8 @@ export function LibraryRail({
             <Radio className="mx-auto h-5 w-5 text-emerald-300/80" />
             <p className="mt-3 text-[13px] font-medium text-mist">No active players right now</p>
             <p className="mt-1 text-[12px] leading-relaxed text-fog">
-              Every season still supports online play. Switch back to all seasons to pick one and join a live
-              external server.
+              No VAULTED relay lobby or global backend is reporting players. Switch back to all seasons and
+              press Play to start and publish one.
             </p>
             <button
               type="button"
@@ -189,8 +193,8 @@ export function LibraryRail({
           <HardDrive className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             Every chapter and season. <span className="text-emerald-300">Installed</span> = on this PC and ready to
-            play. <span className="text-emerald-300">ONLINE READY</span> = no real players are on live external
-            servers for that season right now.
+            play. <span className="text-emerald-300">ONLINE READY</span> = no live relay lobby, global
+            backend, or external server is reporting players for that season right now.
           </span>
         </p>
       </footer>
