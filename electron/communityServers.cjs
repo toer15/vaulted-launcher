@@ -936,7 +936,9 @@ function communityPlayerCount(server) {
   if (typeof server?.players === 'number' && Number.isFinite(server.players) && server.players > 0) {
     return Math.floor(server.players)
   }
-  return server?.playersKnown === false ? 0 : 1
+  // A directory row without a real count contributes nothing. The old
+  // host placeholder made an empty server look like one live player.
+  return 0
 }
 
 function updatedAtMs(value) {

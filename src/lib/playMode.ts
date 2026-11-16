@@ -8,8 +8,11 @@ export type PlayModeLabel = 'ONLINE READY' | 'ONLINE PLAY'
 export interface SeasonPlayMode {
   online: boolean
   label: PlayModeLabel
+  /** joinable live servers included in playerCount */
   lobbyCount: number
   playerCount: number
+  /** status-only provider servers included in communityPlayerCount */
+  communityServerCount?: number
   /** community provider pre-mapped in builds.json, e.g. EZFN */
   providerLabel?: string
   /** players reported by an external directory that has no joinable address */
@@ -28,20 +31,36 @@ export const DEFAULT_PLAY_MODE: SeasonPlayMode = {
 }
 
 /**
- * Use the largest known live community count. A relay lobby, a provider status
- * feed, and VAULTED presence can all observe the same players, so adding them
- * would double-count. Extra presence is passed in by the hero or card.
+ * The real-time total for one season: every joinable live server plus every
+ * status-only provider server. Both sources describe different servers, so
+ * they are summed. Launcher presence heartbeats are deliberately excluded:
+ * the badge reports players on live servers, never this PC or a fallback 1.
  */
-export function onlinePlayerCount(
-  mode: SeasonPlayMode | null | undefined,
-  activePlayers = 0,
-): number {
-  const active = Number.isFinite(activePlayers) ? Math.max(0, Math.floor(activePlayers)) : 0
-  return Math.max(0, mode?.playerCount ?? 0, mode?.communityPlayerCount ?? 0, active)
+export function onlinePlayerCount(mode: SeasonPlayMode | null | undefined): number {
+  const joinable = typeof mode?.playerCount === 'number' && Number.isFinite(mode.playerCount) ? mode.playerCount : 0
+  const statusOnly =
+    typeof mode?.communityPlayerCount === 'number' && Number.isFinite(mode.communityPlayerCount)
+      ? mode.communityPlayerCount
+      : 0
+  return Math.max(0, Math.floor(joinable + statusOnly))
 }
 
-export function onlineStatusLabel(players: number): string {
-  return players > 0 ? `ONLINE · ${players} playing` : 'ONLINE READY'
+/** Total live external servers counted in the same season total. */
+export function seasonServerCount(mode: SeasonPlayMode | null | undefined): number {
+  const joinable = typeof mode?.lobbyCount === 'number' && Number.isFinite(mode.lobbyCount) ? mode.lobbyCount : 0
+  const statusOnly =
+    typeof mode?.communityServerCount === 'number' && Number.isFinite(mode.communityServerCount)
+      ? mode.communityServerCount
+      : 0
+  return Math.max(0, Math.floor(joinable + statusOnly))
+}
+
+export function onlineStatusLabel(players: number, servers = 0): string {
+  if (players <= 0) return 'ONLINE READY'
+  const total = Math.max(0, Math.floor(players))
+  const serverText =
+    servers > 0 ? ` · ${servers} server${servers === 1 ? '' : 's'}` : ''
+  return `ONLINE · ${total} playing${serverText}`
 }
 
 export interface HostedLobbyInfo {
@@ -151,9 +170,9 @@ export interface ExternalServerRoute {
 /**
  * The external-only router. It never returns a local address, so Play can only
  * ever connect to a server run by a community provider:
- *   1. highest-population live server on the season's assigned provider that
- *      reports this exact build/sub-patch;
- *   2. otherwise the highest-population live server on that same provider;
+ *   1. highest-population live server reporting this exact season on the
+ *      assigned provider, then on any provider;
+ *   2. otherwise the highest-population live server on the assigned provider;
  *   3. otherwise the highest-population live external server anywhere.
  */
 export function routeExternalServer(
@@ -169,28 +188,20 @@ export function routeExternalServer(
     : []
   const exactAnywhere = seasonKey ? live.filter((server) => server.seasonId === seasonKey) : []
 
-  // Keep exact sub-patch rows at the top of the dropdown so friends can pick
-  // the one server that guarantees they land in the same match.
-  const options: CommunityServer[] = []
-  const seen = new Set<string>()
-  for (const server of [...exactProvider, ...providerServers]) {
-    const key = server.address.toLowerCase()
-    if (seen.has(key)) continue
-    seen.add(key)
-    options.push(server)
-  }
-  if (options.length === 0) {
-    for (const server of [...exactAnywhere, ...live]) {
-      const key = server.address.toLowerCase()
-      if (seen.has(key)) continue
-      seen.add(key)
-      options.push(server)
-    }
-  }
+  // The dropdown lists every live server that belongs to the selected season
+  // (across providers), so its rows add up to the season total on the card.
+  // Only when the season has no live servers do we expose fallback rows that
+  // keep Play usable on the assigned provider.
+  const options =
+    exactAnywhere.length > 0
+      ? exactAnywhere
+      : providerServers.length > 0
+        ? providerServers
+        : live
 
-  const server = exactProvider[0] ?? providerServers[0] ?? exactAnywhere[0] ?? live[0] ?? null
+  const server = exactProvider[0] ?? exactAnywhere[0] ?? providerServers[0] ?? live[0] ?? null
   const tier: ExternalServerTier =
-    exactProvider.length > 0
+    exactProvider.length > 0 || exactAnywhere.length > 0
       ? 'exact'
       : providerServers.length > 0
         ? 'provider'
@@ -285,12 +296,15 @@ export function findActiveServerChoice(
 }
 
 function addLobby(mode: SeasonPlayMode, players: number): SeasonPlayMode {
+  const livePlayers = Math.max(0, Math.floor(players))
   return {
     ...mode,
     online: true,
     label: 'ONLINE PLAY',
-    lobbyCount: mode.lobbyCount + 1,
-    playerCount: mode.playerCount + Math.max(0, players),
+    // Empty listed lobbies do not inflate the server count; the badge only
+    // reports servers that currently contribute real players.
+    lobbyCount: mode.lobbyCount + (livePlayers > 0 ? 1 : 0),
+    playerCount: mode.playerCount + livePlayers,
   }
 }
 
@@ -384,7 +398,7 @@ export function playModesForBuilds(
         seen.add(key)
         modes[build.id] = addLobby(
           modes[build.id] ?? DEFAULT_PLAY_MODE,
-          Math.max(1, Math.floor(hostedLobby.players ?? 1)),
+          Math.max(0, Math.floor(hostedLobby.players ?? 0)),
         )
       }
     }
@@ -397,8 +411,11 @@ export function playModesForBuilds(
     const seasonKey = artKeyFor(build.season)
     if (!seasonKey) continue
 
-    const statuses = communityStatuses.filter((status) => status.seasonId === seasonKey && status.players)
+    const statuses = communityStatuses.filter(
+      (status) => status.seasonId === seasonKey && (status.players ?? 0) > 0,
+    )
     const statusPlayers = statuses.reduce((total, status) => total + (status.players ?? 0), 0)
+    const statusServers = statuses.reduce((total, status) => total + Math.max(0, status.servers ?? 0), 0)
     const statusLabels = [...new Set(statuses.map((status) => status.providerLabel))]
     const directoryLabels = [
       ...new Set(
@@ -414,6 +431,7 @@ export function playModesForBuilds(
         ...(statusPlayers > 0
           ? {
               communityPlayerCount: statusPlayers,
+              communityServerCount: statusServers,
               communityProviderLabel: statusLabels.join(' / '),
             }
           : {}),

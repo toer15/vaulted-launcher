@@ -3,7 +3,13 @@ import { Check, FolderOpen, FolderPlus, HardDrive, Trash2 } from 'lucide-react'
 import { artKeyFor, seasonImageFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { formatDownloadSize } from '../lib/downloadSize'
-import { DEFAULT_PLAY_MODE, onlinePlayerCount, onlineStatusLabel, type SeasonPlayMode } from '../lib/playMode'
+import {
+  DEFAULT_PLAY_MODE,
+  onlinePlayerCount,
+  onlineStatusLabel,
+  seasonServerCount,
+  type SeasonPlayMode,
+} from '../lib/playMode'
 import type { Build } from '../types'
 
 interface BuildListProps {
@@ -35,8 +41,6 @@ export function BuildList({
   sourceKeys,
   sourceSizes,
   diskSizes,
-  activeCounts,
-  activeKey,
   playModes,
   onSelect,
   onAdd,
@@ -84,12 +88,11 @@ export function BuildList({
           directoryProviders.length > 0
             ? `${directoryProviders.slice(0, 2).join(', ')}${directoryProviders.length > 2 ? ` +${directoryProviders.length - 2}` : ''}`
             : ''
-        const playingCount = Math.max(
-          0,
-          (sourceKey ? activeCounts?.[sourceKey] ?? 0 : 0) - (activeKey && activeKey === sourceKey ? 1 : 0),
-        )
-        const onlinePlayers = onlinePlayerCount(playMode, playingCount)
-        const onlineStatus = onlineStatusLabel(onlinePlayers)
+        // Real-time total across every live server for this season; no local
+        // presence heartbeat and no synthetic player placeholder.
+        const onlinePlayers = onlinePlayerCount(playMode)
+        const onlineServers = seasonServerCount(playMode)
+        const onlineStatus = onlineStatusLabel(onlinePlayers, onlineServers)
         const chapterChanged = index === 0 || builds[index - 1].season.chapter !== build.season.chapter
         const hasSource = Boolean(sourceKey && sourceKeys?.has(sourceKey))
         const sizeLabel = sourceKey && sourceSizes?.[sourceKey] ? formatDownloadSize(sourceSizes[sourceKey]) : null

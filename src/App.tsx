@@ -509,9 +509,10 @@ export default function App() {
   )
   const activePlayMode = activeBuild ? playModes[activeBuild.id] : undefined
 
-  // The hero dropdown and Play read the same external-only route. Exact
-  // sub-patch servers rank first, then the assigned provider, then any live
-  // external provider; a local address is never part of this result.
+  // The hero dropdown and Play read the same external-only route. Exact-season
+  // servers rank first (assigned provider, then any provider), then the
+  // assigned provider, then any live external provider. A local address is
+  // never part of this result.
   const activeServerRoute = useMemo(
     () => (activeBuild ? routeExternalServer(activeBuild, communityServers) : null),
     [activeBuild, communityServers],
@@ -675,13 +676,15 @@ export default function App() {
     let cancelled = false
     let timer = 0
     const poll = async () => {
-      const directory = await fetchCommunityDirectory({ token: onlineToken })
+      // Refresh every 15 seconds and bypass the failure cooldown so the counts
+      // on every card are the directories' current populations, not a cache.
+      const directory = await fetchCommunityDirectory({ token: onlineToken, force: true })
       if (!cancelled) {
         setCommunityServers(directory.servers)
         setCommunityStatuses(directory.statuses)
         setCommunityDirectories(directory.directories)
       }
-      if (!cancelled) timer = window.setTimeout(() => void poll(), 20_000)
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 15_000)
     }
     void poll()
     return () => {
@@ -1843,7 +1846,9 @@ export default function App() {
         const status = window.arc?.sessionStatus
           ? await window.arc.sessionStatus().catch(() => null)
           : null
-        const players = Math.max(1, Math.floor(status?.players ?? hostedLobby.players ?? 1))
+        // Publish the injector's real population; never invent a player when
+        // the runtime has not reported one yet.
+        const players = Math.max(0, Math.floor(status?.players ?? hostedLobby.players ?? 0))
         if (hostedLobby.players !== players) {
           setHostedLobby((current) =>
             current && current.address === hostedLobby.address && current.port === hostedLobby.port
@@ -2482,7 +2487,6 @@ export default function App() {
                 build={activeBuild}
                 state={activeState}
                 download={activeBuild ? downloads[activeBuild.id] ?? null : null}
-                activeNow={activeKey ? Math.max(0, (activeCounts[activeKey] ?? 0) - 1) : null}
                 playMode={activePlayMode}
                 serverOptions={activeServerRoute?.options ?? []}
                 autoServer={activeServerRoute?.server ?? null}

@@ -24,7 +24,12 @@ import { artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { formatDownloadSize, formatSpeed } from '../lib/downloadSize'
 import { lobbyPlayers } from '../lib/friends'
-import { onlinePlayerCount, onlineStatusLabel, type SeasonPlayMode } from '../lib/playMode'
+import {
+  onlinePlayerCount,
+  onlineStatusLabel,
+  seasonServerCount,
+  type SeasonPlayMode,
+} from '../lib/playMode'
 import type { CommunityServer } from '../lib/network'
 import type { Account, Build, BuildState, BuildVerifyReport, DownloadState } from '../types'
 
@@ -32,8 +37,6 @@ interface ActiveBuildCardProps {
   build: Build | null
   state: BuildState
   download: DownloadState | null
-  /** players with this season open right now (null while unknown) */
-  activeNow?: number | null
   /** shared live online state for this season */
   playMode?: SeasonPlayMode
   /** live external servers for this season's provider, best first */
@@ -112,7 +115,6 @@ export function ActiveBuildCard({
   build,
   state,
   download,
-  activeNow,
   playMode,
   serverOptions,
   autoServer,
@@ -190,10 +192,11 @@ export function ActiveBuildCard({
     build.onlineProvider?.label ||
     build.onlineProvider?.name ||
     build.providerLabel
-  const onlinePlayers = onlinePlayerCount(playMode, activeNow ?? 0)
-  const onlineStatus = onlineStatusLabel(onlinePlayers)
+  const onlinePlayers = onlinePlayerCount(playMode)
+  const onlineServers = seasonServerCount(playMode)
+  const onlineStatus = onlineStatusLabel(onlinePlayers, onlineServers)
   const lobbyCount = playMode?.lobbyCount ?? (hostedLobby?.public ? 1 : 0)
-  const playerCount = playMode?.playerCount ?? (hostedLobby?.public ? Math.max(1, hostedLobby.players ?? 1) : 0)
+  const playerCount = playMode?.playerCount ?? (hostedLobby?.public ? Math.max(0, hostedLobby.players ?? 0) : 0)
   const communityPlayers = playMode?.communityPlayerCount ?? 0
   const communityProviderLabel = playMode?.communityProviderLabel
   const directoryProviders = playMode?.directoryProviders ?? []
@@ -304,9 +307,9 @@ export function ActiveBuildCard({
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
     ready: onlineProviderLabel
-      ? autoServer
-        ? `Ready — Auto routes Play to ${autoServer.name} · ${serverPlayerLabel(autoServer)}.`
-        : 'Ready — no live external server is listed yet; Play scans every directory again before launching.'
+      ? onlineServers > 0
+        ? `Ready — ${onlineServers} live external ${onlineServers === 1 ? 'server' : 'servers'} · ${onlinePlayers} player${onlinePlayers === 1 ? '' : 's'} online.${autoServer ? ` Auto joins ${autoServer.name}.` : ''}`
+        : 'Ready — no real players are on live external servers for this season right now.'
       : lobbyCount > 0
         ? `Ready — ${lobbyCount} reachable VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} online${playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}. Play joins one automatically.`
         : onlinePlayers > 0
@@ -429,7 +432,8 @@ export function ActiveBuildCard({
                 </label>
                 <span className="inline-flex items-center gap-1.5 text-[10px] font-medium text-emerald-300/90">
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
-                  {serverOptions?.length ?? 0} live external {(serverOptions?.length ?? 0) === 1 ? 'server' : 'servers'}
+                  {onlineServers} {onlineServers === 1 ? 'server' : 'servers'} · {onlinePlayers}{' '}
+                  {onlinePlayers === 1 ? 'player' : 'players'}
                 </span>
               </div>
               <div className="relative mt-1.5">
@@ -485,11 +489,11 @@ export function ActiveBuildCard({
                 {hostedLobby.public ? 'Your lobby is public' : 'Your lobby is WiFi-only'} ·{' '}
                 {hostedLobby.address}:{hostedLobby.port}
               </span>
-            ) : lobbyCount > 0 ? (
+            ) : onlineServers > 0 ? (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-2.5 py-1 text-[10.5px] font-semibold text-emerald-100">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
-                {lobbyCount} public {lobbyCount === 1 ? 'lobby' : 'lobbies'} online
-                {playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}
+                {onlineServers} live external {onlineServers === 1 ? 'server' : 'servers'} online
+                {onlinePlayers > 0 ? ` · ${onlinePlayers} player${onlinePlayers === 1 ? '' : 's'}` : ''}
               </span>
             ) : null}
           </div>

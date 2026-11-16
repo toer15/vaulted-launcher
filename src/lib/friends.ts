@@ -58,10 +58,16 @@ export type HostingFriend = LobbyInfo
 
 export const LOBBY_FRESH_MS = 30_000
 
-/** A relay lobby represents at least its host; external directories may not report a count. */
+/**
+ * Only a real directory player count counts. A row that omits the field adds
+ * zero instead of a synthetic host placeholder, so an empty season can never
+ * read as "1 playing" and Active Players Now only lists real populations.
+ */
 export function lobbyPlayers(lobby: LobbyInfo): number {
-  if (typeof lobby.players === 'number' && lobby.players > 0) return Math.floor(lobby.players)
-  return lobby.playersKnown === false ? 0 : 1
+  if (typeof lobby.players === 'number' && Number.isFinite(lobby.players) && lobby.players > 0) {
+    return Math.floor(lobby.players)
+  }
+  return 0
 }
 
 /** Ignore relay entries whose host stopped heartbeating. */

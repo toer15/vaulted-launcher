@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react'
 import { FolderPlus, HardDrive, Plus, Radio } from 'lucide-react'
 import { BuildList } from './BuildList'
-import { artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { onlinePlayerCount, type SeasonPlayMode } from '../lib/playMode'
 import type { Build } from '../types'
@@ -32,8 +31,6 @@ export function LibraryRail({
   sourceKeys,
   sourceSizes,
   diskSizes,
-  activeCounts,
-  activeKey,
   playModes,
   onSelect,
   onAdd,
@@ -47,14 +44,8 @@ export function LibraryRail({
     [builds, installed],
   )
   const activeBuilds = useMemo(
-    () =>
-      builds.filter((build) => {
-        const seasonKey = artKeyFor(build.season)
-        const localPresence = seasonKey && activeKey === seasonKey ? 1 : 0
-        const activeNow = Math.max(0, (seasonKey ? activeCounts?.[seasonKey] ?? 0 : 0) - localPresence)
-        return onlinePlayerCount(playModes[build.id], activeNow) > 0
-      }),
-    [activeCounts, activeKey, builds, playModes],
+    () => builds.filter((build) => onlinePlayerCount(playModes[build.id]) > 0),
+    [builds, playModes],
   )
   const visibleBuilds =
     filter === 'installed' ? installedBuilds : filter === 'active' ? activeBuilds : builds
@@ -165,7 +156,8 @@ export function LibraryRail({
             <Radio className="mx-auto h-5 w-5 text-emerald-300/80" />
             <p className="mt-3 text-[13px] font-medium text-mist">No active players right now</p>
             <p className="mt-1 text-[12px] leading-relaxed text-fog">
-              Every season still supports online play. Switch back to all seasons to pick one and host a lobby.
+              Every season still supports online play. Switch back to all seasons to pick one and join a live
+              external server.
             </p>
             <button
               type="button"
@@ -183,8 +175,6 @@ export function LibraryRail({
             sourceKeys={sourceKeys}
             sourceSizes={sourceSizes}
             diskSizes={diskSizes}
-            activeCounts={activeCounts}
-            activeKey={activeKey}
             playModes={playModes}
             onSelect={onSelect}
             onAdd={onAdd}
@@ -199,8 +189,8 @@ export function LibraryRail({
           <HardDrive className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             Every chapter and season. <span className="text-emerald-300">Installed</span> = on this PC and ready to
-            play. <span className="text-emerald-300">ONLINE READY</span> = Play joins the healthiest public server
-            through the bundled runtime, or hosts locally if none are up.
+            play. <span className="text-emerald-300">ONLINE READY</span> = no real players are on live external
+            servers for that season right now.
           </span>
         </p>
       </footer>

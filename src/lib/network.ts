@@ -315,6 +315,8 @@ function sanitizeCommunityServer(value: unknown, index: number): CommunityServer
   if (!address) return null
   const seasonId = typeof raw.seasonId === 'string' ? raw.seasonId : typeof raw.buildId === 'string' ? raw.buildId : null
   const players = Number(raw.players)
+  const hasPlayers =
+    raw.players !== undefined && raw.players !== null && Number.isFinite(players) && players >= 0
   const pingMs = Number(raw.pingMs)
   const freshForMs = typeof raw.freshForMs === 'number' ? raw.freshForMs : undefined
   return {
@@ -330,8 +332,9 @@ function sanitizeCommunityServer(value: unknown, index: number): CommunityServer
     public: raw.public !== false,
     updated: typeof raw.updated === 'string' ? raw.updated : new Date().toISOString(),
     freshForMs: typeof freshForMs === 'number' && Number.isFinite(freshForMs) && freshForMs >= 0 ? freshForMs : undefined,
-    players: Number.isFinite(players) && players > 0 ? Math.floor(players) : undefined,
-    playersKnown: typeof raw.playersKnown === 'boolean' ? raw.playersKnown : undefined,
+    players: hasPlayers ? Math.floor(players) : undefined,
+    playersKnown:
+      typeof raw.playersKnown === 'boolean' ? raw.playersKnown : hasPlayers ? true : undefined,
     pingMs: Number.isFinite(pingMs) && pingMs >= 0 ? Math.round(pingMs) : undefined,
     providerId: typeof raw.providerId === 'string' ? raw.providerId : 'community',
     providerLabel: typeof raw.providerLabel === 'string' ? raw.providerLabel : undefined,
