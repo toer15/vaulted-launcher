@@ -27,6 +27,7 @@ import { lobbyPlayers } from '../lib/friends'
 import {
   onlinePlayerCount,
   onlineStatusLabel,
+  seasonLabelForId,
   seasonServerCount,
   type SeasonPlayMode,
 } from '../lib/playMode'
@@ -39,10 +40,12 @@ interface ActiveBuildCardProps {
   download: DownloadState | null
   /** shared live online state for this season */
   playMode?: SeasonPlayMode
-  /** live external servers for this season's provider, best first */
+  /** live external servers for the selected season only, best first */
   serverOptions?: CommunityServer[]
-  /** router's automatic pick, shown as the default `Auto` entry */
+  /** best live server for the selected season, shown as the `Auto` entry */
   autoServer?: CommunityServer | null
+  /** labelled different-season target Play uses only when the season is empty */
+  fallbackServer?: CommunityServer | null
   /** manually selected external server address, null = Auto */
   selectedServer?: string | null
   onSelectServer?: (address: string | null) => void
@@ -118,6 +121,7 @@ export function ActiveBuildCard({
   playMode,
   serverOptions,
   autoServer,
+  fallbackServer,
   selectedServer,
   onSelectServer,
   account,
@@ -309,7 +313,9 @@ export function ActiveBuildCard({
     ready: onlineProviderLabel
       ? onlineServers > 0
         ? `Ready — ${onlineServers} live external ${onlineServers === 1 ? 'server' : 'servers'} · ${onlinePlayers} player${onlinePlayers === 1 ? '' : 's'} online.${autoServer ? ` Auto joins ${autoServer.name}.` : ''}`
-        : 'Ready — no real players are on live external servers for this season right now.'
+        : fallbackServer
+          ? `Ready — no live ${build.season.label} server. Play falls back to ${fallbackServer.name} (${seasonLabelForId(fallbackServer.seasonId)}).`
+          : 'Ready — no real players are on live external servers for this season right now.'
       : lobbyCount > 0
         ? `Ready — ${lobbyCount} reachable VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} online${playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}. Play joins one automatically.`
         : onlinePlayers > 0
@@ -447,7 +453,7 @@ export function ActiveBuildCard({
                   <option value="" className="bg-ink text-mist">
                     {autoServer
                       ? `Auto: Best Live Server (${autoServer.name} · ${serverPlayerLabel(autoServer)})`
-                      : 'Auto: Best Live Server (none online)'}
+                      : 'Auto: Best Live Server (no servers for this season)'}
                   </option>
                   {(serverOptions ?? []).map((server) => (
                     <option
@@ -464,8 +470,22 @@ export function ActiveBuildCard({
               <p className="mt-1.5 text-[10px] leading-relaxed text-fog/75">
                 {autoServer
                   ? `Play joins ${autoServer.address} with Auto. Friends can pick the same server to land in the same match.`
-                  : 'No live external server is listed right now — Play will scan every directory again before launching.'}
+                  : fallbackServer
+                    ? `No live ${season.label} server is listed — Play uses the fallback target below.`
+                    : 'No live external server for this season right now — Play will scan every directory again before launching.'}
               </p>
+              {!selectedServer && fallbackServer && (
+                <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.07] px-2.5 py-2 text-[10px] leading-relaxed text-amber-100/90">
+                  <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" />
+                  <span>
+                    <span className="font-semibold uppercase tracking-[0.08em]">Fallback Play target</span>
+                    {' · '}
+                    {fallbackServer.name} ({seasonLabelForId(fallbackServer.seasonId)}) ·{' '}
+                    {serverPlayerLabel(fallbackServer)}
+                    {' — '}no live {season.label} server.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 

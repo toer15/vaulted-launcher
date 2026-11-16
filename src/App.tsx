@@ -17,6 +17,7 @@ import {
   mergeLobbies,
   playModesForBuilds,
   routeExternalServer,
+  seasonLabelForId,
   type ActiveServerChoice,
 } from './lib/playMode'
 import {
@@ -1449,7 +1450,14 @@ export default function App() {
     async (
       build: Build,
       provider: OnlineProviderConfig,
-      server?: { host: string; port: number },
+      server?: {
+        host: string
+        port: number
+        name?: string
+        seasonId?: string | null
+        /** true when this target belongs to a different season */
+        fallback?: boolean
+      },
     ): Promise<boolean> => {
       if (!window.arc?.launchOnlineProvider) {
         pushToast({
@@ -1465,7 +1473,9 @@ export default function App() {
       setPhase('launching')
       setLaunchStage(
         server
-          ? `Joining a ${providerLabel} public server…`
+          ? server.fallback
+            ? `No live ${build.season.label} server — joining ${server.name || server.host}…`
+            : `Joining a ${providerLabel} public server…`
           : `Starting ${build.season.label} in ${providerLabel}…`,
       )
       try {
@@ -1480,9 +1490,15 @@ export default function App() {
           shop.sets.recordLaunch(build.id)
           pushToast({
             tone: 'success',
-            title: server ? `Joining a ${providerLabel} server` : `${providerLabel} is starting`,
+            title: server
+              ? server.fallback
+                ? 'Joining a fallback server'
+                : `Joining a ${providerLabel} server`
+              : `${providerLabel} is starting`,
             description: server
-              ? `${build.season.label} · your client is pointed at ${server.host}:${server.port}`
+              ? server.fallback
+                ? `No live ${build.season.label} server — ${server.name || server.host} is a ${seasonLabelForId(server.seasonId)} server.`
+                : `${build.season.label} · your client is pointed at ${server.host}:${server.port}`
               : `${build.season.label} is starting through the bundled ${providerLabel} runtime.`,
           })
         })
@@ -1573,6 +1589,10 @@ export default function App() {
           : undefined
       const chosen = join ? null : preferred ?? route.server
       const target = join ?? (chosen ? lobbyTarget(chosen.address) : null)
+      const fallbackNote =
+        !join && route.tier !== 'exact' && chosen
+          ? `No live ${build.season.label} server — ${chosen.name} is a ${seasonLabelForId(chosen.seasonId)} server.`
+          : null
 
       if (!target) {
         setLaunchStage(null)
@@ -1601,7 +1621,11 @@ export default function App() {
       // open-source runtime. A failed provider launch is reported to the
       // player; it never falls back to hosting the match on this PC.
       if (build.onlineProvider) {
-        const started = await startOnlineProvider(build, build.onlineProvider, target)
+        const started = await startOnlineProvider(build, build.onlineProvider, {
+          ...target,
+          ...(chosen ? { name: chosen.name, seasonId: chosen.seasonId } : {}),
+          fallback: Boolean(fallbackNote),
+        })
         if (started) return
         setLaunchStage(null)
         setLaunchFailure((current) =>
@@ -1677,8 +1701,11 @@ export default function App() {
           setHostedLobby(null)
           pushToast({
             tone: 'success',
-            title: `Joining ${chosen?.name || target.host}`,
-            description: `${build.season.label} · your client is pointed at ${target.host}:${target.port}.`,
+            title: fallbackNote
+              ? `Joining ${chosen?.name || target.host} (fallback)`
+              : `Joining ${chosen?.name || target.host}`,
+            description:
+              fallbackNote ?? `${build.season.label} · your client is pointed at ${target.host}:${target.port}.`,
           })
         })
         if (!applied) return
@@ -2489,7 +2516,8 @@ export default function App() {
                 download={activeBuild ? downloads[activeBuild.id] ?? null : null}
                 playMode={activePlayMode}
                 serverOptions={activeServerRoute?.options ?? []}
-                autoServer={activeServerRoute?.server ?? null}
+                autoServer={activeServerRoute?.exactServer ?? null}
+                fallbackServer={activeServerRoute?.fallbackServer ?? null}
                 selectedServer={activeServerSelection}
                 onSelectServer={(address) => {
                   if (!activeBuild) return

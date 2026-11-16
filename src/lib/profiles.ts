@@ -59,6 +59,41 @@ function optionalText(value: unknown): string | undefined {
   return valueText || undefined
 }
 
+/** Compare Windows paths without depending on the caller's slash style/case. */
+function normalizeProfilePath(value: string): string {
+  return text(value).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+}
+
+/** True when child is an executable/file inside parent, not a sibling prefix. */
+function pathIsInside(child: string, parent: string): boolean {
+  const childPath = normalizeProfilePath(child)
+  const parentPath = normalizeProfilePath(parent)
+  return Boolean(childPath && parentPath && childPath.startsWith(`${parentPath}\\`))
+}
+
+/**
+ * Relinking or moving a season must not carry an executable path from the old
+ * folder into the new one. A stored path is stale when it points inside the
+ * previous build folder; a deliberate override inside the new folder or
+ * outside any build folder is kept.
+ */
+function executableForInstalledFolder(
+  existing: BuildProfile | undefined,
+  build: Build,
+  folder: string,
+): string | null {
+  const stored = text(existing?.executablePath)
+  if (!stored) return text(build.executable) || null
+
+  const storedInNewFolder = pathIsInside(stored, folder)
+  const storedInOldFolder = Boolean(existing && pathIsInside(stored, existing.buildFolderPath))
+  if (storedInNewFolder || !storedInOldFolder) return stored
+
+  // The old folder no longer owns this season, so its client path cannot be
+  // used. Persist the executable the native linker just verified instead.
+  return text(build.executable) || null
+}
+
 /** Human-readable launcher name derived from an executable path. */
 export function providerLabelFromPath(value: string): string {
   const raw = text(value)
@@ -329,8 +364,10 @@ export function withInstalledBuild(
         seasonId: key,
         buildFolderPath: folder,
         // Persist the exact client the linker verified (some builds only ship a
-        // bootstrapper executable). Existing per-card overrides still win.
-        executablePath: existing?.executablePath ?? (build.executable || null),
+        // bootstrapper executable). A custom override survives when it is still
+        // valid for the new folder; an executable from the previous folder is
+        // replaced instead of leaving a stale path behind.
+        executablePath: executableForInstalledFolder(existing, build, folder),
         providerLabel: existing?.providerLabel ?? '',
         isInstalled: true,
         version: build.version || existing?.version,

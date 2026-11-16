@@ -63,6 +63,13 @@ export function onlineStatusLabel(players: number, servers = 0): string {
   return `ONLINE · ${total} playing${serverText}`
 }
 
+/** Human label for a directory season id, used to describe fallback targets. */
+export function seasonLabelForId(value: string | null | undefined): string {
+  const raw = String(value || '').trim()
+  const match = /^ch(\d{1,2})-s(\d{1,2})$/i.exec(raw)
+  return match ? `Chapter ${Number(match[1])} · Season ${Number(match[2])}` : raw || 'another season'
+}
+
 export interface HostedLobbyInfo {
   address: string
   port: number
@@ -159,11 +166,15 @@ export function isLiveExternalServer(server: CommunityServer): boolean {
 export type ExternalServerTier = 'exact' | 'provider' | 'external' | 'none'
 
 export interface ExternalServerRoute {
-  /** the live external server Play connects to, or null when none is up */
+  /** the live external server Play connects to, including a fallback target */
   server: CommunityServer | null
+  /** the best live server that actually matches the selected season */
+  exactServer: CommunityServer | null
+  /** a different-season provider target used only when the season is empty */
+  fallbackServer: CommunityServer | null
   /** why that server won: exact sub-patch, same provider, or any provider */
   tier: ExternalServerTier
-  /** selectable live external servers, best first */
+  /** selectable servers for the selected season only, best first */
   options: CommunityServer[]
 }
 
@@ -188,27 +199,30 @@ export function routeExternalServer(
     : []
   const exactAnywhere = seasonKey ? live.filter((server) => server.seasonId === seasonKey) : []
 
-  // The dropdown lists every live server that belongs to the selected season
-  // (across providers), so its rows add up to the season total on the card.
-  // Only when the season has no live servers do we expose fallback rows that
-  // keep Play usable on the assigned provider.
-  const options =
-    exactAnywhere.length > 0
-      ? exactAnywhere
-      : providerServers.length > 0
-        ? providerServers
-        : live
+  // The dropdown is season-only. Assigned-provider exact matches stay first,
+  // followed by exact matches on other providers. A provider fallback is never
+  // mixed into this list; it is exposed separately so the card can label it.
+  const options: CommunityServer[] = []
+  const seen = new Set<string>()
+  for (const server of [...exactProvider, ...exactAnywhere]) {
+    const key = server.address.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    options.push(server)
+  }
 
-  const server = exactProvider[0] ?? exactAnywhere[0] ?? providerServers[0] ?? live[0] ?? null
+  const exactServer = exactProvider[0] ?? exactAnywhere[0] ?? null
+  const fallbackServer = exactServer ? null : providerServers[0] ?? live[0] ?? null
+  const server = exactServer ?? fallbackServer
   const tier: ExternalServerTier =
-    exactProvider.length > 0 || exactAnywhere.length > 0
+    exactServer
       ? 'exact'
       : providerServers.length > 0
         ? 'provider'
         : live.length > 0
           ? 'external'
           : 'none'
-  return { server, tier, options }
+  return { server, exactServer, fallbackServer, tier, options }
 }
 
 /**
