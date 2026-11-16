@@ -18,12 +18,23 @@ const os = require('node:os')
 const { execFile } = require('node:child_process')
 
 function lanIp() {
+  const candidates = []
   for (const list of Object.values(os.networkInterfaces())) {
     for (const address of list || []) {
-      if (address.family === 'IPv4' && !address.internal) return address.address
+      if (address.family !== 'IPv4' || address.internal) continue
+      const ip = address.address
+      const score = ip.startsWith('192.168.')
+        ? 3
+        : ip.startsWith('10.')
+          ? 2
+          : /^172\.(1[6-9]|2\d|3[01])\./.test(ip)
+            ? 1
+            : 0
+      candidates.push({ ip, score })
     }
   }
-  return null
+  candidates.sort((a, b) => b.score - a.score)
+  return candidates[0]?.ip || null
 }
 
 function gatewayAddress() {
@@ -100,16 +111,27 @@ function discoverGateway(timeout = 2600) {
   return new Promise((resolve) => {
     const socket = dgram.createSocket('udp4')
     const locations = new Set()
-    const message = Buffer.from(
-      [
-        'M-SEARCH * HTTP/1.1',
-        'HOST: 239.255.255.250:1900',
-        'MAN: "ssdp:discover"',
-        'MX: 2',
-        'ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1',
-        '',
-        '',
-      ].join('\r\n'),
+    // Many routers ignore the IGD:1 target but answer upnp:rootdevice or the
+    // WANIPConnection:2 service. Search all of the common forms.
+    const targets = [
+      'urn:schemas-upnp-org:device:InternetGatewayDevice:1',
+      'upnp:rootdevice',
+      'urn:schemas-upnp-org:service:WANIPConnection:1',
+      'urn:schemas-upnp-org:service:WANIPConnection:2',
+      'urn:schemas-upnp-org:service:WANPPPConnection:1',
+    ]
+    const messages = targets.map((target) =>
+      Buffer.from(
+        [
+          'M-SEARCH * HTTP/1.1',
+          'HOST: 239.255.255.250:1900',
+          'MAN: "ssdp:discover"',
+          'MX: 2',
+          `ST: ${target}`,
+          '',
+          '',
+        ].join('\r\n'),
+      ),
     )
     const finish = () => {
       try {
@@ -130,7 +152,9 @@ function discoverGateway(timeout = 2600) {
       if (location) locations.add(location)
     })
     socket.bind(() => {
-      const send = () => socket.send(message, 0, message.length, 1900, '239.255.255.250', () => {})
+      const send = () => {
+        for (const message of messages) socket.send(message, 0, message.length, 1900, '239.255.255.250', () => {})
+      }
       send()
       setTimeout(send, 700)
     })
@@ -145,7 +169,7 @@ async function findIgd() {
       const services = text.match(/<service>([\s\S]*?)<\/service>/gi) || []
       for (const block of services) {
         const type = tag(block, 'serviceType') || ''
-        if (!/WAN(IP|PPP)Connection:1/i.test(type)) continue
+        if (!/WAN(IP|PPP)Connection:[12]/i.test(type)) continue
         const control = tag(block, 'controlURL')
         if (!control) continue
         return { controlUrl: new URL(control, location).toString(), type }
@@ -190,11 +214,11 @@ async function upnpMap(port, internal) {
   } catch {
     /* most routers still accept the mapping below */
   }
-  if (!external) return null
 
+  let udpMapped = false
   for (const protocol of ['UDP', 'TCP']) {
     try {
-      await call('AddPortMapping', {
+      const result = await call('AddPortMapping', {
         NewRemoteHost: '',
         NewExternalPort: port,
         NewProtocol: protocol,
@@ -204,10 +228,29 @@ async function upnpMap(port, internal) {
         NewPortMappingDescription: 'VAULTED lobby',
         NewLeaseDuration: 0,
       })
+      if (protocol === 'UDP' && result.status >= 200 && result.status < 300 && !/<errorCode>/i.test(result.text)) {
+        udpMapped = true
+      }
     } catch {
       /* a router may only map one protocol; the other attempt is harmless */
     }
   }
+  // The game speaks UDP. A TCP-only mapping would publish an address no player
+  // could actually join, so only treat a UDP mapping as internet-ready.
+  if (!udpMapped) return null
+
+  // Some firmwares reject GetExternalIPAddress although AddPortMapping works.
+  // Ask a small public IP echo only after the mapping has actually succeeded.
+  if (!external) {
+    try {
+      const result = await request('https://api.ipify.org', {}, 3000)
+      const value = String(result.text || '').trim()
+      if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(value)) external = value
+    } catch {
+      /* no public address to publish */
+    }
+  }
+  if (!external) return null
   return { address: external, port, method: 'upnp', internal }
 }
 

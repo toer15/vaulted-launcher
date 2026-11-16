@@ -5,8 +5,9 @@ import {
   CircleCheck,
   Download,
   FolderPlus,
+  FolderSearch,
   Loader2,
-  Wifi,
+  Pause,
   Play,
   ShieldCheck,
   Sparkles,
@@ -18,7 +19,8 @@ import { AccountChip } from './AccountChip'
 import { BuildArt } from './BuildArt'
 import { artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
-import { formatDownloadSize } from '../lib/downloadSize'
+import { formatDownloadSize, formatSpeed } from '../lib/downloadSize'
+import type { SeasonPlayMode } from '../lib/playMode'
 import type { Account, Build, BuildState, BuildVerifyReport, DownloadState } from '../types'
 
 interface ActiveBuildCardProps {
@@ -27,8 +29,8 @@ interface ActiveBuildCardProps {
   download: DownloadState | null
   /** players with this season open right now (null while unknown) */
   activeNow?: number | null
-  /** public VAULTED lobbies currently listed for this season */
-  onlineLobbyCount?: number
+  /** shared live ONLINE PLAY / LOCAL PLAY state for this season */
+  playMode?: SeasonPlayMode
   account: Account
   sourceKeys?: Set<string>
   downloadSize?: number | null
@@ -36,10 +38,17 @@ interface ActiveBuildCardProps {
   canDelete?: boolean
   deleting?: boolean
   launchStage?: string | null
+  /** persistent explanation for a failed launch or unexpected client close */
+  launchError?: string | null
+  /** this PC's currently published lobby, if it is hosting this build */
+  hostedLobby?: { address: string; port: number; public: boolean; label: string } | null
   verify?: { phase: 'running' | 'done'; report?: BuildVerifyReport; error?: string } | null
   onVerify?: () => void
+  /** optional: link a build folder that already exists on this PC */
+  onLocateFolder?: () => void
   onLogout: () => void
   onPrimary: () => void
+  onPauseDownload: () => void
   onCancelDownload: () => void
   onDelete?: () => void
   onChangeBuild: () => void
@@ -61,6 +70,7 @@ function formatEta(seconds: number | null | undefined): string | null {
 const STATE_PILL: Record<BuildState, { label: string; dot: string; text: string }> = {
   missing: { label: 'Not installed', dot: 'bg-amber-400', text: 'text-amber-300' },
   downloading: { label: 'Downloading', dot: 'bg-emerald-400', text: 'text-emerald-300' },
+  paused: { label: 'Paused', dot: 'bg-amber-400', text: 'text-amber-300' },
   ready: { label: 'Ready', dot: 'bg-emerald-400', text: 'text-emerald-300' },
   launching: { label: 'Launching', dot: 'bg-amber-400', text: 'text-amber-300' },
   running: { label: 'Running', dot: 'bg-rose-400', text: 'text-rose-300' },
@@ -72,7 +82,7 @@ export function ActiveBuildCard({
   state,
   download,
   activeNow,
-  onlineLobbyCount = 0,
+  playMode,
   account,
   sourceKeys,
   downloadSize,
@@ -80,10 +90,14 @@ export function ActiveBuildCard({
   canDelete,
   deleting,
   launchStage,
+  launchError,
+  hostedLobby,
   verify,
   onVerify,
+  onLocateFolder,
   onLogout,
   onPrimary,
+  onPauseDownload,
   onCancelDownload,
   onDelete,
   onChangeBuild,
@@ -113,15 +127,25 @@ export function ActiveBuildCard({
   }
 
   const { season } = build
-  const pill = STATE_PILL[state]
   const busy = state === 'launching' || state === 'downloading'
+  const pill = STATE_PILL[state]
+  const isOnlineProvider = Boolean(build.onlineProvider)
+  const showLocateExisting = !busy && state !== 'running' && !isOnlineProvider
   const isInstalled = Boolean(installed?.[build.id])
 
   const hasDownloadSource = Boolean(artKeyFor(season) && sourceKeys?.has(artKeyFor(season)!))
   const etaLabel = download?.phase === 'downloading' ? formatEta(download.etaSeconds) : null
+  const speedLabel = download?.phase === 'downloading' ? formatSpeed(download.speedBytesPerSecond) : null
+  const rateLabel = [speedLabel, etaLabel].filter(Boolean).join(' · ') || null
   const downloadSizeLabel = downloadSize ? formatDownloadSize(downloadSize) : null
   const showDelete = Boolean(canDelete && isInstalled && !busy && state !== 'running' && onDelete)
   const showVerify = Boolean(canDelete && isInstalled && !busy && state !== 'running' && onVerify)
+  // The hero and the sidebar read the same map. The hosted fallback keeps this
+  // card correct if it is rendered in isolation during a transition.
+  const onlinePlay = Boolean(playMode?.online || hostedLobby?.public)
+  const onlineProviderLabel = playMode?.providerLabel
+  const lobbyCount = playMode?.lobbyCount ?? (hostedLobby?.public ? 1 : 0)
+  const playerCount = playMode?.playerCount ?? (hostedLobby?.public ? 1 : 0)
   const verifyReport = verify?.report
   const verifyIssues = verifyReport
     ? [
@@ -130,10 +154,11 @@ export function ActiveBuildCard({
         ['Unreadable', verifyReport.issues.unreadable],
         ['Leftover temp files', verifyReport.issues.temp],
         ['Corrupt PAK data', verifyReport.issues.corrupt],
+        ['Runtime files', verifyReport.issues.runtime],
       ].filter((entry) => (entry[1] as string[]).length > 0)
     : []
 
-  const primary = {
+  const statePrimary = {
     missing: hasDownloadSource
       ? {
           label: `Download ${season.label}${downloadSizeLabel ? ` · ${downloadSizeLabel}` : ''}`,
@@ -147,6 +172,15 @@ export function ActiveBuildCard({
           background: 'linear-gradient(120deg, #64748b, #334155)',
           glow: 'rgba(100,116,139,0.45)',
         },
+    paused: {
+      label:
+        download?.percent != null
+          ? `Continue download · ${download.percent}%`
+          : 'Continue download',
+      icon: Download,
+      background: 'linear-gradient(120deg, #fbbf24, #d97706)',
+      glow: 'rgba(251,191,36,0.5)',
+    },
     downloading: {
       label:
         download?.phase === 'extracting'
@@ -154,8 +188,8 @@ export function ActiveBuildCard({
           : download?.phase === 'verifying'
             ? 'Verifying checksum…'
             : download?.percent != null
-            ? etaLabel
-              ? `Downloading… ${download.percent}% · ${etaLabel}`
+            ? rateLabel
+              ? `Downloading… ${download.percent}% · ${rateLabel}`
               : `Downloading… ${download.percent}%`
             : 'Downloading…',
       icon: Loader2,
@@ -188,6 +222,10 @@ export function ActiveBuildCard({
     },
   }[state]
 
+  const primary = statePrimary
+  const primaryBusy = busy
+  const primaryDisabled = busy || (state === 'missing' && !hasDownloadSource)
+
   const PrimaryIcon = primary.icon
 
   const statusText: Record<BuildState, string> = {
@@ -196,18 +234,27 @@ export function ActiveBuildCard({
         ? `Not on this PC yet — ${downloadSizeLabel} download.`
         : 'Not on this PC yet — download it to play.'
       : 'Not on this PC, and no download source for this season.',
+    paused:
+      download?.percent != null
+        ? `Download paused at ${download.percent}% — continue where it left off.`
+        : 'Download paused — continue where it left off.',
     downloading:
       download?.phase === 'extracting'
         ? 'Unpacking the build…'
         : download?.phase === 'verifying'
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
-    ready:
-      onlineLobbyCount > 0
-        ? `Ready — ${onlineLobbyCount} public lobby${onlineLobbyCount === 1 ? '' : 'ies'} online. Play joins one automatically.`
-        : 'Ready — Play hosts this season automatically when no public lobby is online.',
+    ready: onlineProviderLabel
+      ? `Ready — Play opens ${onlineProviderLabel} for ${season.label}, with no manual client or server setup.`
+      : lobbyCount > 0
+        ? `Ready — ${lobbyCount} reachable VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} online${playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}. Play joins one automatically.`
+        : 'Ready — Play joins a live public lobby when one is available, otherwise starts your own.',
     launching: launchStage ?? 'Fortnite is starting. Have fun.',
-    running: 'Fortnite is running. Have fun.',
+    running: hostedLobby
+      ? hostedLobby.public
+        ? `Fortnite is running — your lobby is public at ${hostedLobby.address}:${hostedLobby.port}.`
+        : 'Fortnite is running — your lobby is WiFi-only. Forward UDP 7777 or use a tunnel in Settings for internet play.'
+      : 'Fortnite is running. Have fun.',
     error: 'Could not start the client. Check the build path and try again.',
   }
 
@@ -215,16 +262,69 @@ export function ActiveBuildCard({
     <section className="relative isolate flex h-full flex-col overflow-hidden rounded-3xl border border-line bg-panel shadow-[0_30px_80px_-40px_rgba(0,0,0,0.9)]">
       <BuildArt season={season} />
 
-      <div className="relative flex min-h-[460px] flex-1 flex-col p-6 sm:p-8 xl:min-h-[540px] xl:p-10">
+      <div className="relative flex min-h-0 flex-1 flex-col p-6 sm:p-8 xl:p-10">
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <div className="flex min-h-full flex-col">
         {/* top row */}
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/35 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-mist/90 backdrop-blur">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/35 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-mist/90 backdrop-blur">
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ background: season.accent.glow, boxShadow: `0 0 12px ${season.accent.glow}` }}
+              />
+              Season · {season.short}
+            </span>
+            {build.version && (
+              <span className="inline-flex items-center rounded-full border border-white/10 bg-black/35 px-2.5 py-1.5 font-mono text-[10.5px] font-semibold text-mist/80 backdrop-blur">
+                v{build.version}
+              </span>
+            )}
+            {build.providerLabel && (
+              <span
+                title={`External launcher: ${build.providerLabel}`}
+                className="inline-flex items-center rounded-full border border-arc/25 bg-arc/[0.1] px-2.5 py-1.5 text-[10.5px] font-semibold text-arc backdrop-blur"
+              >
+                {build.providerLabel}
+              </span>
+            )}
             <span
-              className="h-1.5 w-1.5 rounded-full"
-              style={{ background: season.accent.glow, boxShadow: `0 0 12px ${season.accent.glow}` }}
-            />
-Season · {season.short}
-          </span>
+              title={
+                onlinePlay
+                  ? onlineProviderLabel
+                    ? `${onlineProviderLabel} hosts this season — Play opens it automatically.${lobbyCount > 0 ? ` ${lobbyCount} VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} also listed.` : ''}`
+                    : `${lobbyCount} live public VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} · ${playerCount} player${playerCount === 1 ? '' : 's'} — Play joins one automatically.`
+                  : 'No public lobby is live for this season. Play starts a match on this PC.'
+              }
+              aria-label={onlinePlay ? 'Online play' : 'Local play'}
+              className={cx(
+                'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] backdrop-blur',
+                onlinePlay
+                  ? 'border-emerald-400/35 bg-emerald-400/[0.12] text-emerald-200 shadow-[0_0_22px_rgba(16,185,129,0.14)]'
+                  : 'border-slate-400/20 bg-slate-400/[0.06] text-slate-300',
+              )}
+            >
+              <span
+                className={cx(
+                  'h-2 w-2 rounded-full',
+                  onlinePlay
+                    ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.95)]'
+                    : 'bg-slate-400/70',
+                )}
+              />
+              {onlinePlay ? 'ONLINE PLAY' : 'LOCAL PLAY'}
+              {onlinePlay && onlineProviderLabel && (
+                <span className="font-semibold normal-case tracking-normal text-emerald-100/80">
+                  · {onlineProviderLabel}
+                </span>
+              )}
+              {onlinePlay && playerCount > 0 && (
+                <span className="font-semibold normal-case tracking-normal text-emerald-100/80">
+                  · {playerCount} {playerCount === 1 ? 'player' : 'players'}
+                </span>
+              )}
+            </span>
+          </div>
 
           <div className="flex flex-wrap items-center gap-2">
             {activeNow != null && activeNow > 0 && (
@@ -254,27 +354,38 @@ Season · {season.short}
           </h1>
           <p className="mt-3 max-w-md text-sm leading-relaxed text-mist/70">
             {season.era}
-            {build.version && (
-              <>
-                <span className="mx-1.5 text-fog/40">·</span>
-                <span className="font-mono text-[13px] text-mist/90">v{build.version}</span>
-              </>
-            )}
           </p>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-fog">
-              <Wifi className="h-3.5 w-3.5" /> Auto-connect
-            </span>
-            {onlineLobbyCount > 0 ? (
+            {hostedLobby ? (
+              <span
+                className={cx(
+                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-semibold',
+                  hostedLobby.public
+                    ? 'border-emerald-400/25 bg-emerald-400/[0.08] text-emerald-100'
+                    : 'border-amber-400/30 bg-amber-400/[0.08] text-amber-100',
+                )}
+                title={hostedLobby.public ? 'Reachable from the internet' : 'Only reachable by players on this WiFi'}
+              >
+                <span
+                  className={cx(
+                    'h-1.5 w-1.5 rounded-full',
+                    hostedLobby.public ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]' : 'bg-amber-400',
+                  )}
+                />
+                {hostedLobby.public ? 'Your lobby is public' : 'Your lobby is WiFi-only'} ·{' '}
+                {hostedLobby.address}:{hostedLobby.port}
+              </span>
+            ) : lobbyCount > 0 ? (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.08] px-2.5 py-1 text-[10.5px] font-semibold text-emerald-100">
                 <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
-                {onlineLobbyCount} public lobby{onlineLobbyCount === 1 ? '' : 'ies'} online
+                {lobbyCount} reachable {lobbyCount === 1 ? 'lobby' : 'lobbies'} online
+                {playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}
               </span>
             ) : (
               <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[10.5px] text-fog">
                 <span className="h-1.5 w-1.5 rounded-full bg-fog/50" />
-                No public lobby yet — Play starts one
+                No public lobby — Play starts a local match
               </span>
             )}
           </div>
@@ -292,13 +403,15 @@ Season · {season.short}
               </div>
               <div className="mt-1.5 flex items-center justify-between text-[11px]">
                 <span className="text-fog">
-                  {download.phase === 'extracting'
-                    ? 'Unpacking archive…'
-                    : download.phase === 'verifying'
-                      ? 'Verifying checksum…'
-                      : etaLabel
-                        ? `Downloading build… · ${etaLabel}`
-                        : 'Downloading build…'}
+                  {download.phase === 'paused'
+                    ? 'Interrupted — your partial download is kept'
+                    : download.phase === 'extracting'
+                      ? 'Unpacking archive…'
+                      : download.phase === 'verifying'
+                        ? 'Verifying checksum…'
+                        : rateLabel
+                          ? `Downloading build… · ${rateLabel}`
+                          : 'Downloading build…'}
                 </span>
                 <span className="font-mono font-semibold text-emerald-300">
                   {download.percent != null ? `${download.percent}%` : '…'}
@@ -340,7 +453,7 @@ Season · {season.short}
                   </p>
                   {verify.phase === 'running' ? (
                     <p className="mt-0.5 text-[10.5px] text-fog">
-                      Checking executables, PAK files, empty files and every folder in this install.
+                      Checking executables, PAK files, empty files, the shared runtime and every folder in this install.
                     </p>
                   ) : verify.error ? (
                     <p className="mt-0.5 text-[10.5px] text-rose-200/80">{verify.error}</p>
@@ -374,11 +487,30 @@ Season · {season.short}
             </div>
           )}
 
+          {launchError && (
+            <div
+              className="mb-3 rounded-2xl border border-rose-400/30 bg-rose-500/[0.08] px-3.5 py-3 text-[11.5px] leading-relaxed text-rose-100 backdrop-blur"
+              role="alert"
+            >
+              <div className="flex items-start gap-2">
+                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-rose-300" />
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold">Why the last launch stopped</p>
+                  <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[9.5px] leading-relaxed text-rose-100/80">
+                    {launchError}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center gap-2 text-[12.5px]">
             {state === 'error' ? (
               <TriangleAlert className="h-3.5 w-3.5 shrink-0 text-rose-300" />
             ) : busy ? (
               <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-300" />
+            ) : state === 'paused' ? (
+              <Download className="h-3.5 w-3.5 shrink-0 text-amber-300" />
             ) : state === 'running' ? (
               <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
             ) : state === 'missing' ? (
@@ -388,41 +520,76 @@ Season · {season.short}
             )}
             <p className={cx('transition-colors duration-300', pill.text)}>{statusText[state]}</p>
           </div>
+        </div>
+      </div>
+        </div>
 
-          {/* actions are always on screen — no click-to-reveal */}
-          <div className="mt-4">
-            <div className="rounded-2xl border border-white/10 bg-ink/90 p-2 shadow-[0_36px_70px_-22px_rgba(0,0,0,0.95),0_10px_26px_-12px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl">
+      {/* actions stay outside the scroll area so a long error log cannot hide them */}
+      <div className="relative shrink-0 pt-4">
+        <div className="rounded-2xl border border-white/10 bg-ink/90 p-2 shadow-[0_36px_70px_-22px_rgba(0,0,0,0.95),0_10px_26px_-12px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl">
                 <div className="relative flex flex-wrap items-center gap-2">
                   <div
                     className={cx(
                       'inline-flex overflow-hidden rounded-xl transition-all duration-300',
-                      busy
+                      primaryBusy
                         ? 'opacity-85'
                         : 'hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]',
                     )}
                     style={{
                       background: primary.background,
-                      boxShadow: busy ? undefined : `0 14px 34px -16px ${primary.glow}`,
+                      boxShadow: primaryBusy ? undefined : `0 14px 34px -16px ${primary.glow}`,
                     }}
                   >
                     <button
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation()
-                        if (!busy && !(state === 'missing' && !hasDownloadSource)) onPrimary()
+                        if (primaryDisabled) return
+                        onPrimary()
                       }}
-                      disabled={busy || (state === 'missing' && !hasDownloadSource)}
+                      disabled={primaryDisabled}
                       className={cx(
                         'group relative inline-flex items-center gap-2.5 overflow-hidden px-5 py-3 text-[13.5px] font-semibold text-white',
-                        busy ? 'cursor-progress' : '',
+                        primaryBusy ? 'cursor-progress' : '',
                       )}
                     >
                       <span className="absolute inset-0 -translate-x-[120%] bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-[120%]" />
-                      <PrimaryIcon className={cx('h-4 w-4', busy && 'animate-spin')} />
+                      <PrimaryIcon className={cx('h-4 w-4', primaryBusy && 'animate-spin')} />
                       <span className="relative">{primary.label}</span>
                     </button>
 
                   </div>
+
+                  {showLocateExisting && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onLocateFolder?.()
+                      }}
+                      aria-label={`Locate an existing install for ${season.label}`}
+                      title="Locate a build folder already on this PC"
+                      className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3 text-fog transition-colors duration-200 hover:border-arc/40 hover:bg-white/[0.08] hover:text-white"
+                    >
+                      <FolderSearch className="h-4 w-4" />
+                    </button>
+                  )}
+
+                  {state === 'downloading' && download?.phase === 'downloading' && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onPauseDownload()
+                      }}
+                      aria-label={`Pause ${season.label} download`}
+                      title="Pause and keep the downloaded part"
+                      className="inline-flex items-center gap-2 rounded-xl border border-amber-400/35 bg-amber-400/10 px-3.5 py-3 text-[12.5px] font-semibold text-amber-200 transition-all duration-200 hover:border-amber-400/70 hover:bg-amber-400/20 hover:text-white active:scale-[0.99]"
+                    >
+                      <Pause className="h-3.5 w-3.5" />
+                      Pause
+                    </button>
+                  )}
 
                   {state === 'downloading' && (
                     <button
@@ -494,7 +661,6 @@ Season · {season.short}
                 </div>
               </div>
             </div>
-          </div>
         </div>
     </section>
   )

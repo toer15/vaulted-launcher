@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react'
 import {
-  Globe,
   ArrowLeft,
   ArrowLeftRight,
+  Check,
+  Cloud,
   CloudDownload,
   FolderSearch,
   HardDrive,
   Info,
+  Link2,
   Loader2,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   TriangleAlert,
 } from 'lucide-react'
@@ -30,6 +33,19 @@ interface SettingsViewProps {
   sourcesStatus: 'idle' | 'loading' | 'ready' | 'error'
   sourcesError: string | null
   onRefreshSources: () => void
+  cloudSourceUrl: string
+  cloudInstallDir: string
+  cloudStatus: 'idle' | 'syncing' | 'connected' | 'error'
+  cloudError: string | null
+  cloudMode: 'manifest' | 'bucket' | null
+  cloudSyncCount: number
+  downloadsRoot: string | null
+  onConnectCloud: (url: string, installDir: string) => Promise<void>
+  onResetCloud: () => Promise<void>
+  onPickInstallDir: () => Promise<string | null>
+  defaultBuildsRoot: string
+  detectedBuildCount: number
+  onPickDefaultBuildsRoot: () => Promise<string | null>
   appVersion: string
   updateState: { state: 'idle' | 'checking' | 'current' | 'available' | 'error'; message?: string; url?: string }
   updateReady?: boolean
@@ -51,6 +67,19 @@ export function SettingsView({
   sourcesStatus,
   sourcesError,
   onRefreshSources,
+  cloudSourceUrl,
+  cloudInstallDir,
+  cloudStatus,
+  cloudError,
+  cloudMode,
+  cloudSyncCount,
+  downloadsRoot,
+  onConnectCloud,
+  onResetCloud,
+  onPickInstallDir,
+  defaultBuildsRoot,
+  detectedBuildCount,
+  onPickDefaultBuildsRoot,
   appVersion,
   updateState,
   updateReady,
@@ -59,28 +88,23 @@ export function SettingsView({
   onRestartToUpdate,
 }: SettingsViewProps) {
   const art = build ? artFor(build.season) : null
-  const [publicAddress, setPublicAddress] = useState('')
-  const [publicNote, setPublicNote] = useState<string | null>(null)
+  const providerReady = Boolean(build?.onlineProvider)
+  const activeSource = cloudSourceUrl || manifestUrl()
+  const [cloudUrl, setCloudUrl] = useState(cloudSourceUrl)
+  const [cloudDir, setCloudDir] = useState(cloudInstallDir)
+  const connecting = cloudStatus === 'syncing'
 
   useEffect(() => {
-    void window.arc?.getPublicAddress?.()
-      .then((value) => setPublicAddress(value || ''))
-      .catch(() => {})
-  }, [])
+    setCloudUrl(cloudSourceUrl)
+  }, [cloudSourceUrl])
 
-  const savePublicAddress = async () => {
-    const result = await window.arc?.setPublicAddress?.(publicAddress)
-    if (!result) return
-    if (!result.ok) {
-      setPublicNote(result.error || 'Could not save that address.')
-      return
-    }
-    setPublicAddress(result.value ?? '')
-    setPublicNote(
-      result.value
-        ? `Lobbies will publish ${result.value}. Forward TCP and UDP 7777 to this PC.`
-        : 'Cleared — lobbies use automatic UPnP/NAT-PMP again.',
-    )
+  useEffect(() => {
+    setCloudDir(cloudInstallDir)
+  }, [cloudInstallDir])
+
+  const pickCloudInstallDir = async () => {
+    const picked = await onPickInstallDir()
+    if (picked) setCloudDir(picked)
   }
 
   return (
@@ -90,7 +114,7 @@ export function SettingsView({
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-fog">Configuration</p>
           <h1 className="mt-1 font-display text-2xl font-bold tracking-tight text-white">Settings</h1>
           <p className="mt-1.5 max-w-lg text-[12.5px] leading-relaxed text-fog">
-            Where VAULTED looks for the selected build, and where downloads are unpacked.
+            Where VAULTED downloads builds, which cloud source feeds all 43 cards, and how online matches are found.
           </p>
         </div>
         <button
@@ -107,29 +131,80 @@ export function SettingsView({
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/70 px-4 py-3">
           <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-mist">Build location</h2>
           <div className="flex items-center gap-2">
+            {build && (
+              <span
+                                className={cx(
+                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-medium',
+                  installed || providerReady
+                    ? 'border-emerald-400/30 bg-emerald-400/[0.07] text-emerald-300'
+                    : 'border-amber-400/30 bg-amber-400/[0.07] text-amber-300',
+                )}
+              >
+                {installed || providerReady ? (
+                  <ShieldCheck className="h-3 w-3" />
+                ) : (
+                  <TriangleAlert className="h-3 w-3" />
+                )}
+                {providerReady ? 'Provider ready' : installed ? 'Installed' : 'Not installed'}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="border-b border-line/70 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-[12px] font-semibold text-mist">Global defaults</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-fog">
+                Online seasons open their bundled community provider automatically. Local seasons use this builds root.
+              </p>
+            </div>
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.06] px-2.5 py-1 text-[10px] font-semibold text-emerald-300">
+              <ShieldCheck className="h-3 w-3" />
+              {detectedBuildCount} / 43 seasons ready
+            </span>
+          </div>
+
+          <label className="mt-3 block">
+            <span className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-fog">
+              Default builds root
+            </span>
+            <div className="mt-1.5 flex flex-col gap-2 sm:flex-row">
+              <code
+                className="min-w-0 flex-1 truncate rounded-xl border border-line bg-black/45 px-3.5 py-2.5 font-mono text-[11.5px] text-mist/90"
+                title={defaultBuildsRoot || undefined}
+              >
+                {defaultBuildsRoot || 'Not set — using the download install directory'}
+              </code>
+              <button
+                type="button"
+                onClick={() => void onPickDefaultBuildsRoot()}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-line bg-white/[0.03] px-3.5 py-2.5 text-[12px] font-medium text-mist transition-colors duration-200 hover:border-arc/40 hover:bg-white/[0.08] hover:text-white"
+              >
+                <FolderSearch className="h-3.5 w-3.5" /> Browse…
+              </button>
+            </div>
+          </label>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={onScanBuilds}
-              disabled={scanning}
-              className="inline-flex items-center gap-1.5 rounded-full border border-line bg-white/[0.04] px-2.5 py-1 text-[10.5px] font-semibold text-mist transition-colors hover:border-arc/45 hover:text-white disabled:opacity-60"
+              disabled={scanning || !defaultBuildsRoot}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-400/35 bg-emerald-400/[0.08] px-3 py-2 text-[11.5px] font-semibold text-emerald-200 transition-colors hover:border-emerald-400/60 hover:bg-emerald-400/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-55"
             >
-              <FolderSearch className={cx('h-3 w-3', scanning && 'animate-pulse')} />
-              {scanning ? 'Scanning…' : 'Scan this PC'}
+              <FolderSearch className={cx('h-3.5 w-3.5', scanning && 'animate-pulse')} />
+              {scanning ? 'Scanning builds folder…' : 'Scan Builds Folder'}
             </button>
-            {build && (
-              <span
-                className={cx(
-                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-medium',
-                  installed
-                    ? 'border-emerald-400/30 bg-emerald-400/[0.07] text-emerald-300'
-                  : 'border-amber-400/30 bg-amber-400/[0.07] text-amber-300',
-              )}
-            >
-              {installed ? <ShieldCheck className="h-3 w-3" /> : <TriangleAlert className="h-3 w-3" />}
-              {installed ? 'Installed' : 'Not installed'}
+            <span className="text-[10.5px] text-fog">
+              Matches subfolders by season ID, version or CL number.
             </span>
-            )}
           </div>
+
+          <p className="mt-2 text-[10.5px] leading-relaxed text-fog">
+            Saved in <span className="font-mono text-mist/80">profiles.json</span>. Existing folders are matched by
+            season ID, version, or CL on startup.
+          </p>
         </div>
 
         {build ? (
@@ -174,6 +249,13 @@ export function SettingsView({
               </code>
             </label>
 
+            <label className="mt-3 block">
+              <span className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-fog">Provider</span>
+              <code className="mt-1.5 block truncate rounded-xl border border-line/70 bg-black/30 px-3.5 py-2.5 font-mono text-[11px] text-fog">
+                {build.onlineProvider?.name || build.providerLabel || 'Built-in Fortnite client'}
+              </code>
+            </label>
+
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -183,7 +265,14 @@ export function SettingsView({
                 <ArrowLeftRight className="h-3.5 w-3.5" /> Switch build
               </button>
               <p className="text-[11px] leading-relaxed text-fog">
-                VAULTED launches <span className="font-mono text-mist/80">FortniteClient-Win64-Shipping.exe</span> from this folder.
+                {build.onlineProvider ? (
+                  `Play opens ${build.onlineProvider.name} automatically — no executable or server setup needed.`
+                ) : (
+                  <>
+                    VAULTED launches{' '}
+                    <span className="font-mono text-mist/80">FortniteClient-Win64-Shipping.exe</span> from this folder.
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -194,6 +283,124 @@ export function SettingsView({
         )}
       </section>
 
+      {/* cloud storage source */}
+      <section className="mt-4 overflow-hidden rounded-2xl border border-line bg-black/25">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line/70 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Cloud className="h-3.5 w-3.5 text-emerald-300" />
+            <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-mist">
+              Cloud storage &amp; content source
+            </h2>
+          </div>
+          <span
+            className={cx(
+              'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-semibold',
+              cloudStatus === 'connected'
+                ? 'border-emerald-400/30 bg-emerald-400/[0.08] text-emerald-300'
+                : cloudStatus === 'syncing'
+                  ? 'border-sky-400/30 bg-sky-400/[0.08] text-sky-300'
+                  : cloudStatus === 'error'
+                    ? 'border-rose-400/30 bg-rose-400/[0.08] text-rose-300'
+                    : 'border-line bg-white/[0.03] text-fog',
+            )}
+          >
+            {cloudStatus === 'connected' ? (
+              <Check className="h-3 w-3" />
+            ) : cloudStatus === 'syncing' ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : cloudStatus === 'error' ? (
+              <TriangleAlert className="h-3 w-3" />
+            ) : (
+              <Cloud className="h-3 w-3" />
+            )}
+            {cloudStatus === 'connected'
+              ? `Connected — ${cloudSyncCount} builds synced`
+              : cloudStatus === 'syncing'
+                ? 'Syncing…'
+                : cloudStatus === 'error'
+                  ? 'Connection failed'
+                  : 'Not connected'}
+          </span>
+        </div>
+        <div className="p-4">
+          <p className="text-[12px] leading-relaxed text-mist/85">
+            Paste one URL to feed all 43 season cards. A{' '}
+            <span className="font-mono text-mist">manifest.json</span> maps each season directly; a raw bucket base
+            resolves <span className="font-mono text-mist">{'{base}/{season.id}.zip'}</span> with a version.zip fallback.
+          </p>
+
+          <label className="mt-3 block">
+            <span className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-fog">
+              Cloud storage / manifest URL
+            </span>
+            <div className="mt-1.5 flex flex-col gap-2 sm:flex-row">
+              <input
+                value={cloudUrl}
+                onChange={(event) => setCloudUrl(event.target.value)}
+                placeholder="https://pub-xxxx.r2.dev or https://example.com/manifest.json"
+                spellCheck={false}
+                className="min-w-0 flex-1 rounded-xl border border-line bg-black/30 px-3.5 py-2.5 font-mono text-[11.5px] text-mist outline-none transition-colors placeholder:text-fog/50 focus:border-emerald-400/60"
+              />
+              <button
+                type="button"
+                onClick={() => void onConnectCloud(cloudUrl.trim(), cloudDir.trim())}
+                disabled={connecting || !cloudUrl.trim()}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-emerald-400/35 bg-emerald-400/[0.1] px-4 py-2.5 text-[12px] font-semibold text-emerald-200 transition-all duration-200 hover:border-emerald-400/60 hover:bg-emerald-400/15 hover:text-white disabled:cursor-not-allowed disabled:opacity-55"
+              >
+                {connecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+                Connect &amp; Sync
+              </button>
+            </div>
+          </label>
+
+          <label className="mt-3 block">
+            <span className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-fog">
+              Default install directory
+            </span>
+            <div className="mt-1.5 flex flex-col gap-2 sm:flex-row">
+              <input
+                value={cloudDir}
+                onChange={(event) => setCloudDir(event.target.value)}
+                placeholder="Choose a folder for downloaded builds"
+                spellCheck={false}
+                className="min-w-0 flex-1 rounded-xl border border-line bg-black/30 px-3.5 py-2.5 font-mono text-[11.5px] text-mist outline-none transition-colors placeholder:text-fog/50 focus:border-arc/60"
+              />
+              <button
+                type="button"
+                onClick={() => void pickCloudInstallDir()}
+                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl border border-line bg-white/[0.03] px-3.5 py-2.5 text-[12px] font-medium text-mist transition-colors duration-200 hover:border-arc/40 hover:bg-white/[0.08] hover:text-white"
+              >
+                <FolderSearch className="h-3.5 w-3.5" /> Browse…
+              </button>
+            </div>
+          </label>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[11px] leading-relaxed text-fog">
+              {cloudStatus === 'connected'
+                ? cloudMode === 'bucket'
+                  ? 'Direct bucket mode — season IDs map to archive filenames.'
+                  : 'Manifest mode — every season URL came from the cloud manifest.'
+                : cloudError ||
+                  'Saved in settings.json and reconnected automatically on every launch.'}
+            </p>
+            <button
+              type="button"
+              onClick={() => void onResetCloud()}
+              disabled={connecting}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-white/[0.03] px-3 py-1.5 text-[11px] font-medium text-fog transition-colors duration-200 hover:border-rose-400/35 hover:text-rose-200 disabled:opacity-55"
+            >
+              <RotateCcw className="h-3 w-3" /> Reset to Default
+            </button>
+          </div>
+          {cloudStatus === 'error' && cloudError && (
+            <p className="mt-2 rounded-xl border border-rose-400/25 bg-rose-400/[0.05] px-3 py-2 text-[11px] leading-relaxed text-rose-200">
+              {cloudError}
+            </p>
+          )}
+        </div>
+      </section>
+
       {/* downloads */}
       <section className="mt-4 rounded-2xl border border-line bg-black/25">
         <h2 className="border-b border-line/70 px-4 py-3 text-[12px] font-semibold uppercase tracking-[0.14em] text-mist">
@@ -202,11 +409,14 @@ export function SettingsView({
         <div className="flex items-start gap-3 p-4">
           <HardDrive className="mt-0.5 h-4 w-4 shrink-0 text-fog" />
           <div className="min-w-0">
-            <code className="block truncate font-mono text-[11.5px] text-mist/90" title="%APPDATA%\VAULTED Launcher\builds">
-              %APPDATA%\VAULTED Launcher\builds
+            <code
+              className="block truncate font-mono text-[11.5px] text-mist/90"
+              title={downloadsRoot || '%APPDATA%\\VAULTED Launcher\\builds'}
+            >
+              {downloadsRoot || '%APPDATA%\\VAULTED Launcher\\builds'}
             </code>
             <p className="mt-1 text-[11.5px] leading-relaxed text-fog">
-              Season archives are downloaded here, unpacked, and scanned for the client executable.
+              Season archives are downloaded into <span className="font-mono text-mist/80">{'{Default install directory}\\{season.id}'}</span>, unpacked, and scanned for the client executable.
             </p>
           </div>
         </div>
@@ -227,11 +437,14 @@ export function SettingsView({
         </div>
         <div className="p-4">
           <p className="text-[12px] leading-relaxed text-mist/85">
-            Downloads start straight from the manifest — VAULTED never asks you to paste a link. New seasons added to the
-            manifest appear in your library after a refresh.
+            All 43 cards read this source automatically. A cloud source takes precedence; without one, VAULTED uses
+            the built-in manifest and its bundled archive URLs.
           </p>
-          <code className="mt-2 block truncate rounded-xl border border-line/70 bg-black/30 px-3 py-2 font-mono text-[11px] text-fog" title={manifestUrl()}>
-            {manifestUrl()}
+          <code
+            className="mt-2 block truncate rounded-xl border border-line/70 bg-black/30 px-3 py-2 font-mono text-[11px] text-fog"
+            title={activeSource}
+          >
+            {activeSource}
           </code>
           <p className="mt-2 text-[11px] leading-relaxed text-fog">
             {sourcesStatus === 'loading'
@@ -241,42 +454,6 @@ export function SettingsView({
                 : 'Manifest not loaded yet.'}
           </p>
           {sourcesError && <p className="mt-2 text-[11px] leading-relaxed text-rose-300">{sourcesError}</p>}
-        </div>
-      </section>
-
-      {/* online hosting */}
-      <section className="mt-4 rounded-2xl border border-line bg-black/25">
-        <div className="flex items-center justify-between gap-2 border-b border-line/70 px-4 py-3">
-          <h2 className="text-[12px] font-semibold uppercase tracking-[0.14em] text-mist">Online hosting</h2>
-          <Globe className="h-3.5 w-3.5 text-sky-300" />
-        </div>
-        <div className="p-4">
-          <p className="text-[12px] leading-relaxed text-mist/85">
-            When you host, VAULTED opens UDP and TCP 7777 on your router with UPnP/NAT-PMP and lists the lobby for every
-            player. If your router has that disabled, forward 7777 to this PC and enter your public address below. A
-            playit.gg tunnel address works here too.
-          </p>
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-            <input
-              value={publicAddress}
-              onChange={(event) => setPublicAddress(event.target.value)}
-              placeholder="203.0.113.7:7777 (leave empty for automatic)"
-              spellCheck={false}
-              className="min-w-0 flex-1 rounded-xl border border-line bg-black/30 px-3 py-2 text-[12.5px] text-mist outline-none transition-colors placeholder:text-fog/60 focus:border-arc/60"
-            />
-            <button
-              type="button"
-              onClick={() => void savePublicAddress()}
-              className="rounded-xl border border-arc/45 bg-arc/15 px-3.5 py-2 text-[12px] font-semibold text-mist transition-colors hover:bg-arc/25 hover:text-white"
-            >
-              Save address
-            </button>
-          </div>
-          {publicNote && <p className="mt-2 text-[11.5px] leading-relaxed text-emerald-300">{publicNote}</p>}
-          <p className="mt-2 text-[11px] leading-relaxed text-fog">
-            Your next hosted lobby shows an <span className="text-emerald-300">Internet</span> badge in Friends → Open
-            lobbies once the address is reachable. Without it, friends on the same WiFi can still join.
-          </p>
         </div>
       </section>
 

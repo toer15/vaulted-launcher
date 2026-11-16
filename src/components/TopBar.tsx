@@ -5,6 +5,7 @@ import { WindowControls } from './WindowControls'
 import { Wordmark } from './Wordmark'
 import { cx } from '../lib/cx'
 import { hasWindowControls } from '../lib/launch'
+import type { OnlineStatus } from '../lib/onlineService'
 import type { Account, SeasonInfo } from '../types'
 
 interface TopBarProps {
@@ -13,6 +14,9 @@ interface TopBarProps {
   version: string | null
   buildCount: number
   native: boolean
+  onlineStatus: OnlineStatus
+  /** seasons pre-mapped to a community provider, independent of the relay */
+  communityOnline?: number
   settingsActive: boolean
   shopActive: boolean
   friendsActive: boolean
@@ -30,6 +34,8 @@ export function TopBar({
   version,
   buildCount,
   native,
+  onlineStatus,
+  communityOnline,
   settingsActive,
   shopActive,
   friendsActive,
@@ -72,14 +78,30 @@ export function TopBar({
         <span
           className={cx(
             'hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-medium md:inline-flex',
-            native
+            onlineStatus === 'connected' || (communityOnline ?? 0) > 0
               ? 'border-emerald-400/30 bg-emerald-400/[0.07] text-emerald-300'
-              : 'border-line bg-white/[0.03] text-fog',
+              : onlineStatus === 'checking'
+                ? 'border-sky-400/30 bg-sky-400/[0.07] text-sky-300'
+                : 'border-amber-400/25 bg-amber-400/[0.06] text-amber-200/90',
           )}
-          title={native ? 'Launch calls are forwarded to the desktop bridge' : 'No desktop bridge detected — launching is simulated'}
+          title={
+            onlineStatus === 'connected'
+              ? `Matchmaking service connected${native ? ' · desktop bridge ready' : ' · desktop bridge unavailable'}`
+              : (communityOnline ?? 0) > 0
+                ? `${communityOnline} seasons mapped to community providers${native ? ' · desktop bridge ready' : ''}`
+                : onlineStatus === 'checking'
+                  ? 'Checking the configured online server…'
+                  : `Online server unreachable — local play only${native ? ' · desktop bridge ready' : ''}`
+          }
         >
           <Radio className="h-3 w-3" />
-          {native ? 'Bridge connected' : 'Local mode'}
+          {onlineStatus === 'connected'
+            ? 'Bridge connected'
+            : (communityOnline ?? 0) > 0
+              ? 'Community online'
+              : onlineStatus === 'checking'
+                ? 'Checking bridge…'
+                : 'Offline — Local Play only'}
         </span>
 
         <button

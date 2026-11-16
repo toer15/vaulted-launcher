@@ -1,5 +1,5 @@
 import { cx } from '../lib/cx'
-import { lobbyFor, seasonImageFor } from '../lib/art'
+import { artFor, seasonImageFor } from '../lib/art'
 import type { SeasonInfo } from '../types'
 
 interface BuildArtProps {
@@ -10,13 +10,12 @@ interface BuildArtProps {
 }
 
 /**
- * Uses the exact in-game lobby backdrop for the big Play card, so each season
- * opens on the scene players actually stood in that season. Compact library
- * thumbnails keep the promo cover because it is easier to identify at 48px.
+ * Uses the season-specific key art for both the big Play card and compact
+ * library thumbnails. The big card intentionally does not use lobby captures.
  */
 export function BuildArt({ season, className, compact = false }: BuildArtProps) {
   const { from, to, glow } = season.accent
-  const art = compact ? seasonImageFor(season) : lobbyFor(season) ?? seasonImageFor(season)
+  const art = compact ? seasonImageFor(season) : artFor(season)
 
   if (art) {
     return (

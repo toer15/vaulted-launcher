@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Layers, Plus, X } from 'lucide-react'
 import { BuildList } from './BuildList'
+import type { SeasonPlayMode } from '../lib/playMode'
 import type { Build } from '../types'
 
 interface BuildDrawerProps {
@@ -8,9 +9,11 @@ interface BuildDrawerProps {
   builds: Build[]
   activeId: string | null
   installed: Record<string, boolean>
-  activeCounts: Record<string, number>
   sourceKeys?: Set<string>
   sourceSizes?: Record<string, number>
+  activeCounts?: Record<string, number>
+  activeKey?: string | null
+  playModes: Record<string, SeasonPlayMode>
   onClose: () => void
   onSelect: (id: string) => void
   onAdd: () => void
@@ -21,9 +24,11 @@ export function BuildDrawer({
   builds,
   activeId,
   installed,
-  activeCounts,
   sourceKeys,
   sourceSizes,
+  activeCounts,
+  activeKey,
+  playModes,
   onClose,
   onSelect,
   onAdd,
@@ -75,9 +80,11 @@ export function BuildDrawer({
             builds={builds}
             activeId={activeId}
             installed={installed}
-            activeCounts={activeCounts}
             sourceKeys={sourceKeys}
             sourceSizes={sourceSizes}
+            activeCounts={activeCounts}
+            activeKey={activeKey}
+            playModes={playModes}
             onSelect={(id) => {
               onSelect(id)
               onClose()

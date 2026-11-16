@@ -2,7 +2,7 @@
   "name": "vaulted-launcher",
   "productName": "VAULTED Launcher",
   "private": true,
-  "version": "1.0.52",
+  "version": "1.0.72",
   "description": "VAULTED — Fortnite build launcher",
   "author": "VAULTED",
   "type": "module",
@@ -13,9 +13,14 @@
     "typecheck": "tsc --noEmit",
     "app": "npm run build && electron .",
     "app:dev": "electron . --dev",
+    "test:join-watchdog": "node scripts/test-join-watchdog.cjs",
+    "test:join-fallback": "node scripts/test-join-fallback.mjs",
     "catalog": "node scripts/build-shop-catalog.cjs",
     "icon": "electron scripts/make-icon.cjs",
-    "dist": "npm run build && electron-builder --win nsis --publish never"
+    "check:runtime": "node scripts/verify-runtime.cjs",
+    "check:runtime:packaged": "node scripts/verify-runtime.cjs --runtime-dir release/win-unpacked/resources/runtime",
+    "version:bump": "npm version patch --no-git-tag-version",
+    "dist": "npm run version:bump && npm run build && npm run check:runtime && electron-builder --win nsis --publish never && npm run check:runtime:packaged"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
@@ -47,10 +52,12 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "src/assets/builds.json",
       "build/icon.ico",
       "package.json"
     ],
     "asar": true,
+    "afterPack": "scripts/after-pack.cjs",
     "extraResources": [
       {
         "from": "node_modules/7zip-bin-full/win/x64",

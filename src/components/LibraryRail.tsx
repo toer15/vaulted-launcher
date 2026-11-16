@@ -1,19 +1,33 @@
 import { HardDrive, Plus } from 'lucide-react'
 import { BuildList } from './BuildList'
+import type { SeasonPlayMode } from '../lib/playMode'
 import type { Build } from '../types'
 
 interface LibraryRailProps {
   builds: Build[]
   activeId: string | null
   installed: Record<string, boolean>
-  activeCounts: Record<string, number>
   sourceKeys?: Set<string>
   sourceSizes?: Record<string, number>
+  activeCounts?: Record<string, number>
+  activeKey?: string | null
+  playModes: Record<string, SeasonPlayMode>
   onSelect: (id: string) => void
   onAdd: () => void
 }
 
-export function LibraryRail({ builds, activeId, installed, activeCounts, sourceKeys, sourceSizes, onSelect, onAdd }: LibraryRailProps) {
+export function LibraryRail({
+  builds,
+  activeId,
+  installed,
+  sourceKeys,
+  sourceSizes,
+  activeCounts,
+  activeKey,
+  playModes,
+  onSelect,
+  onAdd,
+}: LibraryRailProps) {
   return (
     <aside className="flex h-full flex-col rounded-3xl border border-line bg-panel/60 p-4 backdrop-blur-sm">
       <header className="flex items-center justify-between gap-2 px-1">
@@ -38,17 +52,21 @@ export function LibraryRail({ builds, activeId, installed, activeCounts, sourceK
           builds={builds}
           activeId={activeId}
           installed={installed}
-          activeCounts={activeCounts}
           sourceKeys={sourceKeys}
           sourceSizes={sourceSizes}
+          activeCounts={activeCounts}
+          activeKey={activeKey}
+          playModes={playModes}
           onSelect={onSelect}
           onAdd={onAdd}
         />
       </div>
 
-      <footer className="mt-4 flex items-start gap-2 rounded-xl border border-line/70 bg-black/20 px-3 py-2.5 text-[11px] leading-relaxed text-fog">
-        <HardDrive className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        <p>Every chapter and season, oldest to newest. Builds live on this PC.</p>
+      <footer className="mt-4 rounded-xl border border-line/70 bg-black/20 px-3 py-2.5 text-[10.5px] leading-relaxed text-fog">
+        <p className="flex items-start gap-2">
+          <HardDrive className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>Every chapter and season. <span className="text-emerald-300">ONLINE PLAY</span> = a community provider is pre-mapped, and Play opens it automatically. <span className="text-mist">LOCAL PLAY</span> = Play starts a match on this PC.</span>
+        </p>
       </footer>
     </aside>
   )

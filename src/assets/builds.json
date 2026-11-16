@@ -1,23 +1,17 @@
 {
-  "_format": "Map a season key (chapter-season, e.g. ch1-s3) to that season's archive. Keys: url (required, direct zip/http link), version (e.g. 3.6), sha256 (optional), and for seasons newer than the app: chapter, season, label, short, era.",
-  "updatedAt": "2026-11-15T07:16:20.582Z",
+  "_format": "Every season card is self-contained. id/title/chapter/season identify it; buildVersion and sizeGB drive the labels; downloadUrl is the one-click archive; runtimeProfile picks the bundled runtime; defaultInstallDir resolves to {AppDefaultBuildsDir}\\{id}. Legacy url/version/sizeBytes are kept for older launchers.",
+  "updatedAt": "2026-11-16T13:37:27.706Z",
   "seasons": {
-    "ch2-s2": {
-      "url": "https://cdn.cbn.lol/12.41",
-      "version": "12.41",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 42516907454
-    },
     "ch1-s1": {
+      "id": "ch1-s1",
+      "title": "Chapter 1 Season 1",
+      "chapter": 1,
+      "season": 1,
+      "buildVersion": "1.10",
+      "sizeGB": 6.59,
+      "downloadUrl": "https://archive.org/download/fn-v1-archive/builds%2F1.10-Cert-CL-3790078.7z",
+      "runtimeProfile": "legacy",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s1",
       "url": "https://archive.org/download/fn-v1-archive/builds%2F1.10-Cert-CL-3790078.7z",
       "version": "1.10",
       "servers": [
@@ -33,6 +27,15 @@
       "sizeBytes": 6591289197
     },
     "ch1-s2": {
+      "id": "ch1-s2",
+      "title": "Chapter 1 Season 2",
+      "chapter": 1,
+      "season": 2,
+      "buildVersion": "1.11",
+      "sizeGB": 6.98,
+      "downloadUrl": "https://archive.org/download/fn-v2-archive/builds%2F1.11-Cert-CL-3807424.7z",
+      "runtimeProfile": "legacy",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s2",
       "url": "https://archive.org/download/fn-v2-archive/builds%2F1.11-Cert-CL-3807424.7z",
       "version": "1.11",
       "servers": [
@@ -48,6 +51,15 @@
       "sizeBytes": 6976364737
     },
     "ch1-s3": {
+      "id": "ch1-s3",
+      "title": "Chapter 1 Season 3",
+      "chapter": 1,
+      "season": 3,
+      "buildVersion": "3.00",
+      "sizeGB": 7.38,
+      "downloadUrl": "https://archive.org/download/fn-v3-archive/builds%2F3.0.0-CL-3901517.7z",
+      "runtimeProfile": "legacy",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s3",
       "url": "https://archive.org/download/fn-v3-archive/builds%2F3.0.0-CL-3901517.7z",
       "version": "3.00",
       "servers": [
@@ -60,9 +72,44 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 7384406276
+      "sizeBytes": 7384406276,
+      "onlineProvider": {
+        "id": "neo",
+        "name": "Project Neo",
+        "label": "Neo",
+        "protocolUri": "neo://",
+        "installerUrl": "https://projectneofn.dev/download",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/Neo Launcher/Neo Launcher.exe",
+          "%LOCALAPPDATA%/Neo Launcher/Neo Launcher.exe",
+          "%LOCALAPPDATA%/Programs/Neo Launcher/NeoLauncher.exe",
+          "%LOCALAPPDATA%/Neo Launcher/NeoLauncher.exe",
+          "%LOCALAPPDATA%/Programs/Project Neo/Neo Launcher.exe"
+        ],
+        "executableNames": [
+          "Neo Launcher.exe",
+          "NeoLauncher.exe",
+          "Project Neo.exe",
+          "Neo.exe"
+        ],
+        "installDirNames": [
+          "Neo Launcher",
+          "Project Neo",
+          "Neo"
+        ],
+        "launchMode": "season"
+      }
     },
     "ch1-s4": {
+      "id": "ch1-s4",
+      "title": "Chapter 1 Season 4",
+      "chapter": 1,
+      "season": 4,
+      "buildVersion": "4.10",
+      "sizeGB": 11.43,
+      "downloadUrl": "https://archive.org/download/Fortnite-4.10-CL-4053532.zip/4.10-CL-4053532.zip",
+      "runtimeProfile": "legacy",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s4",
       "url": "https://archive.org/download/Fortnite-4.10-CL-4053532.zip/4.10-CL-4053532.zip",
       "version": "4.10",
       "servers": [
@@ -75,9 +122,44 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 11427640644
+      "sizeBytes": 11427640644,
+      "onlineProvider": {
+        "id": "neo",
+        "name": "Project Neo",
+        "label": "Neo",
+        "protocolUri": "neo://",
+        "installerUrl": "https://projectneofn.dev/download",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/Neo Launcher/Neo Launcher.exe",
+          "%LOCALAPPDATA%/Neo Launcher/Neo Launcher.exe",
+          "%LOCALAPPDATA%/Programs/Neo Launcher/NeoLauncher.exe",
+          "%LOCALAPPDATA%/Neo Launcher/NeoLauncher.exe",
+          "%LOCALAPPDATA%/Programs/Project Neo/Neo Launcher.exe"
+        ],
+        "executableNames": [
+          "Neo Launcher.exe",
+          "NeoLauncher.exe",
+          "Project Neo.exe",
+          "Neo.exe"
+        ],
+        "installDirNames": [
+          "Neo Launcher",
+          "Project Neo",
+          "Neo"
+        ],
+        "launchMode": "season"
+      }
     },
     "ch1-s5": {
+      "id": "ch1-s5",
+      "title": "Chapter 1 Season 5",
+      "chapter": 1,
+      "season": 5,
+      "buildVersion": "5.41",
+      "sizeGB": 13.28,
+      "downloadUrl": "https://archive.org/download/Fortnite-5.41-CL-4363240.zip/5.41-CL-4363240.zip",
+      "runtimeProfile": "legacy",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s5",
       "url": "https://archive.org/download/Fortnite-5.41-CL-4363240.zip/5.41-CL-4363240.zip",
       "version": "5.41",
       "servers": [
@@ -93,6 +175,15 @@
       "sizeBytes": 13283153744
     },
     "ch1-s6": {
+      "id": "ch1-s6",
+      "title": "Chapter 1 Season 6",
+      "chapter": 1,
+      "season": 6,
+      "buildVersion": "6.31",
+      "sizeGB": 14.72,
+      "downloadUrl": "https://archive.org/download/Fortnite-6.31-CL-4573279.rar/6.31-CL-4573279.rar",
+      "runtimeProfile": "legacy",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s6",
       "url": "https://archive.org/download/Fortnite-6.31-CL-4573279.rar/6.31-CL-4573279.rar",
       "version": "6.31",
       "servers": [
@@ -105,9 +196,44 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 14723153985
+      "sizeBytes": 14723153985,
+      "onlineProvider": {
+        "id": "era",
+        "name": "Project Era",
+        "label": "Era",
+        "protocolUri": "era://",
+        "installerUrl": "https://api.erafn.dev/api/launcher/download",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/Era Launcher/EraLauncher.exe",
+          "%LOCALAPPDATA%/Programs/Era Launcher/Era Launcher.exe",
+          "%LOCALAPPDATA%/Era Launcher/EraLauncher.exe",
+          "%LOCALAPPDATA%/Programs/Era/EraLauncher.exe",
+          "%APPDATA%/Era Launcher/EraLauncher.exe"
+        ],
+        "executableNames": [
+          "EraLauncher.exe",
+          "Era Launcher.exe",
+          "Project Era.exe",
+          "Era.exe"
+        ],
+        "installDirNames": [
+          "Era Launcher",
+          "Project Era",
+          "Era"
+        ],
+        "launchMode": "season"
+      }
     },
     "ch1-s7": {
+      "id": "ch1-s7",
+      "title": "Chapter 1 Season 7",
+      "chapter": 1,
+      "season": 7,
+      "buildVersion": "7.40",
+      "sizeGB": 15.21,
+      "downloadUrl": "https://archive.org/download/fn-v7-archive/builds%2F7.40-CL-5046157.7z",
+      "runtimeProfile": "legacy",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s7",
       "url": "https://archive.org/download/fn-v7-archive/builds%2F7.40-CL-5046157.7z",
       "version": "7.40",
       "servers": [
@@ -120,9 +246,44 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 15211195887
+      "sizeBytes": 15211195887,
+      "onlineProvider": {
+        "id": "neo",
+        "name": "Project Neo",
+        "label": "Neo",
+        "protocolUri": "neo://",
+        "installerUrl": "https://projectneofn.dev/download",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/Neo Launcher/Neo Launcher.exe",
+          "%LOCALAPPDATA%/Neo Launcher/Neo Launcher.exe",
+          "%LOCALAPPDATA%/Programs/Neo Launcher/NeoLauncher.exe",
+          "%LOCALAPPDATA%/Neo Launcher/NeoLauncher.exe",
+          "%LOCALAPPDATA%/Programs/Project Neo/Neo Launcher.exe"
+        ],
+        "executableNames": [
+          "Neo Launcher.exe",
+          "NeoLauncher.exe",
+          "Project Neo.exe",
+          "Neo.exe"
+        ],
+        "installDirNames": [
+          "Neo Launcher",
+          "Project Neo",
+          "Neo"
+        ],
+        "launchMode": "season"
+      }
     },
     "ch1-s8": {
+      "id": "ch1-s8",
+      "title": "Chapter 1 Season 8",
+      "chapter": 1,
+      "season": 8,
+      "buildVersion": "8.40",
+      "sizeGB": 23.09,
+      "downloadUrl": "https://archive.org/download/Fortnite-8.40-CL-6005771.zip/8.40-CL-6005771.zip",
+      "runtimeProfile": "legacy",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s8",
       "url": "https://archive.org/download/Fortnite-8.40-CL-6005771.zip/8.40-CL-6005771.zip",
       "version": "8.40",
       "servers": [
@@ -138,6 +299,15 @@
       "sizeBytes": 23087753024
     },
     "ch1-s9": {
+      "id": "ch1-s9",
+      "title": "Chapter 1 Season 9",
+      "chapter": 1,
+      "season": 9,
+      "buildVersion": "9.00",
+      "sizeGB": 18.55,
+      "downloadUrl": "https://archive.org/download/fn-v9-archive/builds%2F9.00-CL-6337466.7z",
+      "runtimeProfile": "legacy",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s9",
       "url": "https://archive.org/download/fn-v9-archive/builds%2F9.00-CL-6337466.7z",
       "version": "9.00",
       "servers": [
@@ -150,9 +320,43 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 18553831172
+      "sizeBytes": 18553831172,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot",
+        "protocolUri": "reboot://",
+        "installerUrl": "https://github.com/Auties00/Reboot-Launcher/releases/latest",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/Reboot Launcher/reboot_launcher.exe",
+          "%LOCALAPPDATA%/Programs/Reboot Launcher/Reboot Launcher.exe",
+          "%LOCALAPPDATA%/Reboot Launcher/reboot_launcher.exe",
+          "%APPDATA%/Reboot Launcher/reboot_launcher.exe",
+          "%ProgramFiles%/Reboot Launcher/reboot_launcher.exe"
+        ],
+        "executableNames": [
+          "reboot_launcher.exe",
+          "Reboot Launcher.exe",
+          "Reboot.exe"
+        ],
+        "installDirNames": [
+          "Reboot Launcher",
+          "Project Reboot",
+          "Reboot"
+        ],
+        "launchMode": "season"
+      }
     },
     "ch1-s10": {
+      "id": "ch1-s10",
+      "title": "Chapter 1 Season X",
+      "chapter": 1,
+      "season": 10,
+      "buildVersion": "10.40",
+      "sizeGB": 26.56,
+      "downloadUrl": "https://archive.org/download/Fortnite-10.40-CL-9380822.rar/10.40-CL-9380822.rar",
+      "runtimeProfile": "legacy",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s10",
       "url": "https://archive.org/download/Fortnite-10.40-CL-9380822.rar/10.40-CL-9380822.rar",
       "version": "10.40",
       "servers": [
@@ -165,9 +369,44 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 26556266920
+      "sizeBytes": 26556266920,
+      "onlineProvider": {
+        "id": "neo",
+        "name": "Project Neo",
+        "label": "Neo",
+        "protocolUri": "neo://",
+        "installerUrl": "https://projectneofn.dev/download",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/Neo Launcher/Neo Launcher.exe",
+          "%LOCALAPPDATA%/Neo Launcher/Neo Launcher.exe",
+          "%LOCALAPPDATA%/Programs/Neo Launcher/NeoLauncher.exe",
+          "%LOCALAPPDATA%/Neo Launcher/NeoLauncher.exe",
+          "%LOCALAPPDATA%/Programs/Project Neo/Neo Launcher.exe"
+        ],
+        "executableNames": [
+          "Neo Launcher.exe",
+          "NeoLauncher.exe",
+          "Project Neo.exe",
+          "Neo.exe"
+        ],
+        "installDirNames": [
+          "Neo Launcher",
+          "Project Neo",
+          "Neo"
+        ],
+        "launchMode": "season"
+      }
     },
     "ch2-s1": {
+      "id": "ch2-s1",
+      "title": "Chapter 2 Season 1",
+      "chapter": 2,
+      "season": 1,
+      "buildVersion": "11.00",
+      "sizeGB": 25.24,
+      "downloadUrl": "https://archive.org/download/Fortnite-11.00-CL-9562734.7z/11.00-CL-9562734.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s1",
       "url": "https://archive.org/download/Fortnite-11.00-CL-9562734.7z/11.00-CL-9562734.7z",
       "version": "11.00",
       "servers": [
@@ -180,9 +419,94 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 25244361073
+      "sizeBytes": 25244361073,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot",
+        "protocolUri": "reboot://",
+        "installerUrl": "https://github.com/Auties00/Reboot-Launcher/releases/latest",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/Reboot Launcher/reboot_launcher.exe",
+          "%LOCALAPPDATA%/Programs/Reboot Launcher/Reboot Launcher.exe",
+          "%LOCALAPPDATA%/Reboot Launcher/reboot_launcher.exe",
+          "%APPDATA%/Reboot Launcher/reboot_launcher.exe",
+          "%ProgramFiles%/Reboot Launcher/reboot_launcher.exe"
+        ],
+        "executableNames": [
+          "reboot_launcher.exe",
+          "Reboot Launcher.exe",
+          "Reboot.exe"
+        ],
+        "installDirNames": [
+          "Reboot Launcher",
+          "Project Reboot",
+          "Reboot"
+        ],
+        "launchMode": "season"
+      }
+    },
+    "ch2-s2": {
+      "id": "ch2-s2",
+      "title": "Chapter 2 Season 2",
+      "chapter": 2,
+      "season": 2,
+      "buildVersion": "12.41",
+      "sizeGB": 42.52,
+      "downloadUrl": "https://cdn.cbn.lol/12.41",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s2",
+      "url": "https://cdn.cbn.lol/12.41",
+      "version": "12.41",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 42516907454,
+      "onlineProvider": {
+        "id": "ezfn",
+        "name": "EZFN",
+        "label": "EZFN",
+        "protocolUri": "ezfn://",
+        "installerUrl": "https://releases.ezfn.app/ogfn/latest/EZFN-OGFN-Setup.msi",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/EZFN OGFN Launcher/EZFN OGFN Launcher.exe",
+          "%LOCALAPPDATA%/Programs/EZFN OGFN Launcher/EZFNLauncher.exe",
+          "%LOCALAPPDATA%/EZFN OGFN Launcher/EZFN OGFN Launcher.exe",
+          "%LOCALAPPDATA%/EZFN OGFN Launcher/EZFNLauncher.exe",
+          "%LOCALAPPDATA%/Programs/EZFN Launcher/EZFN Launcher.exe",
+          "%LOCALAPPDATA%/EZFN Launcher/EZFNLauncher.exe"
+        ],
+        "executableNames": [
+          "EZFN OGFN Launcher.exe",
+          "EZFNLauncher.exe",
+          "EZFN Launcher.exe",
+          "EZFN.exe"
+        ],
+        "installDirNames": [
+          "EZFN OGFN Launcher",
+          "EZFN Launcher",
+          "EZFN"
+        ],
+        "launchMode": "season"
+      }
     },
     "ch2-s3": {
+      "id": "ch2-s3",
+      "title": "Chapter 2 Season 3",
+      "chapter": 2,
+      "season": 3,
+      "buildVersion": "13.00",
+      "sizeGB": 85.05,
+      "downloadUrl": "https://archive.org/download/fortnite-cl-13715544/Fortnite-cl-13715544.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s3",
       "url": "https://archive.org/download/fortnite-cl-13715544/Fortnite-cl-13715544.7z",
       "version": "13.00",
       "servers": [
@@ -198,6 +522,15 @@
       "sizeBytes": 85051868529
     },
     "ch2-s4": {
+      "id": "ch2-s4",
+      "title": "Chapter 2 Season 4",
+      "chapter": 2,
+      "season": 4,
+      "buildVersion": "14.50",
+      "sizeGB": 28.77,
+      "downloadUrl": "https://archive.org/download/fortnite-release-14.50-cl-14643651.7z/%2B%2BFortnite%2BRelease-14.50-CL-14643651.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s4",
       "url": "https://archive.org/download/fortnite-release-14.50-cl-14643651.7z/%2B%2BFortnite%2BRelease-14.50-CL-14643651.7z",
       "version": "14.50",
       "servers": [
@@ -213,6 +546,15 @@
       "sizeBytes": 28769341535
     },
     "ch2-s5": {
+      "id": "ch2-s5",
+      "title": "Chapter 2 Season 5",
+      "chapter": 2,
+      "season": 5,
+      "buildVersion": "15.00",
+      "sizeGB": 30.29,
+      "downloadUrl": "https://archive.org/download/fn-v15-archive/builds%2F15.00-CL-14835335.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s5",
       "url": "https://archive.org/download/fn-v15-archive/builds%2F15.00-CL-14835335.7z",
       "version": "15.00",
       "servers": [
@@ -225,9 +567,43 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 30293312103
+      "sizeBytes": 30293312103,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot",
+        "protocolUri": "reboot://",
+        "installerUrl": "https://github.com/Auties00/Reboot-Launcher/releases/latest",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/Reboot Launcher/reboot_launcher.exe",
+          "%LOCALAPPDATA%/Programs/Reboot Launcher/Reboot Launcher.exe",
+          "%LOCALAPPDATA%/Reboot Launcher/reboot_launcher.exe",
+          "%APPDATA%/Reboot Launcher/reboot_launcher.exe",
+          "%ProgramFiles%/Reboot Launcher/reboot_launcher.exe"
+        ],
+        "executableNames": [
+          "reboot_launcher.exe",
+          "Reboot Launcher.exe",
+          "Reboot.exe"
+        ],
+        "installDirNames": [
+          "Reboot Launcher",
+          "Project Reboot",
+          "Reboot"
+        ],
+        "launchMode": "season"
+      }
     },
     "ch2-s6": {
+      "id": "ch2-s6",
+      "title": "Chapter 2 Season 6",
+      "chapter": 2,
+      "season": 6,
+      "buildVersion": "16.00",
+      "sizeGB": 32.29,
+      "downloadUrl": "https://archive.org/download/fn-v16-archive/builds%2F16.00-CL-15685441.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s6",
       "url": "https://archive.org/download/fn-v16-archive/builds%2F16.00-CL-15685441.7z",
       "version": "16.00",
       "servers": [
@@ -243,6 +619,15 @@
       "sizeBytes": 32285717194
     },
     "ch2-s7": {
+      "id": "ch2-s7",
+      "title": "Chapter 2 Season 7",
+      "chapter": 2,
+      "season": 7,
+      "buildVersion": "17.21",
+      "sizeGB": 30.89,
+      "downloadUrl": "https://archive.org/download/fn-v17-archive/17.21-CL-16967001.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s7",
       "url": "https://archive.org/download/fn-v17-archive/17.21-CL-16967001.7z",
       "version": "17.21",
       "servers": [
@@ -255,9 +640,43 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 30893875564
+      "sizeBytes": 30893875564,
+      "onlineProvider": {
+        "id": "reboot",
+        "name": "Project Reboot",
+        "label": "Reboot",
+        "protocolUri": "reboot://",
+        "installerUrl": "https://github.com/Auties00/Reboot-Launcher/releases/latest",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/Reboot Launcher/reboot_launcher.exe",
+          "%LOCALAPPDATA%/Programs/Reboot Launcher/Reboot Launcher.exe",
+          "%LOCALAPPDATA%/Reboot Launcher/reboot_launcher.exe",
+          "%APPDATA%/Reboot Launcher/reboot_launcher.exe",
+          "%ProgramFiles%/Reboot Launcher/reboot_launcher.exe"
+        ],
+        "executableNames": [
+          "reboot_launcher.exe",
+          "Reboot Launcher.exe",
+          "Reboot.exe"
+        ],
+        "installDirNames": [
+          "Reboot Launcher",
+          "Project Reboot",
+          "Reboot"
+        ],
+        "launchMode": "season"
+      }
     },
     "ch2-s8": {
+      "id": "ch2-s8",
+      "title": "Chapter 2 Season 8",
+      "chapter": 2,
+      "season": 8,
+      "buildVersion": "18.00",
+      "sizeGB": 36.82,
+      "downloadUrl": "https://archive.org/download/fn-v18-archive/builds%2F18.00-CL-17468642.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s8",
       "url": "https://archive.org/download/fn-v18-archive/builds%2F18.00-CL-17468642.7z",
       "version": "18.00",
       "servers": [
@@ -273,6 +692,15 @@
       "sizeBytes": 36818767206
     },
     "ch3-s1": {
+      "id": "ch3-s1",
+      "title": "Chapter 3 Season 1",
+      "chapter": 3,
+      "season": 1,
+      "buildVersion": "19.01",
+      "sizeGB": 20.89,
+      "downloadUrl": "https://archive.org/download/Fortnite-19.01-CL-18489740.zip/19.01-CL-18489740.zip",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch3-s1",
       "url": "https://archive.org/download/Fortnite-19.01-CL-18489740.zip/19.01-CL-18489740.zip",
       "version": "19.01",
       "servers": [
@@ -288,6 +716,15 @@
       "sizeBytes": 20890688413
     },
     "ch3-s2": {
+      "id": "ch3-s2",
+      "title": "Chapter 3 Season 2",
+      "chapter": 3,
+      "season": 2,
+      "buildVersion": "20.00",
+      "sizeGB": 30.45,
+      "downloadUrl": "https://archive.org/download/fn-v20-archive/builds%2F20.00-CL-19458861.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch3-s2",
       "url": "https://archive.org/download/fn-v20-archive/builds%2F20.00-CL-19458861.7z",
       "version": "20.00",
       "servers": [
@@ -303,6 +740,15 @@
       "sizeBytes": 30449531352
     },
     "ch3-s3": {
+      "id": "ch3-s3",
+      "title": "Chapter 3 Season 3",
+      "chapter": 3,
+      "season": 3,
+      "buildVersion": "21.00",
+      "sizeGB": 22.62,
+      "downloadUrl": "https://archive.org/download/fn-v21-archive/builds%2F21.00-CL-20463113.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch3-s3",
       "url": "https://archive.org/download/fn-v21-archive/builds%2F21.00-CL-20463113.7z",
       "version": "21.00",
       "servers": [
@@ -318,6 +764,15 @@
       "sizeBytes": 22624469153
     },
     "ch3-s4": {
+      "id": "ch3-s4",
+      "title": "Chapter 3 Season 4",
+      "chapter": 3,
+      "season": 4,
+      "buildVersion": "22.00",
+      "sizeGB": 20.27,
+      "downloadUrl": "https://archive.org/download/fn-v22-archive/builds%2F22.00-CL-22149829.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch3-s4",
       "url": "https://archive.org/download/fn-v22-archive/builds%2F22.00-CL-22149829.7z",
       "version": "22.00",
       "servers": [
@@ -332,7 +787,40 @@
       ],
       "sizeBytes": 20268856467
     },
+    "ch4-s1": {
+      "id": "ch4-s1",
+      "title": "Chapter 4 Season 1",
+      "chapter": 4,
+      "season": 1,
+      "buildVersion": "23.20",
+      "sizeGB": 33.54,
+      "downloadUrl": "https://archive.org/download/23.20-cl-23783097/23.20-CL-23783097.zip",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch4-s1",
+      "url": "https://archive.org/download/23.20-cl-23783097/23.20-CL-23783097.zip",
+      "version": "23.20",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 33544852956
+    },
     "ch4-s2": {
+      "id": "ch4-s2",
+      "title": "Chapter 4 Season 2",
+      "chapter": 4,
+      "season": 2,
+      "buildVersion": "24.20",
+      "sizeGB": 33.41,
+      "downloadUrl": "https://archive.org/download/24.20-cl-25156858/24.20-CL-25156858.zip",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch4-s2",
       "url": "https://archive.org/download/24.20-cl-25156858/24.20-CL-25156858.zip",
       "version": "24.20",
       "servers": [
@@ -348,6 +836,15 @@
       "sizeBytes": 33412713556
     },
     "ch4-s3": {
+      "id": "ch4-s3",
+      "title": "Chapter 4 Season 3",
+      "chapter": 4,
+      "season": 3,
+      "buildVersion": "25.00",
+      "sizeGB": 58.6,
+      "downloadUrl": "https://archive.org/download/fn-v25-archive/builds%2F25.00-CL-25784668.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch4-s3",
       "url": "https://archive.org/download/fn-v25-archive/builds%2F25.00-CL-25784668.7z",
       "version": "25.00",
       "servers": [
@@ -362,9 +859,18 @@
       ],
       "sizeBytes": 58602866850
     },
-    "ch6-s2": {
-      "url": "https://archive.org/download/fn-v34-archive/34.00-CL-40446427.zip",
-      "version": "34.00",
+    "ch4-s4": {
+      "id": "ch4-s4",
+      "title": "Chapter 4 Season 4",
+      "chapter": 4,
+      "season": 4,
+      "buildVersion": "26.30",
+      "sizeGB": 74.42,
+      "downloadUrl": "https://fortforge.co.uk/download/60c49654-8ab0-441d-9ef3-da9ee2f58e2d/build",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch4-s4",
+      "url": "https://fortforge.co.uk/download/60c49654-8ab0-441d-9ef3-da9ee2f58e2d/build",
+      "version": "26.30",
       "servers": [
         {
           "name": "Reboot",
@@ -375,159 +881,18 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 49194881985
-    },
-    "ch6-mini1": {
-      "url": "https://archive.org/download/fortnite-cert-cl-3532353-1.-7z/%2B%2BFortnite%2BCert-CL-3532353%20%281%29.7z",
-      "version": "35.30",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 5428813433
-    },
-    "ch6-s3": {
-      "url": "https://archive.org/download/fn-v36-archive/36.00-CL-43214806.zip",
-      "version": "36.00",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 85268125327
-    },
-    "ch6-s4": {
-      "url": "https://archive.org/download/fn-v37-archive/37.00-CL-44501951.zip",
-      "version": "37.00",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 96145206471
-    },
-    "ch6-mini2": {
-      "url": "https://archive.org/download/fn-v38-archive/38.00-CL-47291259.zip",
-      "version": "38.00",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 101372711167
-    },
-    "ch7-s1": {
-      "url": "https://archive.org/download/fn-v39-archive/39.00-CL-48444883.zip",
-      "version": "39.00",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 155247495991
-    },
-    "ch7-s3": {
-      "url": "https://archive.org/download/41.20-cl-55550516/41.20-CL-55550516.zip",
-      "version": "41.20",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 96407407168
-    },
-    "ch6-s1": {
-      "url": "https://archive.org/download/fortniteBuild33.20/Fortnite.7z",
-      "version": "33.20",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 118808310143
-    },
-    "ch7-s2": {
-      "url": "https://archive.org/download/fortnite_202603/Fortnite.rar",
-      "version": "40.00",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 106817993494
-    },
-    "ch4-s1": {
-      "url": "https://archive.org/download/23.20-cl-23783097/23.20-CL-23783097.zip",
-      "version": "23.20",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 33544852956
-    },
-    "ch5-s1": {
-      "url": "https://archive.org/download/28.30-cl-31511038.7z/28.30-CL-31511038.7z",
-      "version": "28.30",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 46055666663
+      "sizeBytes": 74419514811
     },
     "ch4-s5": {
+      "id": "ch4-s5",
+      "title": "Fortnite OG",
+      "chapter": 4,
+      "season": 5,
+      "buildVersion": "27.00",
+      "sizeGB": 21.19,
+      "downloadUrl": "https://cdn.cbn.lol/27.00",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch4-s5",
       "url": "https://cdn.cbn.lol/27.00",
       "version": "27.00",
       "servers": [
@@ -542,7 +907,64 @@
       ],
       "sizeBytes": 21191740399
     },
+    "ch5-s1": {
+      "id": "ch5-s1",
+      "title": "Chapter 5 Season 1",
+      "chapter": 5,
+      "season": 1,
+      "buildVersion": "28.30",
+      "sizeGB": 46.06,
+      "downloadUrl": "https://archive.org/download/28.30-cl-31511038.7z/28.30-CL-31511038.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch5-s1",
+      "url": "https://archive.org/download/28.30-cl-31511038.7z/28.30-CL-31511038.7z",
+      "version": "28.30",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 46055666663
+    },
+    "ch5-s2": {
+      "id": "ch5-s2",
+      "title": "Chapter 5 Season 2",
+      "chapter": 5,
+      "season": 2,
+      "buildVersion": "29.30",
+      "sizeGB": 59.49,
+      "downloadUrl": "https://fortforge.co.uk/download/38052f13-5afc-429a-a361-7a559285b5b4/build",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch5-s2",
+      "url": "https://fortforge.co.uk/download/38052f13-5afc-429a-a361-7a559285b5b4/build",
+      "version": "29.30",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 59492160383
+    },
     "ch5-s3": {
+      "id": "ch5-s3",
+      "title": "Chapter 5 Season 3",
+      "chapter": 5,
+      "season": 3,
+      "buildVersion": "30.30",
+      "sizeGB": 73.37,
+      "downloadUrl": "https://fortforge.co.uk/download/8b9818ef-ae3e-49e5-9e62-e3100ccbcffe/build",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch5-s3",
       "url": "https://fortforge.co.uk/download/8b9818ef-ae3e-49e5-9e62-e3100ccbcffe/build",
       "version": "30.30",
       "servers": [
@@ -558,6 +980,15 @@
       "sizeBytes": 73367000433
     },
     "ch5-s4": {
+      "id": "ch5-s4",
+      "title": "Chapter 5 Season 4",
+      "chapter": 5,
+      "season": 4,
+      "buildVersion": "31.40",
+      "sizeGB": 64.13,
+      "downloadUrl": "https://fortforge.co.uk/download/ab5f64a1-f49e-4a3c-add2-f31c33e7ca53/build",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch5-s4",
       "url": "https://fortforge.co.uk/download/ab5f64a1-f49e-4a3c-add2-f31c33e7ca53/build",
       "version": "31.40",
       "servers": [
@@ -572,37 +1003,16 @@
       ],
       "sizeBytes": 64131788085
     },
-    "ch4-s4": {
-      "url": "https://fortforge.co.uk/download/60c49654-8ab0-441d-9ef3-da9ee2f58e2d/build",
-      "version": "26.30",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 74419514811
-    },
-    "ch5-s2": {
-      "url": "https://fortforge.co.uk/download/38052f13-5afc-429a-a361-7a559285b5b4/build",
-      "version": "29.30",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 59492160383
-    },
     "ch5-remix": {
+      "id": "ch5-remix",
+      "title": "Chapter 5 Season 5 / Chapter 2 Remix",
+      "chapter": 5,
+      "season": 5,
+      "buildVersion": "32.00",
+      "sizeGB": 48.17,
+      "downloadUrl": "https://fortforge.co.uk/download/8d742309-e9de-4abb-859e-71915c0141e7/build",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch5-remix",
       "url": "https://fortforge.co.uk/download/8d742309-e9de-4abb-859e-71915c0141e7/build",
       "version": "32.00",
       "servers": [
@@ -617,7 +1027,232 @@
       ],
       "sizeBytes": 48165375351
     },
+    "ch6-s1": {
+      "id": "ch6-s1",
+      "title": "Chapter 6 Season 1",
+      "chapter": 6,
+      "season": 1,
+      "buildVersion": "33.20",
+      "sizeGB": 118.81,
+      "downloadUrl": "https://archive.org/download/fortniteBuild33.20/Fortnite.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch6-s1",
+      "url": "https://archive.org/download/fortniteBuild33.20/Fortnite.7z",
+      "version": "33.20",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 118808310143
+    },
+    "ch6-s2": {
+      "id": "ch6-s2",
+      "title": "Chapter 6 Season 2",
+      "chapter": 6,
+      "season": 2,
+      "buildVersion": "34.00",
+      "sizeGB": 49.19,
+      "downloadUrl": "https://archive.org/download/fn-v34-archive/34.00-CL-40446427.zip",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch6-s2",
+      "url": "https://archive.org/download/fn-v34-archive/34.00-CL-40446427.zip",
+      "version": "34.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 49194881985
+    },
+    "ch6-s3": {
+      "id": "ch6-s3",
+      "title": "Chapter 6 Season 3",
+      "chapter": 6,
+      "season": 3,
+      "buildVersion": "36.00",
+      "sizeGB": 85.27,
+      "downloadUrl": "https://archive.org/download/fn-v36-archive/36.00-CL-43214806.zip",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch6-s3",
+      "url": "https://archive.org/download/fn-v36-archive/36.00-CL-43214806.zip",
+      "version": "36.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 85268125327
+    },
+    "ch6-s4": {
+      "id": "ch6-s4",
+      "title": "Chapter 6 Season 4",
+      "chapter": 6,
+      "season": 4,
+      "buildVersion": "37.00",
+      "sizeGB": 96.15,
+      "downloadUrl": "https://archive.org/download/fn-v37-archive/37.00-CL-44501951.zip",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch6-s4",
+      "url": "https://archive.org/download/fn-v37-archive/37.00-CL-44501951.zip",
+      "version": "37.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 96145206471
+    },
+    "ch6-mini1": {
+      "id": "ch6-mini1",
+      "title": "Chapter 6 Mini Season 1",
+      "chapter": 6,
+      "season": 9,
+      "buildVersion": "35.30",
+      "sizeGB": 5.43,
+      "downloadUrl": "https://archive.org/download/fortnite-cert-cl-3532353-1.-7z/%2B%2BFortnite%2BCert-CL-3532353%20%281%29.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch6-mini1",
+      "url": "https://archive.org/download/fortnite-cert-cl-3532353-1.-7z/%2B%2BFortnite%2BCert-CL-3532353%20%281%29.7z",
+      "version": "35.30",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 5428813433
+    },
+    "ch6-mini2": {
+      "id": "ch6-mini2",
+      "title": "Chapter 6 Mini Season 2",
+      "chapter": 6,
+      "season": 10,
+      "buildVersion": "38.00",
+      "sizeGB": 101.37,
+      "downloadUrl": "https://archive.org/download/fn-v38-archive/38.00-CL-47291259.zip",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch6-mini2",
+      "url": "https://archive.org/download/fn-v38-archive/38.00-CL-47291259.zip",
+      "version": "38.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 101372711167
+    },
+    "ch7-s1": {
+      "id": "ch7-s1",
+      "title": "Chapter 7 Season 1",
+      "chapter": 7,
+      "season": 1,
+      "buildVersion": "39.00",
+      "sizeGB": 155.25,
+      "downloadUrl": "https://archive.org/download/fn-v39-archive/39.00-CL-48444883.zip",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch7-s1",
+      "url": "https://archive.org/download/fn-v39-archive/39.00-CL-48444883.zip",
+      "version": "39.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 155247495991
+    },
+    "ch7-s2": {
+      "id": "ch7-s2",
+      "title": "Chapter 7 Season 2",
+      "chapter": 7,
+      "season": 2,
+      "buildVersion": "40.00",
+      "sizeGB": 106.82,
+      "downloadUrl": "https://archive.org/download/fortnite_202603/Fortnite.rar",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch7-s2",
+      "url": "https://archive.org/download/fortnite_202603/Fortnite.rar",
+      "version": "40.00",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 106817993494
+    },
+    "ch7-s3": {
+      "id": "ch7-s3",
+      "title": "Chapter 7 Season 3",
+      "chapter": 7,
+      "season": 3,
+      "buildVersion": "41.20",
+      "sizeGB": 96.41,
+      "downloadUrl": "https://archive.org/download/41.20-cl-55550516/41.20-CL-55550516.zip",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch7-s3",
+      "url": "https://archive.org/download/41.20-cl-55550516/41.20-CL-55550516.zip",
+      "version": "41.20",
+      "servers": [
+        {
+          "name": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 96407407168
+    },
     "ch7-s4": {
+      "id": "ch7-s4",
+      "title": "Chapter 7 Season 4",
+      "chapter": 7,
+      "season": 4,
+      "buildVersion": "42.00",
+      "sizeGB": 145.32,
+      "downloadUrl": "https://fortforge.co.uk/download/34e37a10-4a84-4cee-861e-a96635693300/build",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch7-s4",
       "url": "https://fortforge.co.uk/download/34e37a10-4a84-4cee-861e-a96635693300/build",
       "version": "42.00",
       "servers": [
@@ -633,6 +1268,15 @@
       "sizeBytes": 145317973819
     },
     "ch7-mini1": {
+      "id": "ch7-mini1",
+      "title": "Chapter 7 Mini Season 1",
+      "chapter": 7,
+      "season": 11,
+      "buildVersion": "43.00",
+      "sizeGB": 150.57,
+      "downloadUrl": "https://fortforge.co.uk/download/ab2ab020-c255-4580-8754-71a9b035711b/build",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch7-mini1",
       "url": "https://fortforge.co.uk/download/ab2ab020-c255-4580-8754-71a9b035711b/build",
       "version": "43.00",
       "servers": [
@@ -645,7 +1289,30 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 150573772350
+      "sizeBytes": 150573772350,
+      "onlineProvider": {
+        "id": "ezfn-hybrid",
+        "name": "EZFN Hybrid",
+        "label": "EZFN Hybrid",
+        "protocolUri": "ezfn-hybrid://",
+        "installerUrl": "https://releases.ezfn.app/hybrid/latest/EZFN-Hybrid-Setup.msi",
+        "installPaths": [
+          "%LOCALAPPDATA%/Programs/EZFN Hybrid/EZFN Hybrid.exe",
+          "%LOCALAPPDATA%/EZFN Hybrid/EZFN Hybrid.exe",
+          "%LOCALAPPDATA%/Programs/EZFN Hybrid/EZFNHybrid.exe",
+          "%LOCALAPPDATA%/EZFN Hybrid/EZFNHybrid.exe"
+        ],
+        "executableNames": [
+          "EZFN Hybrid.exe",
+          "EZFNHybrid.exe",
+          "EZFN Hybrid Launcher.exe"
+        ],
+        "installDirNames": [
+          "EZFN Hybrid",
+          "EZFN Hybrid Launcher"
+        ],
+        "launchMode": "current"
+      }
     }
   }
 }

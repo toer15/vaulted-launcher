@@ -5,7 +5,8 @@
 
 import { getSession } from './auth'
 
-const API = 'https://site-710f0be1e3b24f2694e9e13b9ce4c84b.freebuff.page/api'
+export const FRIENDS_API_BASE = 'https://site-710f0be1e3b24f2694e9e13b9ce4c84b.freebuff.page/api'
+const API = FRIENDS_API_BASE
 
 export interface FriendRequest {
   from: string
@@ -27,9 +28,26 @@ export interface LobbyInfo {
   /** reachable from outside the local network */
   public: boolean
   updated: string
+  /** season key reported by a custom lobby service, e.g. ch1-s3 */
+  seasonId?: string | null
+  /** live player count when the service reports one */
+  players?: number
 }
 
 export type HostingFriend = LobbyInfo
+
+export const LOBBY_FRESH_MS = 30_000
+
+/** A lobby always represents at least its host, even without a count field. */
+export function lobbyPlayers(lobby: LobbyInfo): number {
+  return typeof lobby.players === 'number' && lobby.players > 0 ? Math.floor(lobby.players) : 1
+}
+
+/** Ignore relay entries whose host stopped heartbeating. */
+export function lobbyIsFresh(lobby: LobbyInfo): boolean {
+  const updated = Date.parse(lobby.updated)
+  return Number.isFinite(updated) && Date.now() - updated < LOBBY_FRESH_MS
+}
 
 export interface FriendsSummary {
   username: string

@@ -8,7 +8,7 @@
  */
 
 import defaultBuilds from '../assets/builds.json'
-import type { ShopEquipped } from '../types'
+import type { OnlineProviderConfig, ShopEquipped } from '../types'
 
 export const API_BASE =
   'https://site-c377de5341934c84b54b325555448242.freebuff.page'
@@ -240,12 +240,29 @@ export async function fetchActive(): Promise<ActiveCounts> {
 /* ---------------------------------------------------------------- manifest */
 
 export interface BuildSource {
+  /** stable card/build id, e.g. ch1-s3 */
+  id?: string
+  title?: string
+  /** version string, e.g. 3.6 */
+  buildVersion?: string
+  /** direct archive endpoint for the one-click download */
+  downloadUrl?: string
+  /** bucket fallback, e.g. {base}/{buildVersion}.zip when {id}.zip is absent */
+  fallbackDownloadUrl?: string
+  /** decimal gigabytes, precomputed for the card labels */
+  sizeGB?: number
+  /** which bundled runtime Play should use */
+  runtimeProfile?: 'legacy' | 'modern'
+  /** {AppDefaultBuildsDir}\{id} */
+  defaultInstallDir?: string
   url: string
   version?: string
   sha256?: string
   /** archive size in bytes, used by the library download labels */
   sizeBytes?: number
   servers?: Array<{ name: string; url: string }>
+  /** bundled community client that hosts this exact season */
+  onlineProvider?: OnlineProviderConfig
   /** extra seasons can declare their own chapter/season metadata */
   chapter?: number
   season?: number

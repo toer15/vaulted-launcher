@@ -395,6 +395,7 @@ export function FriendsView({ username, onBack, onSummary, onJoin }: FriendsView
               ))}
             </ul>
           </section>
+
         </>
       )}
     </div>

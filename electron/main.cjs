@@ -6,6 +6,9 @@ const crypto = require('node:crypto')
 const net = require('node:net')
 const { spawn, execFile } = require('node:child_process')
 const { autoUpdater } = require('electron-updater')
+const { joinHostedLobby, playHostedProject } = require('./hostedLaunchers.cjs')
+const { findRebootLobby } = require('./rebootBrowser.cjs')
+const { detectProvider, openInstaller, providerForId } = require('./onlineProviders.cjs')
 
 const DEV = process.argv.includes('--dev')
 const SMOKE = process.argv.includes('--smoke')
@@ -19,8 +22,12 @@ const SMOKE_SIZE = process.env.RIFT_SMOKE_SIZE ?? ''
 /** @type {BrowserWindow | null} */
 let mainWindow = null
 
-/** buildId -> { pid } */
+/** buildId -> { pid, injectorPid, startedAt, expectedExecutable } */
 const running = new Map()
+/** builds the user asked VAULTED to close, so their exit is not a crash */
+const expectedBuildCloses = new Set()
+/** buildId -> join watchdog (only auto-discovered lobby joins) */
+const joinWatchdogs = new Map()
 /** buildId -> AbortController */
 const downloads = new Map()
 /** buildId -> running archive extraction process */
@@ -202,8 +209,118 @@ function createWindow() {
 
 /* ------------------------------------------------------------------ builds */
 
-function buildsRoot() {
+function defaultInstallDir() {
   return path.join(app.getPath('userData'), 'builds')
+}
+
+function settingsFilePath() {
+  return path.join(app.getPath('userData'), 'settings.json')
+}
+
+/** User-editable global client defaults and per-season install state. */
+function profilesFilePath() {
+  return path.join(app.getPath('userData'), 'profiles.json')
+}
+
+function readProfilesFile() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(profilesFilePath(), 'utf8'))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function writeProfilesFile(next) {
+  try {
+    const document = next && typeof next === 'object' && !Array.isArray(next) ? next : {}
+    const target = profilesFilePath()
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    const temporary = `${target}.tmp`
+    fs.writeFileSync(temporary, JSON.stringify(document, null, 2), 'utf8')
+    fs.renameSync(temporary, target)
+    return { ok: true, profiles: document, path: target }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not save profiles.json.',
+    }
+  }
+}
+
+function normalizeInstallDir(value, fallback) {
+  const raw = String(value || '').trim()
+  if (!raw) return fallback
+  const expanded = raw.replace(/%([^%]+)%/g, (_match, name) => process.env[name] || _match)
+  return path.resolve(expanded)
+}
+
+const DEFAULT_ONLINE_SERVICE_URL = 'https://site-710f0be1e3b24f2694e9e13b9ce4c84b.freebuff.page/api'
+
+/** Persisted cloud source URL plus the folder every download is unpacked into. */
+function readAppSettings() {
+  const fallback = {
+    cloudSourceUrl: '',
+    onlineServiceUrl: DEFAULT_ONLINE_SERVICE_URL,
+    defaultInstallDir: defaultInstallDir(),
+    hostPublicLobby: true,
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(settingsFilePath(), 'utf8'))
+    const cloudSourceUrl = typeof parsed?.cloudSourceUrl === 'string' ? parsed.cloudSourceUrl.trim() : ''
+    const onlineServiceUrl =
+      typeof parsed?.onlineServiceUrl === 'string'
+        ? parsed.onlineServiceUrl.trim()
+        : DEFAULT_ONLINE_SERVICE_URL
+    return {
+      cloudSourceUrl: /^https?:\/\//i.test(cloudSourceUrl) ? cloudSourceUrl : '',
+      onlineServiceUrl: !onlineServiceUrl || /^(https?|wss?):\/\//i.test(onlineServiceUrl) ? onlineServiceUrl : '',
+      defaultInstallDir: normalizeInstallDir(parsed?.defaultInstallDir, fallback.defaultInstallDir),
+      hostPublicLobby: parsed?.hostPublicLobby !== false,
+    }
+  } catch {
+    return fallback
+  }
+}
+
+function writeAppSettings(next) {
+  const current = readAppSettings()
+  const cloudSourceUrl =
+    typeof next?.cloudSourceUrl === 'string' ? next.cloudSourceUrl.trim() : current.cloudSourceUrl
+  if (cloudSourceUrl && !/^https?:\/\//i.test(cloudSourceUrl)) {
+    return { ok: false, error: 'Cloud source must be an http(s) URL.', settings: current }
+  }
+  const onlineServiceUrl =
+    typeof next?.onlineServiceUrl === 'string'
+      ? next.onlineServiceUrl.trim()
+      : current.onlineServiceUrl
+  if (onlineServiceUrl && !/^(https?|wss?):\/\//i.test(onlineServiceUrl)) {
+    return { ok: false, error: 'Online server must be an http(s) or ws(s) URL.', settings: current }
+  }
+  const hostPublicLobby =
+    typeof next?.hostPublicLobby === 'boolean' ? next.hostPublicLobby : current.hostPublicLobby
+  const resetInstallDir =
+    next && Object.prototype.hasOwnProperty.call(next, 'defaultInstallDir') && !String(next.defaultInstallDir || '').trim()
+  const nextInstallDir = resetInstallDir
+    ? defaultInstallDir()
+    : normalizeInstallDir(next?.defaultInstallDir, current.defaultInstallDir)
+  try {
+    fs.mkdirSync(nextInstallDir, { recursive: true })
+    fs.mkdirSync(path.dirname(settingsFilePath()), { recursive: true })
+    const settings = { cloudSourceUrl, onlineServiceUrl, defaultInstallDir: nextInstallDir, hostPublicLobby }
+    fs.writeFileSync(settingsFilePath(), JSON.stringify(settings, null, 2), 'utf8')
+    return { ok: true, settings }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : 'Could not save settings.json.',
+      settings: current,
+    }
+  }
+}
+
+function buildsRoot() {
+  return readAppSettings().defaultInstallDir
 }
 
 function assertBuild(payload) {
@@ -290,17 +407,34 @@ function folderForExecutable(executable) {
   return match ? match[1] : path.dirname(executable)
 }
 
+/** A folder named by season id, version, or CL number is a build candidate. */
+function looksLikeSeasonBuildFolder(name) {
+  const value = String(name || '').trim()
+  return (
+    /^(?:ch(?:apter)?[\s_-]*\d+[\s_-]*(?:s|season)[\s_-]*\d+|c\d{1,2}[\s_-]?s\d{1,2}|ch\d+-s\d+)$/i.test(value) ||
+    /\b\d{1,2}\.\d{1,2}(?:\.\d{1,2})?\b/.test(value) ||
+    /CL[-_ ]?\d{4,}/i.test(value)
+  )
+}
+
 /**
  * Looks through the usual places a downloaded build ends up and returns each
  * folder that contains FortniteClient-Win64-Shipping.exe. The renderer maps the
  * version in the folder name to a chapter/season, so no paths are typed by hand.
  */
-function scanForBuilds() {
+function scanForBuilds(extraRoots = []) {
   const home = os.homedir()
+  const requested = Array.isArray(extraRoots)
+    ? extraRoots.map((root) => (typeof root === 'string' ? root.trim() : '')).filter(Boolean)
+    : []
+  const explicitRoots = Array.from(new Set(requested.map((root) => path.resolve(root))))
   const roots = [
+    // Settings roots and exact manifest paths are scanned first so a large
+    // Downloads or D:\ walk cannot exhaust the budget before them.
+    ...explicitRoots,
     // VAULTED's own downloads are the most important and can be buried a few
     // folders deep, so do not let a large D:\ scan exhaust the budget first.
-    path.join(app.getPath('userData'), 'builds'),
+    buildsRoot(),
     path.join(home, 'Downloads'),
     path.join(home, 'Desktop'),
     path.join(home, 'Documents'),
@@ -319,6 +453,19 @@ function scanForBuilds() {
   const seen = new Set()
   let budget = 6000
 
+  const addFolder = (folder) => {
+    try {
+      if (!folder || !fs.statSync(folder).isDirectory()) return
+      if (fs.readdirSync(folder).length === 0) return
+    } catch {
+      return
+    }
+    const key = path.resolve(folder).toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    found.push(path.resolve(folder))
+  }
+
   const walk = (dir, depth) => {
     if (budget <= 0 || depth > 8) return
 
@@ -335,20 +482,60 @@ function scanForBuilds() {
 
       const full = path.join(dir, entry.name)
       if (entry.isDirectory()) {
+        // An external launcher can own the client exe; the FortniteGame data
+        // folder is enough to identify this directory as a build root.
+        if (entry.name.toLowerCase() === 'fortnitegame') addFolder(dir)
         walk(full, depth + 1)
       } else if (isClientExecutableName(entry.name)) {
         const root = folderForExecutable(full)
-        const key = root.toLowerCase()
-        if (!seen.has(key) && fs.existsSync(root)) {
-          seen.add(key)
-          found.push(root)
-        }
+        addFolder(root)
       }
     }
   }
 
+  const explicitSet = new Set(explicitRoots.map((root) => root.toLowerCase()))
   for (const root of roots) {
-    if (fs.existsSync(root)) walk(root, 0)
+    if (!fs.existsSync(root)) continue
+    walk(root, 0)
+
+    // External launchers can own the client executable, so a build folder may
+    // contain no FortniteGame tree or Shipping.exe. For the explicitly chosen
+    // builds root, add version-named direct subfolders that produced no deeper
+    // match. Downloaded roots with a real client are already covered above.
+    if (!explicitSet.has(path.resolve(root).toLowerCase())) continue
+
+    let entries
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    const rootKey = path.resolve(root).toLowerCase()
+    const covered = (child) =>
+      found.some((folder) => {
+        const key = folder.toLowerCase()
+        const prefix = `${child.toLowerCase()}${path.sep}`
+        return key === child.toLowerCase() || key.startsWith(prefix)
+      })
+
+    let added = false
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !looksLikeSeasonBuildFolder(entry.name)) continue
+      const child = path.resolve(root, entry.name)
+      if (covered(child)) continue
+      addFolder(child)
+      added = true
+    }
+
+    // The player may point the root directly at one season folder.
+    if (!added && looksLikeSeasonBuildFolder(path.basename(rootKey))) {
+      const hasCandidate = found.some((folder) => {
+        const key = folder.toLowerCase()
+        return key === rootKey || key.startsWith(`${rootKey}${path.sep}`)
+      })
+      if (!hasCandidate) addFolder(root)
+    }
   }
 
   return found
@@ -363,10 +550,109 @@ function abortError() {
 /* ----------------------------------------------------- private server runtime */
 
 /** Packaged runtime files live next to app.asar; dev uses the repo folder. */
-function runtimeRoot() {
+function bundledRuntimeRoot() {
   const packaged = process.resourcesPath ? path.join(process.resourcesPath, 'runtime') : ''
-  if (packaged && fs.existsSync(path.join(packaged, 'VAULTED-Backend.zip'))) return packaged
+  // Prefer an existing packaged runtime even when it is incomplete: returning
+  // the repo fallback would hide the broken installed runtime from diagnostics.
+  if (packaged && fs.existsSync(packaged)) return packaged
   return path.join(__dirname, '..', 'runtime')
+}
+
+/** Every build launches against the runtime copy inside the app's data folder. */
+function runtimeRoot() {
+  return path.join(app.getPath('userData'), 'runtime')
+}
+
+let runtimeInstallPromise = null
+
+/** Copy missing or changed runtime files beside the app data, once per launch. */
+function ensureRuntimeInstalled() {
+  if (runtimeInstallPromise) return runtimeInstallPromise
+  runtimeInstallPromise = (async () => {
+    const source = bundledRuntimeRoot()
+    const target = runtimeRoot()
+    if (path.resolve(source) === path.resolve(target)) return target
+    if (!fs.existsSync(source)) {
+      throw new Error('The bundled runtime folder is missing from this installation. Reinstall VAULTED.')
+    }
+    await fs.promises.mkdir(target, { recursive: true })
+    const sync = async (from, to) => {
+      const entries = await fs.promises.readdir(from, { withFileTypes: true })
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) continue
+        const sourcePath = path.join(from, entry.name)
+        const targetPath = path.join(to, entry.name)
+        if (entry.isDirectory()) {
+          await fs.promises.mkdir(targetPath, { recursive: true })
+          await sync(sourcePath, targetPath)
+          continue
+        }
+        if (!entry.isFile()) continue
+        const [incoming, current] = await Promise.all([
+          fs.promises.stat(sourcePath),
+          fs.promises.stat(targetPath).catch(() => null),
+        ])
+        if (!current || current.size !== incoming.size || current.mtimeMs < incoming.mtimeMs) {
+          await fs.promises.copyFile(sourcePath, targetPath)
+        }
+      }
+    }
+    await sync(source, target)
+    return target
+  })().catch((error) => {
+    runtimeInstallPromise = null
+    throw error
+  })
+  return runtimeInstallPromise
+}
+
+/** Files without which every launch is guaranteed to fail. */
+const REQUIRED_RUNTIME_FILES = [
+  ['VaultedInjector.exe', 'login injector'],
+  ['Tellurium.dll', 'redirect DLL'],
+  ['VAULTED-Server.dll', 'local server DLL'],
+  ['Memory.dll', 'memory library'],
+  ['matchmaker.cjs', 'matchmaker'],
+  ['join-watchdog.cjs', 'join watchdog'],
+  ['portmap.cjs', 'port mapper'],
+  ['playlist-paths.json', 'playlist map'],
+  ['VAULTED-Backend.zip', 'private-server backend'],
+  [path.join('neonite-patch', 'vaulted-inventory.cjs'), 'inventory patch'],
+  [path.join('neonite-patch', 'profile.js'), 'profile patch'],
+  [path.join('neonite-patch', 'api', 'controllers', 'AuthController.js'), 'auth controller'],
+  [path.join('neonite-patch', 'api', 'controllers', 'MatchMakingController.js'), 'matchmaking controller'],
+  [path.join('neonite-patch', 'api', 'controllers', 'VaultedFriendsController.js'), 'friends controller'],
+  [path.join('neonite-patch', 'config', 'matchmakingRoutes.js'), 'matchmaking routes'],
+  [path.join('neonite-patch', 'config', 'vaultedFriendsRoutes.js'), 'friends routes'],
+]
+
+function runtimeProblems() {
+  const root = runtimeRoot()
+  const problems = []
+  for (const [name, label] of REQUIRED_RUNTIME_FILES) {
+    const file = path.join(root, name)
+    let stat
+    try {
+      stat = fs.statSync(file)
+    } catch {
+      problems.push(`Runtime file missing: ${name} (${label})`)
+      continue
+    }
+    if (!stat.isFile()) {
+      problems.push(`Runtime file missing: ${name} (${label})`)
+      continue
+    }
+    if (stat.size === 0) {
+      problems.push(`Runtime file is empty: ${name} (${label})`)
+      continue
+    }
+    try {
+      fs.accessSync(file, fs.constants.R_OK)
+    } catch {
+      problems.push(`Runtime file is unreadable: ${name} (${label})`)
+    }
+  }
+  return problems
 }
 
 function backendPaths() {
@@ -735,12 +1021,25 @@ function joinTargetFromPayload(payload) {
 }
 
 function lanAddress() {
+  const candidates = []
   for (const list of Object.values(os.networkInterfaces())) {
     for (const address of list || []) {
-      if (address.family === 'IPv4' && !address.internal) return address.address
+      if (address.family !== 'IPv4' || address.internal) continue
+      const ip = address.address
+      // Prefer the normal home-LAN ranges over a VPN/virtual adapter; friends
+      // on the same WiFi cannot reach a 100.x tunnel address.
+      const score = ip.startsWith('192.168.')
+        ? 3
+        : ip.startsWith('10.')
+          ? 2
+          : /^172\.(1[6-9]|2\d|3[01])\./.test(ip)
+            ? 1
+            : 0
+      candidates.push({ ip, score })
     }
   }
-  return null
+  candidates.sort((a, b) => b.score - a.score)
+  return candidates[0]?.ip || null
 }
 
 function readGameServerState() {
@@ -1314,6 +1613,77 @@ function startPlaylistWatcher() {
   playlistWatcher.unref?.()
 }
 
+/** Read the tail of a log without loading a large Fortnite log in full. */
+function readLogTail(file, maxBytes = 750_000) {
+  try {
+    const stat = fs.statSync(file)
+    const length = Math.min(stat.size, maxBytes)
+    const buffer = Buffer.alloc(length)
+    const fd = fs.openSync(file, 'r')
+    try {
+      fs.readSync(fd, buffer, 0, length, Math.max(0, stat.size - length))
+    } finally {
+      fs.closeSync(fd)
+    }
+    return buffer.toString('utf8')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Text from the live client log(s) for a launch. Old backup logs are skipped:
+ * they often contain a completed login from a previous session and would make
+ * the watchdog think this join succeeded before it even started.
+ */
+function recentFortniteLogText(startedAt, expectedExecutable) {
+  const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local')
+  const logDirectory = path.join(localAppData, 'FortniteGame', 'Saved', 'Logs')
+  let files
+  try {
+    files = fs
+      .readdirSync(logDirectory)
+      .filter((name) => /^FortniteGame(?:_\d+)?\.log$/i.test(name))
+      .map((name) => {
+        const file = path.join(logDirectory, name)
+        return { file, stat: fs.statSync(file) }
+      })
+      .filter(({ stat }) => stat.isFile() && stat.mtimeMs >= startedAt - 15_000)
+      .sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs)
+  } catch {
+    return ''
+  }
+
+  let text = ''
+  for (const { file } of files) {
+    if (!logBelongsToBuild(file, expectedExecutable)) continue
+    text += readLogTail(file)
+  }
+  return text
+}
+
+/**
+ * Turn the client log into a short, human-readable reason for an unexpected
+ * close. Prefer the last error/fatal/exception lines, but fall back to the last
+ * lines of the log when the client died without reporting an error.
+ */
+function summarizeClientExit(startedAt, expectedExecutable) {
+  const text = recentFortniteLogText(startedAt, expectedExecutable)
+  if (!text.trim()) return ''
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const failures = lines.filter((line) =>
+    /\b(error|fatal|exception|crash|failed|failure|assert(?:ion)?|abort)\b/i.test(line),
+  )
+  const picked = (failures.length > 0 ? failures : lines).slice(-6)
+  return picked
+    .map((line) => line.replace(/^\[[^\]]+\]\s*/, '').slice(0, 320))
+    .join('\n')
+    .slice(0, 1800)
+}
+
 /** Read enough of a log to identify the build without loading a 30 MB log. */
 function logBelongsToBuild(file, expectedExecutable) {
   if (!expectedExecutable) return true
@@ -1539,7 +1909,13 @@ async function startGameServer(payload, options = {}) {
     send('arc:launch-status', { id: payload?.id, message: 'Starting matchmaking on the local game server…' })
     const memoryDll = path.join(runtimeRoot(), 'Memory.dll')
     const versionMajor = Number(String(payload?.version || '').split('.')[0])
-    if (Number.isFinite(versionMajor) && versionMajor > 0 && versionMajor <= 10 && fs.existsSync(memoryDll)) {
+    const runtimeProfile =
+      payload?.runtimeProfile === 'legacy' || payload?.runtimeProfile === 'modern'
+        ? payload.runtimeProfile
+        : Number.isFinite(versionMajor) && versionMajor > 0 && versionMajor <= 10
+          ? 'legacy'
+          : 'modern'
+    if (runtimeProfile === 'legacy' && fs.existsSync(memoryDll)) {
       await injectDll(state.pid, memoryDll)
       await delay(800)
     }
@@ -1563,6 +1939,53 @@ async function startGameServer(payload, options = {}) {
     await stopGameServer()
     throw error
   }
+}
+
+/**
+ * Watch an automatic public-lobby join after the client has started. The join
+ * launch resolves before Fortnite has necessarily connected, so this is the
+ * only place that can distinguish a real join from a host disappearing during
+ * loading. Explicit friend joins never install this watchdog.
+ */
+function startJoinWatchdog({ id, pid, join, startedAt, expectedExecutable }) {
+  if (!id || !join?.host) return
+  stopJoinWatchdog(id)
+
+  let watchdogModule
+  try {
+    watchdogModule = require(path.join(runtimeRoot(), 'join-watchdog.cjs'))
+  } catch (error) {
+    console.warn(`[VAULTED] Join watchdog unavailable: ${error instanceof Error ? error.message : error}`)
+    return
+  }
+
+  const watchdog = watchdogModule.createJoinWatchdog({
+    host: join.host,
+    startedAt,
+    timeoutMs: 75_000,
+    readLog: () => recentFortniteLogText(startedAt, expectedExecutable),
+    isAlive: () => processAlive(pid) && running.get(id)?.pid === pid,
+    onFailed: (reason) => {
+      if (running.get(id)?.pid !== pid) return
+      console.warn(`[VAULTED] Join to ${join.host}:${join.port} failed: ${reason}`)
+      send('arc:join-failed', {
+        id,
+        host: join.host,
+        port: join.port,
+        reason,
+      })
+    },
+  })
+  joinWatchdogs.set(id, watchdog)
+  watchdog.start()
+}
+
+function stopJoinWatchdog(id) {
+  if (!id) return
+  const watchdog = joinWatchdogs.get(id)
+  if (!watchdog) return
+  watchdog.stop()
+  joinWatchdogs.delete(id)
 }
 
 /** Wait for the listen port that the host opens after the server DLL loads. */
@@ -1761,16 +2184,136 @@ function extractArchive(archivePath, destination, controller, id) {
   })
 }
 
-const MAX_DOWNLOAD_CONNECTIONS = 8
-const MIN_PARALLEL_BYTES = 4 * 1024 * 1024
+// Archive.org is the main source and caps useful concurrency around a dozen
+// sockets. A small chunk queue keeps every socket busy and prevents one slow
+// tail request from holding up the last gigabytes of a build.
+const MAX_DOWNLOAD_CONNECTIONS = 10
+const MIN_PARALLEL_BYTES = 2 * 1024 * 1024
+const DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+const DOWNLOAD_LARGE_CHUNK_BYTES = 16 * 1024 * 1024
+const DOWNLOAD_MAX_RANGES = 2048
+const DOWNLOAD_STALL_MS = 30_000
+const DOWNLOAD_ATTEMPTS = 3
 const PROGRESS_INTERVAL_MS = 100
 const DOWNLOAD_HEADERS = {
   'User-Agent': 'VAULTED-Launcher/1.1',
   // byte ranges must refer to the archive itself, not a compressed response
   'Accept-Encoding': 'identity',
 }
+const DOWNLOAD_META_SUFFIX = '.part.json'
 
 class RangeUnsupportedError extends Error {}
+
+function downloadMetaPath(partPath) {
+  return `${partPath}${DOWNLOAD_META_SUFFIX.slice('.part'.length)}`
+}
+
+function writeDownloadMeta(partPath, value) {
+  try {
+    const file = downloadMetaPath(partPath)
+    const temporary = `${file}.tmp`
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(temporary, JSON.stringify({ version: 1, ...value, updatedAt: new Date().toISOString() }))
+    fs.renameSync(temporary, file)
+  } catch (error) {
+    console.warn(`[VAULTED] Could not save download progress: ${error instanceof Error ? error.message : error}`)
+  }
+}
+
+function removeDownloadMeta(partPath) {
+  try {
+    fs.rmSync(downloadMetaPath(partPath), { force: true })
+  } catch {
+    /* nothing to remove */
+  }
+}
+
+function downloadMetaRecords() {
+  const root = path.resolve(buildsRoot())
+  const records = []
+  let folders
+  try {
+    folders = fs.readdirSync(root, { withFileTypes: true })
+  } catch {
+    return records
+  }
+
+  for (const folder of folders) {
+    if (!folder.isDirectory()) continue
+    let files
+    try {
+      files = fs.readdirSync(path.join(root, folder.name), { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of files) {
+      if (!entry.isFile() || !entry.name.endsWith(DOWNLOAD_META_SUFFIX)) continue
+      const file = path.join(root, folder.name, entry.name)
+      let meta
+      try {
+        meta = JSON.parse(fs.readFileSync(file, 'utf8'))
+      } catch {
+        continue
+      }
+      if (!meta || typeof meta !== 'object') continue
+      const partPath = path.resolve(String(meta.partPath || ''))
+      const relative = path.relative(root, partPath)
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) continue
+      if (!partPath.toLowerCase().endsWith('.part') || !fs.existsSync(partPath)) continue
+      records.push({ meta, partPath, file })
+    }
+  }
+
+  // If a previous launch failed to recognise an interruption and started a
+  // second part for the same season, keep the most-progressed one. That is the
+  // one worth resuming and the one the user should see.
+  return records.sort((a, b) => (Number(b.meta.received) || 0) - (Number(a.meta.received) || 0))
+}
+
+function findResumableDownload({ id, key, url, sha256 }) {
+  for (const { meta, partPath } of downloadMetaRecords()) {
+    // The library can regenerate a build's random id (for example after the
+    // catalogue is rebuilt), but a season's folder key is stable. Match on the
+    // key so an interruption still resumes after that id changes.
+    if (meta.key !== key) continue
+    if (String(meta.url || '') !== String(url)) continue
+    if (normalizeSha256(meta.sha256) !== sha256) continue
+    if (meta.received == null || meta.total == null) continue
+    return { ...meta, partPath }
+  }
+  return null
+}
+
+/** Used by the renderer after a restart/crash to offer Continue download. */
+function listInterruptedDownloads() {
+  const root = path.resolve(buildsRoot())
+  const items = []
+  const seen = new Set()
+  for (const { meta, partPath } of downloadMetaRecords()) {
+    if (!meta.id || typeof meta.id !== 'string') continue
+    // Multiple stale partials can exist for one season after a source changed;
+    // records are most-progressed-first, so only surface the best one.
+    const identity = String(meta.key || meta.id)
+    if (seen.has(identity)) continue
+    const received = Number(meta.received) || 0
+    const total = Number(meta.total) || 0
+    if (received <= 0) continue
+    if (total > 0 && received >= total) continue
+    const folder = path.dirname(partPath)
+    if (findExecutable(folder)) continue
+    seen.add(identity)
+    items.push({
+      id: meta.id,
+      key: String(meta.key || ''),
+      url: String(meta.url || ''),
+      sha256: meta.sha256 || null,
+      received,
+      total,
+      percent: total > 0 ? Math.min(99, Math.round((received / total) * 100)) : null,
+    })
+  }
+  return items
+}
 
 function archiveName(parsed) {
   let name = ''
@@ -1868,7 +2411,62 @@ async function inspectDownloadedFile(filePath, contentType, contentDisposition, 
 
 function downloadConnectionCount(total) {
   if (total < MIN_PARALLEL_BYTES) return 1
-  return Math.min(MAX_DOWNLOAD_CONNECTIONS, Math.max(2, Math.ceil(total / (4 * 1024 * 1024))))
+  if (total < 8 * 1024 * 1024) return 2
+  if (total < 64 * 1024 * 1024) return 4
+  if (total < 256 * 1024 * 1024) return 8
+  if (total < 2 * 1024 * 1024 * 1024) return 10
+  return MAX_DOWNLOAD_CONNECTIONS
+}
+
+/** Split a file into small resume-friendly chunks, not one range per socket. */
+function planDownloadRanges(total) {
+  // Multi-gigabyte builds use larger chunks so request setup cannot become a
+  // meaningful share of the download; smaller builds keep more workers busy.
+  const chunkBytes = total >= 512 * 1024 * 1024 ? DOWNLOAD_LARGE_CHUNK_BYTES : DOWNLOAD_CHUNK_BYTES
+  const chunks = Math.max(1, Math.min(DOWNLOAD_MAX_RANGES, Math.ceil(total / chunkBytes)))
+  const size = Math.ceil(total / chunks)
+  const ranges = []
+  for (let start = 0; start < total; start += size) {
+    ranges.push({ start, end: Math.min(total - 1, start + size - 1), received: 0 })
+  }
+  return ranges
+}
+
+function downloadCoverage(ranges, received) {
+  const intervals = []
+  if (Array.isArray(ranges) && ranges.length > 0) {
+    for (const range of ranges) {
+      const start = Math.max(0, Number(range?.start) || 0)
+      const end = Math.max(start, Number(range?.end) || 0)
+      const done = Math.min(end - start + 1, Math.max(0, Number(range?.received) || 0))
+      if (done > 0) intervals.push([start, start + done])
+    }
+  } else if (received > 0) {
+    intervals.push([0, received])
+  }
+
+  intervals.sort((a, b) => a[0] - b[0])
+  const merged = []
+  for (const interval of intervals) {
+    const last = merged[merged.length - 1]
+    if (last && interval[0] <= last[1]) last[1] = Math.max(last[1], interval[1])
+    else merged.push([interval[0], interval[1]])
+  }
+  return merged
+}
+
+/** Carry bytes already on disk into a new chunk plan after the plan changes. */
+function withDownloadCoverage(planned, coverage) {
+  return planned.map(({ start, end }) => {
+    let cursor = start
+    for (const [from, to] of coverage) {
+      if (to <= cursor) continue
+      if (from > cursor) break
+      cursor = Math.min(end + 1, Math.max(cursor, to))
+      if (cursor >= end + 1) break
+    }
+    return { start, end, received: cursor - start }
+  })
 }
 
 /** Ask for one byte so the host tells us both the archive size and range support. */
@@ -1910,17 +2508,36 @@ async function writeAt(handle, buffer, position) {
   }
 }
 
-async function downloadSingleStream(parsed, partPath, signal, onTotal, onChunk) {
-  const response = await fetch(parsed, { signal, redirect: 'follow', headers: DOWNLOAD_HEADERS })
+async function downloadSingleStream(parsed, partPath, signal, onTotal, onChunk, resumeOffset = 0, onRestart = null) {
+  let offset = Math.max(0, Number(resumeOffset) || 0)
+  const response = await fetch(parsed, {
+    signal,
+    redirect: 'follow',
+    headers: {
+      ...DOWNLOAD_HEADERS,
+      ...(offset > 0 ? { Range: `bytes=${offset}-` } : {}),
+    },
+  })
   if (!response.ok) throw new Error(`Download failed: HTTP ${response.status} ${response.statusText}`)
   if (!response.body) throw new Error('The server returned an empty response.')
 
-  onTotal(Number(response.headers.get('content-length') ?? 0))
+  // If the host ignores the resume range, start the file over rather than
+  // appending a second full copy after the partial bytes.
+  if (offset > 0 && response.status !== 206) {
+    offset = 0
+    onRestart?.()
+  }
+  const contentLength = Number(response.headers.get('content-length') ?? 0)
+  onTotal(offset + contentLength)
 
-  const handle = await fs.promises.open(partPath, 'w')
+  const handle = await fs.promises.open(partPath, offset > 0 ? 'r+' : 'w')
   try {
+    if (offset > 0) await handle.truncate(offset)
+    let position = offset
     for await (const chunk of response.body) {
-      await handle.write(chunk)
+      // Positional writes keep the bytes before the saved offset intact.
+      await writeAt(handle, chunk, position)
+      position += chunk.length
       onChunk(chunk.length)
     }
   } finally {
@@ -1928,19 +2545,12 @@ async function downloadSingleStream(parsed, partPath, signal, onTotal, onChunk) 
   }
 }
 
-async function downloadParallel(parsed, partPath, total, signal, onChunk) {
-  const connections = downloadConnectionCount(total)
-  if (connections <= 1) throw new RangeUnsupportedError('The archive is too small to split.')
-
-  const segmentSize = Math.ceil(total / connections)
-  const ranges = []
-  for (let index = 0; index < connections; index += 1) {
-    const start = index * segmentSize
-    if (start >= total) break
-    ranges.push({ start, end: Math.min(total - 1, start + segmentSize - 1) })
+async function downloadParallel(parsed, partPath, total, ranges, signal, onChunk) {
+  if (!Array.isArray(ranges) || ranges.length <= 1) {
+    throw new RangeUnsupportedError('The archive is too small to split.')
   }
 
-  const prep = await fs.promises.open(partPath, 'w')
+  const prep = await fs.promises.open(partPath, fs.existsSync(partPath) ? 'r+' : 'w')
   try {
     await prep.truncate(total)
   } finally {
@@ -1951,42 +2561,98 @@ async function downloadParallel(parsed, partPath, total, signal, onChunk) {
   const abortWorkers = () => workers.abort()
   signal.addEventListener('abort', abortWorkers, { once: true })
 
-  const tasks = ranges.map(async ({ start, end }) => {
-    // A separate handle per range avoids concurrent writes racing through one
-    // file descriptor. Positional writes still target this range's exact slice.
+  const pending = ranges.filter((range) => {
+    const length = range.end - range.start + 1
+    range.received = Math.min(length, Math.max(0, Number(range.received) || 0))
+    return range.received < length
+  })
+
+  const downloadRange = async (handle, range) => {
+    const length = range.end - range.start + 1
+    let attempts = 0
+
+    while (true) {
+      let offset = Math.min(length, Math.max(0, Number(range.received) || 0))
+      range.received = offset
+      if (offset >= length) return
+
+      const attempt = new AbortController()
+      const onAbort = () => attempt.abort()
+      let stallTimer = null
+      const resetStall = () => {
+        if (stallTimer) clearTimeout(stallTimer)
+        stallTimer = setTimeout(() => attempt.abort(new Error('Download connection stalled')), DOWNLOAD_STALL_MS)
+        stallTimer.unref?.()
+      }
+      workers.signal.addEventListener('abort', onAbort, { once: true })
+
+      try {
+        resetStall()
+        const response = await fetch(parsed, {
+          signal: attempt.signal,
+          redirect: 'follow',
+          headers: { ...DOWNLOAD_HEADERS, Range: `bytes=${range.start + offset}-${range.end}` },
+        })
+
+        if (response.status !== 206) {
+          try {
+            await response.body?.cancel()
+          } catch {
+            /* ignore */
+          }
+          if (response.status === 200) throw new RangeUnsupportedError('The server did not honor byte ranges.')
+          throw new Error(`Download range failed: HTTP ${response.status} ${response.statusText}`)
+        }
+        if (!response.body) throw new Error('The server returned an empty range response.')
+
+        const reader = response.body.getReader()
+        let position = range.start + offset
+        try {
+          while (true) {
+            resetStall()
+            const { done, value } = await reader.read()
+            if (done) break
+            if (position + value.length > range.end + 1) {
+              throw new Error('The server returned too many bytes for a range.')
+            }
+            await writeAt(handle, value, position)
+            position += value.length
+            range.received = position - range.start
+            onChunk(value.length)
+          }
+        } finally {
+          reader.releaseLock()
+        }
+
+        if (position !== range.end + 1) throw new Error('The server returned an incomplete byte range.')
+        return
+      } catch (error) {
+        if (signal.aborted || workers.signal.aborted) throw abortError()
+        if (error instanceof RangeUnsupportedError) throw error
+        attempts += 1
+        if (attempts >= DOWNLOAD_ATTEMPTS) throw error
+        // Keep completed bytes in this chunk and retry from the new offset.
+        await delay(400 * attempts)
+      } finally {
+        if (stallTimer) clearTimeout(stallTimer)
+        workers.signal.removeEventListener('abort', onAbort)
+      }
+    }
+  }
+
+  const workerCount = Math.min(MAX_DOWNLOAD_CONNECTIONS, Math.max(1, downloadConnectionCount(total)), pending.length)
+  let next = 0
+  const tasks = Array.from({ length: workerCount }, async () => {
+    // One positional-write handle per worker; ranges still write to their own
+    // slice without racing another worker.
     const handle = await fs.promises.open(partPath, 'r+')
     try {
-      const response = await fetch(parsed, {
-        signal: workers.signal,
-        redirect: 'follow',
-        headers: { ...DOWNLOAD_HEADERS, Range: `bytes=${start}-${end}` },
-      })
-
-      if (response.status !== 206) {
-        try {
-          await response.body?.cancel()
-        } catch {
-          /* ignore */
-        }
-        throw new RangeUnsupportedError('The server did not honor byte ranges.')
+      while (true) {
+        const range = pending[next]
+        next += 1
+        if (!range) return
+        await downloadRange(handle, range)
       }
-      if (!response.body) throw new Error('The server returned an empty range response.')
-
-      const reader = response.body.getReader()
-      let position = start
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          await writeAt(handle, value, position)
-          position += value.length
-          onChunk(value.length)
-        }
-      } finally {
-        reader.releaseLock()
-      }
-
-      if (position !== end + 1) throw new Error('The server returned an incomplete byte range.')
     } finally {
       await handle.close()
     }
@@ -2091,8 +2757,27 @@ async function unpackNestedArchives(root, downloadedArchive, controller, id) {
  * connections can fill the pipe at once; hosts without range support fall back
  * to a normal stream. Used by the IPC handler and by the smoke test.
  */
+/** HEAD probe used only when a bucket provides a version.zip fallback. */
+async function archiveReachable(url) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8_000)
+  try {
+    const response = await fetch(url, {
+      method: 'HEAD',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: { 'cache-control': 'no-cache' },
+    })
+    return response.ok || response.status === 405 || response.status === 501
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function downloadBuild(payload) {
-  const { id, key, url } = payload ?? {}
+  let { id, key, url } = payload ?? {}
   if (typeof id !== 'string' || !id) throw new Error('Invalid download request.')
   const expectedSha256 = normalizeSha256(payload?.sha256)
 
@@ -2104,6 +2789,25 @@ async function downloadBuild(payload) {
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new Error('Only http(s) download links are supported.')
+  }
+
+  // Direct-bucket mode uses {base}/{season.id}.zip and falls back to the
+  // version.zip name when the bucket stores builds that way.
+  const fallbackUrl = String(payload?.fallbackUrl || '').trim()
+  if (fallbackUrl && fallbackUrl !== String(parsed)) {
+    try {
+      const fallbackParsed = new URL(fallbackUrl)
+      if (
+        (fallbackParsed.protocol === 'http:' || fallbackParsed.protocol === 'https:') &&
+        !(await archiveReachable(String(parsed))) &&
+        (await archiveReachable(fallbackUrl))
+      ) {
+        parsed = fallbackParsed
+        url = fallbackUrl
+      }
+    } catch {
+      /* an invalid fallback never blocks the primary source */
+    }
   }
 
   const safeKey = String(key ?? id).replace(/[^a-z0-9_-]/gi, '') || 'build'
@@ -2118,29 +2822,74 @@ async function downloadBuild(payload) {
   }
   await fs.promises.mkdir(targetDir, { recursive: true })
 
-  const requestedName = archiveName(parsed)
-  let filePath = uniqueFilePath(targetDir, requestedName)
-  // Never reuse or remove a previous .part file. A cancelled download stays on
-  // disk for manual recovery.
-  const partPath = uniqueFilePath(targetDir, `${requestedName}.part`)
+  const resume = findResumableDownload({ id, key: safeKey, url: String(parsed), sha256: expectedSha256 })
+  const requestedName = resume?.requestedName ? path.basename(String(resume.requestedName)) : archiveName(parsed)
+  // Reuse the interrupted .part when its metadata matches this exact source.
+  // Otherwise never overwrite an older partial download.
+  let partPath = resume?.partPath ?? uniqueFilePath(targetDir, `${requestedName}.part`)
+  let filePath = ''
+  let ranges = Array.isArray(resume?.ranges)
+    ? resume.ranges
+        .map((range) => ({
+          start: Number(range?.start) || 0,
+          end: Number(range?.end) || 0,
+          received: Number(range?.received) || 0,
+        }))
+        .filter((range) => range.end >= range.start)
+    : null
+  let received = Number(resume?.received) || 0
+  let total = Number(resume?.total) || 0
 
   const controller = new AbortController()
   downloads.set(id, controller)
   let lastLogged = -20
   let lastSent = 0
   let startedAt = Date.now()
-  let received = 0
-  let total = 0
+  let sessionReceived = 0
+  let persistTimer = null
+  let lastPersist = 0
   let probe = { supported: false, total: 0, finalUrl: String(parsed), contentType: '', contentDisposition: '' }
+
+  const persistNow = () => {
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    if (!partPath) return
+    writeDownloadMeta(partPath, {
+      id,
+      key: safeKey,
+      url: String(parsed),
+      sha256: expectedSha256,
+      requestedName,
+      partPath,
+      total,
+      received,
+      ranges: ranges || null,
+      phase: 'downloading',
+    })
+    lastPersist = Date.now()
+  }
+
+  const schedulePersist = () => {
+    if (persistTimer) return
+    const wait = Math.max(0, 250 - (Date.now() - lastPersist))
+    persistTimer = setTimeout(() => {
+      persistTimer = null
+      persistNow()
+    }, wait)
+    persistTimer.unref?.()
+  }
 
   const report = (force = false) => {
     const now = Date.now()
+    schedulePersist()
     if (!force && now - lastSent < PROGRESS_INTERVAL_MS) return
     lastSent = now
 
     const percent = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : null
     const elapsedSeconds = (now - startedAt) / 1000
-    const bytesPerSecond = elapsedSeconds > 0 ? received / elapsedSeconds : 0
+    const bytesPerSecond = elapsedSeconds > 0 ? sessionReceived / elapsedSeconds : 0
     const etaSeconds =
       total > 0 && bytesPerSecond > 0 && elapsedSeconds >= 1
         ? Math.max(0, Math.round((total - received) / bytesPerSecond))
@@ -2152,6 +2901,8 @@ async function downloadBuild(payload) {
       total,
       percent,
       etaSeconds,
+      bytesPerSecond: Math.round(bytesPerSecond),
+      url: String(parsed),
       phase: 'downloading',
     })
 
@@ -2169,27 +2920,92 @@ async function downloadBuild(payload) {
       // A normal GET may still work when the probe cannot be completed.
     }
 
+    const probedTotal = Number(probe.total) || 0
+    if (total > 0 && probedTotal > 0 && total !== probedTotal) {
+      // The source changed since the interruption. Never append new bytes to
+      // an archive from a different build; keep the old partial for recovery
+      // and start a separate part file for this source.
+      ranges = null
+      received = 0
+      partPath = uniqueFilePath(targetDir, `${requestedName}.part`)
+    }
+    if (probedTotal > 0) total = probedTotal
+
     startedAt = Date.now()
-    total = probe.total
-    report(true)
+    sessionReceived = 0
+    const connections = total > 0 ? downloadConnectionCount(total) : 0
+    const coverage = downloadCoverage(ranges, received)
+    const planned = total > 0 ? planDownloadRanges(total) : []
+    const canUseRanges = Boolean(probe.supported && connections > 1 && planned.length > 1)
 
-    if (probe.supported && downloadConnectionCount(probe.total) > 1) {
-      try {
-        await downloadParallel(parsed, partPath, probe.total, controller.signal, (bytes) => {
-          received += bytes
-          report()
-        })
-        if (received !== probe.total) throw new Error('The download did not receive every byte.')
-      } catch (error) {
-        if (controller.signal.aborted) throw abortError()
+    if (canUseRanges) {
+      // Re-map bytes already on disk into the current chunk plan. This keeps
+      // old progress valid even when the connection count or chunk size changes.
+      ranges = withDownloadCoverage(planned, coverage)
+      received = ranges.reduce((sum, range) => sum + range.received, 0)
+      persistNow()
+      report(true)
 
-        // Range support can be advertised and still fail behind a CDN. Restart
-        // once as a single stream rather than leaving a broken archive.
-        await fs.promises.rm(partPath, { force: true }).catch(() => {})
+      if (received < total) {
+        try {
+          await downloadParallel(parsed, partPath, total, ranges, controller.signal, (bytes) => {
+            received += bytes
+            sessionReceived += bytes
+            report()
+          })
+        } catch (error) {
+          if (controller.signal.aborted) throw abortError()
+          // Some CDNs advertise ranges then reject them. Retry once as a
+          // normal stream only when nothing was written, so saved progress is
+          // never thrown away.
+          if (error instanceof RangeUnsupportedError && received === 0) {
+            ranges = null
+            startedAt = Date.now()
+            sessionReceived = 0
+            persistNow()
+            report(true)
+            await downloadSingleStream(
+              parsed,
+              partPath,
+              controller.signal,
+              (nextTotal) => {
+                total = nextTotal
+                report(true)
+              },
+              (bytes) => {
+                received += bytes
+                sessionReceived += bytes
+                report()
+              },
+            )
+            if (controller.signal.aborted) throw abortError()
+            if (total > 0) received = total
+            report(true)
+            persistNow()
+          } else {
+            throw error
+          }
+        }
+      }
+      if (ranges) {
+        received = ranges.reduce(
+          (sum, range) => sum + Math.min(range.end - range.start + 1, Math.max(0, range.received)),
+          0,
+        )
+        if (received !== total) throw new Error('The download did not receive every byte.')
+      }
+    } else {
+      // Range metadata from a previous attempt cannot be used if the host no
+      // longer supports ranges. A single stream still resumes when possible.
+      if (ranges) {
+        ranges = null
         received = 0
-        total = 0
-        startedAt = Date.now()
-        report(true)
+      }
+      if (total > 0 && received > total) received = 0
+      persistNow()
+      report(true)
+
+      if (total === 0 || received < total) {
         await downloadSingleStream(
           parsed,
           partPath,
@@ -2200,28 +3016,24 @@ async function downloadBuild(payload) {
           },
           (bytes) => {
             received += bytes
+            sessionReceived += bytes
             report()
+          },
+          received,
+          () => {
+            // The host returned 200 instead of 206: it ignored our Range and
+            // sent the whole file, so the bytes on disk restart at zero.
+            received = 0
+            ranges = null
           },
         )
       }
-    } else {
-      await downloadSingleStream(
-        parsed,
-        partPath,
-        controller.signal,
-        (nextTotal) => {
-          total = nextTotal
-          report(true)
-        },
-        (bytes) => {
-          received += bytes
-          report()
-        },
-      )
     }
 
     if (controller.signal.aborted) throw abortError()
+    if (total > 0) received = total
     report(true)
+    persistNow()
 
     if (expectedSha256) {
       send('arc:download-progress', {
@@ -2230,6 +3042,7 @@ async function downloadBuild(payload) {
         total,
         percent: 100,
         etaSeconds: null,
+        bytesPerSecond: null,
         phase: 'verifying',
       })
       if (SMOKE_URL) smokeLog('download complete, verifying checksum')
@@ -2252,6 +3065,7 @@ async function downloadBuild(payload) {
     if (inspection.web) {
       filePath = uniqueFilePath(targetDir, `${requestedName}.html`)
       await fs.promises.rename(partPath, filePath)
+      removeDownloadMeta(partPath)
       throw new Error(
         `The download source returned a web page instead of an archive. The file was kept at:\n${filePath}\n\nNothing was deleted. Try Refresh sources in Settings.`,
       )
@@ -2260,6 +3074,7 @@ async function downloadBuild(payload) {
     if (!inspection.type) {
       filePath = uniqueFilePath(targetDir, requestedName)
       await fs.promises.rename(partPath, filePath)
+      removeDownloadMeta(partPath)
       throw new Error(
         `The downloaded file is not a supported archive. It was kept at:\n${filePath}\n\nNothing was deleted.`,
       )
@@ -2274,6 +3089,7 @@ async function downloadBuild(payload) {
     // Promote the finished download before touching it. Existing archives are
     // never removed or overwritten; a second copy gets a -1/-2 suffix.
     await fs.promises.rename(partPath, filePath)
+    removeDownloadMeta(partPath)
 
     send('arc:download-progress', {
       id,
@@ -2281,6 +3097,7 @@ async function downloadBuild(payload) {
       total,
       percent: 100,
       etaSeconds: null,
+      bytesPerSecond: null,
       phase: 'extracting',
     })
     if (SMOKE_URL) smokeLog('download complete, extracting')
@@ -2313,9 +3130,19 @@ async function downloadBuild(payload) {
     // failed detection, extraction, checksum, or cancellation.
     throw error
   } finally {
-    // Only remove a .part that never received any bytes. Partial downloads are
-    // left in place for manual recovery instead of being silently discarded.
-    if (received === 0) await fs.promises.rm(partPath, { force: true }).catch(() => {})
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    // Persist one last progress snapshot for the next launch. Only a .part
+    // that never received any bytes is removed; an interrupted download is
+    // kept so the UI can offer Continue download.
+    if (received > 0 && fs.existsSync(partPath)) {
+      persistNow()
+    } else if (received === 0) {
+      await fs.promises.rm(partPath, { force: true }).catch(() => {})
+      removeDownloadMeta(partPath)
+    }
     extractions.delete(id)
     downloads.delete(id)
   }
@@ -2332,7 +3159,7 @@ function emptyVerifyReport() {
     bytes: 0,
     paks: 0,
     issueCount: 0,
-    issues: { missing: [], empty: [], unreadable: [], temp: [], corrupt: [] },
+    issues: { missing: [], empty: [], unreadable: [], temp: [], corrupt: [], runtime: [] },
     elapsedMs: 0,
   }
 }
@@ -2393,6 +3220,10 @@ async function verifyBuild(payload) {
   const executableIsInside = Boolean(relativeExecutable) && !relativeExecutable.startsWith('..') && !path.isAbsolute(relativeExecutable)
   const paksDir = path.join(folderForExecutable(executable), 'FortniteGame', 'Content', 'Paks')
   let executableStat = null
+
+  // A build can be perfectly intact and still fail every launch when the
+  // injector or backend files beside app.asar are missing.
+  for (const problem of runtimeProblems()) addVerifyIssue(report, 'runtime', problem)
 
   if (!executableIsInside || !fs.existsSync(executable)) {
     addVerifyIssue(report, 'missing', relativeExecutable || path.basename(executable) || 'client executable')
@@ -2501,18 +3332,201 @@ async function verifyBuild(payload) {
   return report
 }
 
+/**
+ * Runs the player's configured launcher with the season folder as its target.
+ * This intentionally bypasses the Fortnite injector: default executable paths
+ * point at external launchers, while installed builds without an override use
+ * the normal internal launch path.
+ */
+function launchExternalProfile(payload) {
+  assertBuild(payload)
+  const id = typeof payload?.id === 'string' ? payload.id : ''
+  if (!id) throw new Error('Invalid profile launch request.')
+  if (running.has(id)) throw new Error('This build is already running.')
+
+  const executable = payload.executable
+  const folder = payload.path
+  const child = spawn(executable, [folder], {
+    cwd: folder,
+    windowsHide: false,
+    stdio: 'ignore',
+  })
+
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const startedAt = Date.now()
+    const entry = {
+      pid: child.pid ?? null,
+      injectorPid: null,
+      startedAt,
+      expectedExecutable: executable,
+      external: true,
+    }
+
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+
+    child.once('error', (error) => {
+      fail(new Error(`Could not start ${path.basename(executable)}: ${error.message}`))
+    })
+
+    child.once('spawn', () => {
+      if (settled) return
+      settled = true
+      running.set(id, entry)
+      child.once('exit', (code, signal) => {
+        if (running.get(id) !== entry) return
+        running.delete(id)
+        clearJoinTarget()
+        send('arc:build-exited', {
+          id,
+          code: Number.isInteger(code) ? code : null,
+          signal: signal ?? null,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          expected: true,
+          reason: 'client-closed',
+        })
+      })
+      resolve({
+        pid: child.pid ?? null,
+        privateServer: false,
+        matchmaking: false,
+        joined: null,
+        external: true,
+      })
+    })
+  })
+}
+
+/**
+ * Start an installed community provider launcher for a mapped season. The
+ * provider catalog comes from the bundled manifest, but detection and every
+ * executable path are checked in the main process. The renderer never supplies
+ * a path. When only a registered URI handler exists, we start that handler with
+ * a season-qualified URI; otherwise the launcher gets the build folder argument
+ * and season metadata through the environment.
+ */
+async function launchOnlineProvider(payload) {
+  const id = typeof payload?.id === 'string' ? payload.id : ''
+  const providerId = typeof payload?.providerId === 'string' ? payload.providerId : ''
+  if (!id || !providerId) throw new Error('Invalid online provider launch request.')
+  if (running.has(id)) throw new Error('This season is already running.')
+
+  const provider = providerForId(providerId)
+  if (!provider) throw new Error('That online provider is not in the bundled catalog.')
+
+  const detected = detectProvider(providerId, { shell })
+  if (!detected.installed || !detected.executable) {
+    return { installed: false, launched: false, providerId, name: provider.name }
+  }
+
+  const folder = typeof payload?.path === 'string' ? payload.path : ''
+  const seasonId = typeof payload?.seasonId === 'string' ? payload.seasonId : id
+  const version = typeof payload?.version === 'string' ? payload.version : ''
+  let folderExists = false
+  try {
+    folderExists = Boolean(folder) && fs.statSync(folder).isDirectory()
+  } catch {
+    /* a provider-only season has no local Fortnite folder */
+  }
+
+  const args = []
+  if (detected.viaProtocol) {
+    const base = String(provider.protocolUri || '')
+    if (!base) throw new Error('That provider has no launch protocol.')
+    const query = new URLSearchParams({ season: seasonId, build: version }).toString()
+    args.push(`${base}${base.includes('?') ? '&' : '?'}${query}`)
+  } else if (provider.launchMode !== 'current' && folderExists) {
+    // Existing community launchers accept a build folder as their first
+    // argument. Provider-only seasons have no local folder, so let the
+    // launcher choose its own season instead of passing a missing path.
+    args.push(folder)
+  }
+
+  const cwd = folderExists ? folder : path.dirname(detected.executable)
+  const child = spawn(detected.executable, args, {
+    cwd,
+    windowsHide: false,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      VAULTED_SEASON_ID: seasonId,
+      VAULTED_BUILD_VERSION: version,
+      VAULTED_BUILD_FOLDER: folder,
+    },
+  })
+
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const startedAt = Date.now()
+    const entry = {
+      pid: child.pid ?? null,
+      injectorPid: null,
+      startedAt,
+      expectedExecutable: detected.executable,
+      external: true,
+      providerId,
+    }
+
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      reject(error instanceof Error ? error : new Error(String(error)))
+    }
+
+    child.once('error', (error) => {
+      fail(new Error(`Could not start ${path.basename(detected.executable)}: ${error.message}`))
+    })
+
+    child.once('spawn', () => {
+      if (settled) return
+      settled = true
+      running.set(id, entry)
+      child.once('exit', (code, signal) => {
+        if (running.get(id) !== entry) return
+        running.delete(id)
+        clearJoinTarget()
+        send('arc:build-exited', {
+          id,
+          code: Number.isInteger(code) ? code : null,
+          signal: signal ?? null,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          expected: true,
+          reason: 'client-closed',
+        })
+      })
+      resolve({
+        pid: child.pid ?? null,
+        privateServer: false,
+        matchmaking: false,
+        joined: null,
+        external: true,
+        provider: providerId,
+      })
+    })
+  })
+}
+
 function registerIpc() {
   ipcMain.handle('arc:check-builds', (_event, builds) => {
     /** @type {Record<string, boolean>} */
     const result = {}
     for (const build of Array.isArray(builds) ? builds : []) {
       if (!build || typeof build.id !== 'string') continue
-      result[build.id] = typeof build.executable === 'string' && fs.existsSync(build.executable)
+      result[build.id] =
+        typeof build.executable === 'string' &&
+        typeof build.path === 'string' &&
+        fs.existsSync(build.executable) &&
+        fs.existsSync(build.path)
     }
     return result
   })
 
   ipcMain.handle('arc:download-build', (_event, payload) => downloadBuild(payload))
+  ipcMain.handle('arc:list-interrupted-downloads', () => listInterruptedDownloads())
 
   ipcMain.handle('arc:delete-build', async (_event, payload) => {
     const id = typeof payload?.id === 'string' ? payload.id : ''
@@ -2540,7 +3554,14 @@ function registerIpc() {
 
   ipcMain.handle('arc:verify-build', (_event, payload) => verifyBuild(payload))
 
-  ipcMain.handle('arc:scan-builds', () => scanForBuilds())
+  ipcMain.handle('arc:launch-hosted-project', (_event, id) =>
+    playHostedProject(String(id ?? ''), { shell }),
+  )
+
+  ipcMain.handle('arc:scan-builds', (_event, roots) => scanForBuilds(roots))
+
+  ipcMain.handle('arc:profiles-read', () => readProfilesFile())
+  ipcMain.handle('arc:profiles-save', (_event, next) => writeProfilesFile(next))
 
   // the readable copy of the session for synchronous boot
   ipcMain.on('arc:read-session-sync', (event) => {
@@ -2553,6 +3574,19 @@ function registerIpc() {
   ipcMain.handle('arc:clear-session', () => {
     clearSessionFile()
     return true
+  })
+
+  ipcMain.handle('arc:pause-download', async (_event, payload) => {
+    const id = String(payload?.id)
+    const controller = downloads.get(id)
+    if (!controller) return { paused: false }
+
+    controller.abort()
+    // downloadBuild persists its metadata in its finally block. Wait briefly
+    // so clicking Continue straight after Pause cannot race that cleanup.
+    const deadline = Date.now() + 5000
+    while (downloads.has(id) && Date.now() < deadline) await delay(25)
+    return { paused: true }
   })
 
   ipcMain.handle('arc:cancel-download', (_event, payload) => {
@@ -2585,9 +3619,12 @@ function registerIpc() {
 
   ipcMain.handle('arc:launch-build', async (_event, payload) => {
     assertBuild(payload)
+    await ensureRuntimeInstalled()
 
     const id = typeof payload.id === 'string' ? payload.id : null
     const join = joinTargetFromPayload(payload)
+    const joinFallback = join && payload.joinFallback === true
+    if (id) stopJoinWatchdog(id)
     let injector = null
     let gamePid = null
     let gameServerReady = false
@@ -2619,10 +3656,31 @@ function registerIpc() {
         injector = launched.child
         gamePid = launched.pid
         if (!id) return
-        running.set(id, { pid: gamePid, injectorPid: injector.pid ?? null })
-        injector.on('exit', () => {
+        const entry = {
+          pid: gamePid,
+          injectorPid: injector.pid ?? null,
+          startedAt: Date.now(),
+          expectedExecutable: payload.executable,
+        }
+        running.set(id, entry)
+        injector.on('exit', (code, signal) => {
+          // A late exit from a replaced client must not tear down the new
+          // fallback host or report a second, unrelated close.
+          if (running.get(id) !== entry) return
+          stopJoinWatchdog(id)
           running.delete(id)
-          send('arc:build-exited', { id })
+          const expected = expectedBuildCloses.delete(id)
+          const durationMs = Math.max(0, Date.now() - entry.startedAt)
+          const log = expected ? '' : summarizeClientExit(entry.startedAt, entry.expectedExecutable)
+          send('arc:build-exited', {
+            id,
+            code: Number.isInteger(code) ? code : null,
+            signal: signal ?? null,
+            durationMs,
+            expected,
+            reason: expected ? 'closed-by-app' : code ? 'injector-failed' : 'client-closed',
+            log,
+          })
           if (running.size === 0) {
             clearJoinTarget()
             if (gameServerState) void stopGameServer()
@@ -2657,11 +3715,25 @@ function registerIpc() {
 
       send('arc:launch-status', { id: id ?? undefined, message: 'Starting Fortnite…' })
       const launched = await launchInjectedGame(payload)
+      const playerStartedAt = Date.now()
       registerPlayer(launched)
 
       if (serverSpawned) {
         await awaitGameServerReady()
         gameServerReady = true
+      }
+
+      // The launch resolves before the client has connected to the remote
+      // lobby. Keep watching the log so a host that disappears during loading
+      // triggers a local-host retry instead of leaving Play stuck.
+      if (joinFallback && gamePid) {
+        startJoinWatchdog({
+          id,
+          pid: gamePid,
+          join,
+          startedAt: playerStartedAt,
+          expectedExecutable: payload.executable,
+        })
       }
 
       send('arc:launch-status', { id: id ?? undefined, message: 'Signing in to the private server…' })
@@ -2672,6 +3744,7 @@ function registerIpc() {
         joined: join ? `${join.host}:${join.port}` : null,
       }
     } catch (error) {
+      if (id) stopJoinWatchdog(id)
       if (gamePid) await killProcessTree(gamePid)
       if (injector?.pid) await killProcessTree(injector.pid)
       if (id) running.delete(id)
@@ -2680,14 +3753,31 @@ function registerIpc() {
     }
   })
 
+  ipcMain.handle('arc:launch-profile', (_event, payload) => launchExternalProfile(payload))
+
+  ipcMain.handle('arc:online-provider-detect', (_event, id) =>
+    detectProvider(String(id ?? ''), { shell }),
+  )
+  ipcMain.handle('arc:online-provider-install', (_event, id) =>
+    openInstaller(String(id ?? ''), shell),
+  )
+  ipcMain.handle('arc:online-provider-launch', (_event, payload) =>
+    launchOnlineProvider(payload),
+  )
+
   ipcMain.handle('arc:close-build', async (_event, payload) => {
     const id = String(payload?.id ?? '')
+    stopJoinWatchdog(id)
     const entry = running.get(id)
     if (!entry?.pid) return { closed: false }
 
+    // Mark this exit before taskkill fires the injector's exit event. The UI
+    // already knows about a user-requested close and should not show a crash.
+    expectedBuildCloses.add(id)
     await killProcessTree(entry.pid)
 
     running.delete(id)
+    expectedBuildCloses.delete(id)
     if (running.size === 0) {
       clearJoinTarget()
       if (gameServerState) await stopGameServer()
@@ -2703,6 +3793,95 @@ function registerIpc() {
     return manual ? `${manual.address}:${manual.port}` : ''
   })
   ipcMain.handle('arc:set-public-address', (_event, value) => setPublicOverride(value))
+
+  ipcMain.handle('arc:builds-root', () => buildsRoot())
+  ipcMain.handle('arc:settings-read', () => readAppSettings())
+  ipcMain.handle('arc:settings-save', (_event, next) => writeAppSettings(next))
+
+  ipcMain.handle('arc:fetch-text', async (_event, rawUrl, options) => {
+    const url = String(rawUrl || '')
+    if (!/^https?:\/\//i.test(url)) {
+      return { ok: false, status: 0, url, text: '', error: 'Only http(s) URLs are supported.' }
+    }
+    const headers = { 'cache-control': 'no-cache' }
+    const method = options?.method === 'POST' ? 'POST' : 'GET'
+    if (method === 'POST') headers['content-type'] = 'application/json'
+    const body = method === 'POST' && typeof options?.body === 'string' ? options.body : undefined
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 15_000)
+    try {
+      const response = await fetch(url, {
+        method,
+        body,
+        redirect: 'follow',
+        signal: controller.signal,
+        headers,
+      })
+      const text = await response.text()
+      return {
+        ok: response.ok,
+        status: response.status,
+        url: response.url || url,
+        text: text.slice(0, 5_000_000),
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        status: 0,
+        url,
+        text: '',
+        error: error instanceof Error ? error.message : 'Could not fetch that URL.',
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  })
+
+  ipcMain.handle('arc:pick-install-dir', async () => {
+    const parent = mainWindow ?? undefined
+    const options = {
+      title: 'Select the default install folder',
+      buttonLabel: 'Use this folder',
+      defaultPath: buildsRoot(),
+      properties: ['openDirectory', 'createDirectory'],
+    }
+    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
+
+  ipcMain.handle('arc:pick-executable', async () => {
+    const parent = mainWindow ?? undefined
+    const options = {
+      title: 'Select the default client executable',
+      buttonLabel: 'Use this executable',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Windows executables', extensions: ['exe'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    }
+    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
+
+  ipcMain.handle('arc:pick-builds-root', async () => {
+    const parent = mainWindow ?? undefined
+    const profiles = readProfilesFile()
+    const options = {
+      title: 'Select the default builds root',
+      buttonLabel: 'Use this folder',
+      defaultPath:
+        typeof profiles?.defaultBuildsRoot === 'string' && profiles.defaultBuildsRoot.trim()
+          ? profiles.defaultBuildsRoot
+          : buildsRoot(),
+      properties: ['openDirectory', 'createDirectory'],
+    }
+    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
 
   ipcMain.handle('arc:pick-folder', async () => {
     const parent = mainWindow ?? undefined
@@ -2782,6 +3961,22 @@ ipcMain.handle('shell:open-external', async (_event, url) => {
 })
 
 /**
+ * Reboot joins a public lobby by receiving `Reboot://<lobby-id>` as a launch
+ * argument. The renderer only supplies a lobby id it read from the public
+ * browser; the allowlist and id validation stay in hostedLaunchers.cjs.
+ */
+ipcMain.handle('arc:join-hosted-lobby', async (_event, id, lobbyId) =>
+  joinHostedLobby(id, lobbyId),
+)
+
+/** Looks up a public Reboot lobby in the main process, away from file:// mixed-content rules. */
+ipcMain.handle('arc:find-hosted-lobby', async (_event, id) =>
+  // Play can wait a moment for a public table, but a dead directory must not
+  // hold the local host hostage for the full browser timeout.
+  findRebootLobby(String(id ?? ''), { timeoutMs: 2500 }),
+)
+
+/**
  * Applies a downloaded update without any browser or download page. Waits for
  * an active build download or running game to finish so it never interrupts
  * one, then installs silently and reopens the launcher on the new version.
@@ -2832,7 +4027,16 @@ ipcMain.handle('arc:download-update', async () => {
   }
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // The runtime lives in app data so upgrades refresh it in one place. Copy it
+  // before a download or Play can use it, and never block the UI on failure:
+  // the launch handler reports a precise missing-file message instead.
+  try {
+    await ensureRuntimeInstalled()
+  } catch (error) {
+    console.warn(`[VAULTED] Could not refresh the bundled runtime: ${error instanceof Error ? error.message : error}`)
+  }
+
   if (SMOKE) {
     smokeLog('app ready; argv=' + JSON.stringify(process.argv))
     app.on('render-process-gone', (_event, _contents, details) => smokeLog('render gone: ' + JSON.stringify(details)))

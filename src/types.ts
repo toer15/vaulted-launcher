@@ -23,6 +23,25 @@ export interface SeasonInfo {
   artKey?: string
 }
 
+export interface OnlineProviderConfig {
+  /** stable provider id used by the trusted desktop launcher catalog */
+  id: string
+  /** full project name, e.g. Project Neo */
+  name: string
+  /** compact badge label, e.g. Neo */
+  label: string
+  /** Windows URI scheme registered by the official launcher */
+  protocolUri: string
+  /** official installer or direct setup flow */
+  installerUrl: string
+  /** standard Windows install locations, with %ENV% placeholders */
+  installPaths: string[]
+  executableNames?: string[]
+  installDirNames?: string[]
+  /** current = launches the live game (EZFN Hybrid); season = opens a season launcher */
+  launchMode?: 'season' | 'current'
+}
+
 export interface Build {
   id: string
   /** parsed version, e.g. "3.6" */
@@ -33,6 +52,10 @@ export interface Build {
   path: string
   /** resolved client executable inside the build */
   executable: string
+  /** launcher/provider label inherited from the global profile settings */
+  providerLabel?: string
+  /** community client that hosts this season without a VAULTED relay */
+  onlineProvider?: OnlineProviderConfig
   season: SeasonInfo
   addedAt: number
   /** true until a real build folder is linked or downloaded */
@@ -50,14 +73,23 @@ export interface Account {
 export type LaunchPhase = 'idle' | 'launching' | 'running' | 'error'
 
 /** What the active card's primary button should do right now. */
-export type BuildState = 'missing' | 'downloading' | 'ready' | 'launching' | 'running' | 'error'
+export type BuildState = 'missing' | 'downloading' | 'paused' | 'ready' | 'launching' | 'running' | 'error'
 
 export interface DownloadState {
   /** null while the server hasn't reported a content-length */
   percent: number | null
   /** estimated seconds left, or null while the rate is unknown */
   etaSeconds: number | null
-  phase: 'downloading' | 'verifying' | 'extracting'
+  /** live transfer rate in bytes per second */
+  speedBytesPerSecond?: number | null
+  phase: 'downloading' | 'verifying' | 'extracting' | 'paused'
+  /** bytes kept from an interrupted download, when paused */
+  received?: number
+  total?: number
+  /** exact source of the interrupted download, so Continue does not depend on the manifest */
+  url?: string
+  fallbackUrl?: string
+  sha256?: string | null
 }
 
 export interface ToastMessage {
@@ -156,6 +188,8 @@ export interface BuildVerifyIssues {
   unreadable: string[]
   temp: string[]
   corrupt: string[]
+  /** required VAULTED runtime files, e.g. the login injector */
+  runtime: string[]
 }
 
 export interface BuildVerifyReport {
@@ -168,6 +202,18 @@ export interface BuildVerifyReport {
   issueCount: number
   issues: BuildVerifyIssues
   elapsedMs: number
+}
+
+export interface BuildExitInfo {
+  id: string
+  code: number | null
+  signal: string | null
+  durationMs: number
+  /** true when VAULTED closed the client, so the exit is not a crash */
+  expected: boolean
+  reason: 'closed-by-app' | 'client-closed' | 'injector-failed'
+  /** last useful Fortnite log lines after an unexpected close */
+  log?: string
 }
 
 export interface ShopDay {
