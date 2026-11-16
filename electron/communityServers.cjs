@@ -305,6 +305,19 @@ function providerLabelFor(providerId, endpoint) {
   return providerId
 }
 
+/**
+ * Manifest providers and directory providers differ only by the EZFN
+ * "hybrid" suffix. Sharing one matcher keeps the season's assigned provider
+ * eligible instead of silently dropping it from discovery.
+ */
+function providerMatches(serverProviderId, targetProviderId) {
+  if (!targetProviderId) return true
+  const left = safeString(serverProviderId, 40).toLowerCase()
+  const right = safeString(targetProviderId, 40).toLowerCase()
+  if (!left || !right || left === 'community' || right === 'community') return true
+  return left === right || left.replace(/-hybrid$/, '') === right.replace(/-hybrid$/, '')
+}
+
 function collectEntries(payload, hint, depth = 0) {
   if (depth > 4 || payload == null) return []
   if (Array.isArray(payload)) return payload.map((value) => ({ value, hint }))
@@ -755,7 +768,13 @@ function readConfig() {
 
 function endpointMatches(endpoint, seasonId, providerId) {
   if (seasonId && !endpoint.seasonIds.includes('*') && !endpoint.seasonIds.includes(seasonId)) return false
-  if (providerId && !endpoint.providerIds.includes('*') && !endpoint.providerIds.includes(providerId)) return false
+  if (
+    providerId &&
+    !endpoint.providerIds.includes('*') &&
+    !endpoint.providerIds.some((id) => providerMatches(id, providerId))
+  ) {
+    return false
+  }
   return true
 }
 
@@ -908,9 +927,7 @@ async function fetchEndpoint(endpoint, options) {
   let servers = normalizeCommunityPayload(payload, endpoint, options.seasonId || undefined)
   if (options.seasonId) servers = servers.filter((server) => server.seasonId === options.seasonId)
   if (options.providerId) {
-    servers = servers.filter(
-      (server) => server.providerId === 'community' || server.providerId === options.providerId,
-    )
+    servers = servers.filter((server) => providerMatches(server.providerId, options.providerId))
   }
   return { servers, statuses: [], directories: [] }
 }
@@ -1080,7 +1097,7 @@ async function fetchCommunityServers(input = {}) {
     for (const server of result.servers) servers.push(server)
     for (const status of result.statuses) {
       if (seasonId && status.seasonId !== seasonId) continue
-      if (providerId && status.providerId !== providerId) continue
+      if (providerId && !providerMatches(status.providerId, providerId)) continue
       const key = `${status.providerId}|${status.seasonId || 'all'}|${status.source}`
       if (statusSeen.has(key)) continue
       statusSeen.add(key)
@@ -1088,7 +1105,7 @@ async function fetchCommunityServers(input = {}) {
     }
     for (const directory of result.directories) {
       if (seasonId && directory.seasonId !== seasonId) continue
-      if (providerId && directory.providerId !== providerId) continue
+      if (providerId && !providerMatches(directory.providerId, providerId)) continue
       const key = `${directory.providerId}|${directory.seasonId || 'all'}|${directory.name.toLowerCase()}`
       if (directorySeen.has(key)) continue
       directorySeen.add(key)
@@ -1120,6 +1137,7 @@ module.exports = {
   parseAwesomeOgfn,
   parseFortniteVersions,
   probePing,
+  providerMatches,
   rankCommunityServers,
   readConfig,
   seasonFromVersion,

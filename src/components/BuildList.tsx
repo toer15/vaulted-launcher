@@ -1,5 +1,5 @@
 import { Fragment } from 'react'
-import { Check, FolderPlus } from 'lucide-react'
+import { Check, FolderOpen, FolderPlus, HardDrive, Trash2 } from 'lucide-react'
 import { artKeyFor, seasonImageFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { formatDownloadSize } from '../lib/downloadSize'
@@ -15,6 +15,8 @@ interface BuildListProps {
   sourceKeys?: Set<string>
   /** season key -> archive size in bytes */
   sourceSizes?: Record<string, number>
+  /** install path -> detected bytes on disk */
+  diskSizes?: Record<string, number>
   /** real VAULTED presence heartbeats, by season key */
   activeCounts?: Record<string, number>
   activeKey?: string | null
@@ -22,6 +24,8 @@ interface BuildListProps {
   playModes: Record<string, SeasonPlayMode>
   onSelect: (id: string) => void
   onAdd: () => void
+  onOpenFolder?: (build: Build) => void
+  onRemove?: (build: Build) => void
 }
 
 export function BuildList({
@@ -30,11 +34,14 @@ export function BuildList({
   installed,
   sourceKeys,
   sourceSizes,
+  diskSizes,
   activeCounts,
   activeKey,
   playModes,
   onSelect,
   onAdd,
+  onOpenFolder,
+  onRemove,
 }: BuildListProps) {
   if (builds.length === 0) {
     return (
@@ -86,6 +93,8 @@ export function BuildList({
         const chapterChanged = index === 0 || builds[index - 1].season.chapter !== build.season.chapter
         const hasSource = Boolean(sourceKey && sourceKeys?.has(sourceKey))
         const sizeLabel = sourceKey && sourceSizes?.[sourceKey] ? formatDownloadSize(sourceSizes[sourceKey]) : null
+        const installedNow = installed?.[build.id] === true
+        const diskSize = build.path ? diskSizes?.[build.path] : undefined
         const playModeTitle = `${onlineStatus}${onlineProviderLabel ? ` · ${onlineProviderLabel}` : ''}.${communityDetail ? ` ${communityDetail}` : ''}`
 
         return (
@@ -136,6 +145,14 @@ export function BuildList({
                   <span className="flex items-center gap-1.5">
                     <span className="truncate text-[13px] font-semibold text-mist">{build.season.label}</span>
                     {active && <Check className="h-3.5 w-3.5 shrink-0 text-arc" />}
+                    {installedNow && (
+                      <span
+                        title="Installed on this PC — ready to play"
+                        className="shrink-0 rounded border border-emerald-400/35 bg-emerald-400/12 px-1 py-px text-[8.5px] font-bold uppercase tracking-[0.06em] text-emerald-200"
+                      >
+                        Installed
+                      </span>
+                    )}
                     {!build.placeholder && installed?.[build.id] === false && (
                       <span
                         title="Not downloaded on this PC"
@@ -193,8 +210,50 @@ export function BuildList({
                       Listed by {directoryLabel}
                     </span>
                   )}
+                  {installedNow && build.path && (
+                    <span className="mt-1 flex min-w-0 items-center gap-1 text-[9px] text-fog" title={build.path}>
+                      <HardDrive className="h-2.5 w-2.5 shrink-0" />
+                      <span className="shrink-0 font-mono text-mist/75">
+                        {diskSize !== undefined ? formatDownloadSize(diskSize) : 'calculating size…'}
+                      </span>
+                      <span className="text-fog/40">·</span>
+                      <span className="truncate font-mono">{build.path}</span>
+                    </span>
+                  )}
                 </span>
               </button>
+              {installedNow && (onOpenFolder || onRemove) && (
+                <span className="pointer-events-none absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-lg border border-white/10 bg-ink/95 p-0.5 opacity-0 shadow-lg transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
+                  {onOpenFolder && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onOpenFolder(build)
+                      }}
+                      aria-label={`Open ${build.season.label} install folder`}
+                      title="Open install folder"
+                      className="grid h-5 w-5 place-items-center rounded-md text-fog transition-colors hover:bg-white/10 hover:text-white"
+                    >
+                      <FolderOpen className="h-3 w-3" />
+                    </button>
+                  )}
+                  {onRemove && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onRemove(build)
+                      }}
+                      aria-label={`Remove ${build.season.label}`}
+                      title="Remove / uninstall build"
+                      className="grid h-5 w-5 place-items-center rounded-md text-fog transition-colors hover:bg-rose-500/20 hover:text-rose-200"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                </span>
+              )}
             </div>
           </Fragment>
         )

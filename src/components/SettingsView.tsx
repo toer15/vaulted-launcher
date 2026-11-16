@@ -26,6 +26,7 @@ interface SettingsViewProps {
   onBack: () => void
   onBrowseFolder: () => void
   onScanBuilds: () => void
+  onLinkExistingFolder: () => void
   scanning: boolean
   onOpenLibrary: () => void
   accountName: string
@@ -60,6 +61,7 @@ export function SettingsView({
   onBack,
   onBrowseFolder,
   onScanBuilds,
+  onLinkExistingFolder,
   scanning,
   onOpenLibrary,
   accountName,
@@ -194,6 +196,14 @@ export function SettingsView({
             >
               <FolderSearch className={cx('h-3.5 w-3.5', scanning && 'animate-pulse')} />
               {scanning ? 'Scanning builds folder…' : 'Scan Builds Folder'}
+            </button>
+            <button
+              type="button"
+              onClick={onLinkExistingFolder}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-arc/40 bg-arc/10 px-3 py-2 text-[11.5px] font-semibold text-mist transition-colors hover:border-arc/70 hover:bg-arc/20 hover:text-white"
+            >
+              <FolderSearch className="h-3.5 w-3.5" />
+              Link Existing Folder
             </button>
             <span className="text-[10.5px] text-fog">
               Matches subfolders by season ID, version or CL number.

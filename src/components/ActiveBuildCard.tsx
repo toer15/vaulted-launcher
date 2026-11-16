@@ -2,10 +2,13 @@ import {
   ArrowLeftRight,
   Ban,
   Check,
+  ChevronDown,
   CircleCheck,
   Download,
   FolderPlus,
+  FolderOpen,
   FolderSearch,
+  HardDrive,
   Loader2,
   Pause,
   Play,
@@ -20,7 +23,9 @@ import { BuildArt } from './BuildArt'
 import { artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { formatDownloadSize, formatSpeed } from '../lib/downloadSize'
+import { lobbyPlayers } from '../lib/friends'
 import { onlinePlayerCount, onlineStatusLabel, type SeasonPlayMode } from '../lib/playMode'
+import type { CommunityServer } from '../lib/network'
 import type { Account, Build, BuildState, BuildVerifyReport, DownloadState } from '../types'
 
 interface ActiveBuildCardProps {
@@ -31,11 +36,23 @@ interface ActiveBuildCardProps {
   activeNow?: number | null
   /** shared live online state for this season */
   playMode?: SeasonPlayMode
+  /** live external servers for this season's provider, best first */
+  serverOptions?: CommunityServer[]
+  /** router's automatic pick, shown as the default `Auto` entry */
+  autoServer?: CommunityServer | null
+  /** manually selected external server address, null = Auto */
+  selectedServer?: string | null
+  onSelectServer?: (address: string | null) => void
   account: Account
   sourceKeys?: Set<string>
   downloadSize?: number | null
+  /** detected bytes in the installed build folder */
+  diskSize?: number | null
   installed?: Record<string, boolean>
-  canDelete?: boolean
+  canRemove?: boolean
+  canVerify?: boolean
+  /** true when VAULTED downloaded this build and may delete its folder */
+  managed?: boolean
   deleting?: boolean
   launchStage?: string | null
   /** persistent explanation for a failed launch or unexpected client close */
@@ -48,6 +65,7 @@ interface ActiveBuildCardProps {
   onVerify?: () => void
   /** optional: link a build folder that already exists on this PC */
   onLocateFolder?: () => void
+  onOpenFolder?: () => void
   onLogout: () => void
   onPrimary: () => void
   onPauseDownload: () => void
@@ -69,6 +87,17 @@ function formatEta(seconds: number | null | undefined): string | null {
   return minutes === 0 ? `About ${hours} hr left` : `About ${hours} hr ${minutes} min left`
 }
 
+function serverPlayerLabel(server: CommunityServer): string {
+  const players = lobbyPlayers(server)
+  return `${players} player${players === 1 ? '' : 's'}`
+}
+
+function serverPingLabel(server: CommunityServer): string {
+  return typeof server.pingMs === 'number' && Number.isFinite(server.pingMs)
+    ? `${Math.max(0, Math.round(server.pingMs))} ms`
+    : 'ping —'
+}
+
 const STATE_PILL: Record<BuildState, { label: string; dot: string; text: string }> = {
   missing: { label: 'Not installed', dot: 'bg-amber-400', text: 'text-amber-300' },
   downloading: { label: 'Downloading', dot: 'bg-emerald-400', text: 'text-emerald-300' },
@@ -85,11 +114,18 @@ export function ActiveBuildCard({
   download,
   activeNow,
   playMode,
+  serverOptions,
+  autoServer,
+  selectedServer,
+  onSelectServer,
   account,
   sourceKeys,
   downloadSize,
+  diskSize,
   installed,
-  canDelete,
+  canRemove,
+  canVerify,
+  managed,
   deleting,
   launchStage,
   launchError,
@@ -98,6 +134,7 @@ export function ActiveBuildCard({
   verify,
   onVerify,
   onLocateFolder,
+  onOpenFolder,
   onLogout,
   onPrimary,
   onPauseDownload,
@@ -143,8 +180,9 @@ export function ActiveBuildCard({
   const speedLabel = download?.phase === 'downloading' ? formatSpeed(download.speedBytesPerSecond) : null
   const rateLabel = [speedLabel, etaLabel].filter(Boolean).join(' · ') || null
   const downloadSizeLabel = downloadSize ? formatDownloadSize(downloadSize) : null
-  const showDelete = Boolean(canDelete && isInstalled && !busy && state !== 'running' && onDelete)
-  const showVerify = Boolean(canDelete && isInstalled && !busy && state !== 'running' && onVerify)
+  const showRemove = Boolean(canRemove && isInstalled && !busy && state !== 'running' && onDelete)
+  const showVerify = Boolean(canVerify && isInstalled && !busy && state !== 'running' && onVerify)
+  const showOpenFolder = Boolean(isInstalled && onOpenFolder)
   // The hero and the sidebar read the same map. The hosted fallback keeps this
   // card correct if it is rendered in isolation during a transition.
   const onlineProviderLabel =
@@ -266,11 +304,9 @@ export function ActiveBuildCard({
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
     ready: onlineProviderLabel
-      ? lobbyCount > 0
-        ? `Ready — ${lobbyCount} public ${lobbyCount === 1 ? 'lobby' : 'lobbies'} online${playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}. Play joins one through the bundled runtime.`
-        : communityPlayers > 0
-          ? `Ready — ${communityProviderLabel || 'A community directory'} reports ${communityPlayers} player${communityPlayers === 1 ? '' : 's'}. Play joins the healthiest public server, or starts a local lobby if none are up.`
-          : `Ready — Play joins the healthiest public server through the bundled runtime, or starts a local lobby if none are up.`
+      ? autoServer
+        ? `Ready — Auto routes Play to ${autoServer.name} · ${serverPlayerLabel(autoServer)}.`
+        : 'Ready — no live external server is listed yet; Play scans every directory again before launching.'
       : lobbyCount > 0
         ? `Ready — ${lobbyCount} reachable VAULTED ${lobbyCount === 1 ? 'lobby' : 'lobbies'} online${playerCount > 0 ? ` · ${playerCount} player${playerCount === 1 ? '' : 's'}` : ''}. Play joins one automatically.`
         : onlinePlayers > 0
@@ -283,7 +319,7 @@ export function ActiveBuildCard({
         : 'Fortnite is running — your lobby is WiFi-only. Forward UDP 7777 or use a tunnel in Settings for internet play.'
       : 'Fortnite is running. Have fun.',
     error: launchErrorLocal
-      ? 'Local match unavailable — try again or choose another installed build.'
+      ? 'No live external server was available — pick another server or try again.'
       : 'Could not start the client. Check the build path and try again.',
   }
 
@@ -368,6 +404,66 @@ export function ActiveBuildCard({
           <p className="mt-3 max-w-md text-sm leading-relaxed text-mist/70">
             {season.era}
           </p>
+
+          {isInstalled && (
+            <div className="mt-4 flex max-w-xl items-center gap-2 rounded-xl border border-emerald-400/20 bg-black/25 px-3 py-2 text-[10.5px] text-fog backdrop-blur">
+              <HardDrive className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
+              <span className="shrink-0 font-mono font-semibold text-emerald-100">
+                {diskSize != null ? formatDownloadSize(diskSize) : 'Detecting size…'}
+              </span>
+              <span className="text-fog/40">·</span>
+              <span className="min-w-0 truncate font-mono text-mist/75" title={build.path}>
+                {build.path}
+              </span>
+            </div>
+          )}
+
+          {onSelectServer && (
+            <div className="mt-4 max-w-xl rounded-2xl border border-white/10 bg-black/25 px-3 py-2.5 backdrop-blur">
+              <div className="flex items-center justify-between gap-3">
+                <label
+                  htmlFor={`server-select-${build.id}`}
+                  className="text-[9.5px] font-bold uppercase tracking-[0.18em] text-fog"
+                >
+                  Server
+                </label>
+                <span className="inline-flex items-center gap-1.5 text-[10px] font-medium text-emerald-300/90">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
+                  {serverOptions?.length ?? 0} live external {(serverOptions?.length ?? 0) === 1 ? 'server' : 'servers'}
+                </span>
+              </div>
+              <div className="relative mt-1.5">
+                <select
+                  id={`server-select-${build.id}`}
+                  value={selectedServer ?? ''}
+                  onChange={(event) => onSelectServer(event.target.value || null)}
+                  disabled={!serverOptions || serverOptions.length === 0}
+                  className="w-full appearance-none rounded-xl border border-white/10 bg-[#0b131c]/90 py-2 pl-3 pr-9 text-[12px] font-medium text-mist outline-none transition-colors duration-200 hover:border-emerald-400/40 focus:border-emerald-400/60 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  <option value="" className="bg-ink text-mist">
+                    {autoServer
+                      ? `Auto: Best Live Server (${autoServer.name} · ${serverPlayerLabel(autoServer)})`
+                      : 'Auto: Best Live Server (none online)'}
+                  </option>
+                  {(serverOptions ?? []).map((server) => (
+                    <option
+                      key={`${server.address}-${server.id}`}
+                      value={server.address}
+                      className="bg-ink text-mist"
+                    >
+                      {server.name} · {serverPlayerLabel(server)} · {serverPingLabel(server)}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fog" />
+              </div>
+              <p className="mt-1.5 text-[10px] leading-relaxed text-fog/75">
+                {autoServer
+                  ? `Play joins ${autoServer.address} with Auto. Friends can pick the same server to land in the same match.`
+                  : 'No live external server is listed right now — Play will scan every directory again before launching.'}
+              </p>
+            </div>
+          )}
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {hostedLobby ? (
@@ -599,6 +695,21 @@ export function ActiveBuildCard({
                     </button>
                   )}
 
+                  {showOpenFolder && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onOpenFolder?.()
+                      }}
+                      aria-label={`Open ${season.label} install folder`}
+                      title="Open install folder in Windows Explorer"
+                      className="inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] p-3 text-fog transition-colors duration-200 hover:border-emerald-400/40 hover:bg-emerald-400/10 hover:text-emerald-200"
+                    >
+                      <FolderOpen className="h-4 w-4" />
+                    </button>
+                  )}
+
                   {state === 'downloading' && download?.phase === 'downloading' && (
                     <button
                       type="button"
@@ -650,7 +761,7 @@ export function ActiveBuildCard({
                     </button>
                   )}
 
-                  {showDelete && (
+                  {showRemove && (
                     <button
                       type="button"
                       onClick={(event) => {
@@ -658,12 +769,15 @@ export function ActiveBuildCard({
                         onDelete?.()
                       }}
                       disabled={deleting}
-                      aria-label={`Delete ${season.label} from this PC`}
-                      title={`Delete ${season.label} download`}
-                      className="inline-flex items-center gap-2 rounded-xl border border-rose-400/35 bg-rose-500/10 px-3.5 py-3 text-[12.5px] font-semibold text-rose-200 transition-all duration-200 hover:border-rose-400/70 hover:bg-rose-500/20 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                      aria-label={`${managed ? 'Uninstall' : 'Remove'} ${season.label}`}
+                      title={
+                        managed
+                          ? 'Uninstall this build and remove it from this PC'
+                          : 'Remove from VAULTED — your folder stays on disk'
+                      }
+                      className="inline-flex items-center justify-center rounded-xl border border-rose-400/35 bg-rose-500/10 p-3 text-rose-200 transition-all duration-200 hover:border-rose-400/70 hover:bg-rose-500/20 hover:text-white disabled:cursor-wait disabled:opacity-60"
                     >
                       {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                      {deleting ? 'Deleting…' : 'Delete'}
                     </button>
                   )}
 

@@ -192,6 +192,14 @@ export interface LauncherBridge {
   pickExecutable?(): Promise<string | null>
   /** native folder picker for the global builds root */
   pickBuildsRoot?(): Promise<string | null>
+  /** pick and verify an existing Fortnite build folder */
+  linkBuildFolder?(): Promise<
+    { ok: true; folder: string; executable: string } | { ok: false; error: string } | null
+  >
+  /** total bytes on disk for an installed build */
+  buildSize?(folder: string): Promise<number | null>
+  /** open an installed build in Windows Explorer */
+  openBuildFolder?(folder: string): Promise<{ ok: boolean; error?: string }>
   /** CORS-free text fetch through the Electron main process */
   fetchText?(url: string, options?: { method?: 'GET' | 'POST'; body?: string }): Promise<{
     ok: boolean
@@ -447,6 +455,37 @@ export async function pickBuildFolder(): Promise<string | null> {
     return await window.arc.pickFolder()
   } catch (error) {
     throw cleanIpcError(error)
+  }
+}
+
+/** Native picker that verifies FortniteClient-Win64-Shipping.exe before linking. */
+export async function pickExistingBuildFolder(): Promise<
+  { ok: true; folder: string; executable: string } | { ok: false; error: string } | null
+> {
+  if (!window.arc?.linkBuildFolder) return null
+  try {
+    return await window.arc.linkBuildFolder()
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+export async function getBuildSize(folder: string): Promise<number | null> {
+  if (!window.arc?.buildSize || !folder) return null
+  try {
+    const size = await window.arc.buildSize(folder)
+    return typeof size === 'number' && Number.isFinite(size) ? size : null
+  } catch {
+    return null
+  }
+}
+
+export async function openBuildFolder(folder: string): Promise<{ ok: boolean; error?: string }> {
+  if (!window.arc?.openBuildFolder) return { ok: false, error: 'Opening folders needs the desktop app.' }
+  try {
+    return await window.arc.openBuildFolder(folder)
+  } catch (error) {
+    return { ok: false, error: cleanIpcError(error).message }
   }
 }
 

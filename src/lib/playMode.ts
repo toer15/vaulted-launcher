@@ -1,6 +1,6 @@
 import { artKeyFor } from './art'
 import { lobbyIsFresh, lobbyPlayers, type LobbyInfo } from './friends'
-import type { CommunityDirectoryEntry, CommunityProviderStatus } from './network'
+import type { CommunityDirectoryEntry, CommunityProviderStatus, CommunityServer } from './network'
 import type { Build } from '../types'
 
 export type PlayModeLabel = 'ONLINE READY' | 'ONLINE PLAY'
@@ -110,6 +110,94 @@ export function compareLobbies(left: LobbyInfo, right: LobbyInfo): number {
 
 export function rankLobbies(lobbies: LobbyInfo[]): LobbyInfo[] {
   return [...lobbies].sort(compareLobbies)
+}
+
+/**
+ * Directory provider ids and manifest provider ids only differ by the EZFN
+ * "hybrid" suffix. Treat them as the same community so a season's assigned
+ * provider is never skipped because of a label mismatch.
+ */
+export function providerMatches(serverProviderId: string | undefined, buildProviderId: string | undefined): boolean {
+  if (!buildProviderId) return true
+  const candidate = String(serverProviderId || 'community').toLowerCase()
+  if (!candidate || candidate === 'community') return true
+  const target = buildProviderId.toLowerCase()
+  return candidate === target || candidate.replace(/-hybrid$/, '') === target.replace(/-hybrid$/, '')
+}
+
+/** Only joinable rows reported by a configured external directory count. */
+export function isLiveExternalServer(server: CommunityServer): boolean {
+  return (
+    server.external === true &&
+    server.public !== false &&
+    Boolean(server.host) &&
+    Number.isInteger(server.port) &&
+    server.port > 0 &&
+    lobbyIsFresh(server)
+  )
+}
+
+export type ExternalServerTier = 'exact' | 'provider' | 'external' | 'none'
+
+export interface ExternalServerRoute {
+  /** the live external server Play connects to, or null when none is up */
+  server: CommunityServer | null
+  /** why that server won: exact sub-patch, same provider, or any provider */
+  tier: ExternalServerTier
+  /** selectable live external servers, best first */
+  options: CommunityServer[]
+}
+
+/**
+ * The external-only router. It never returns a local address, so Play can only
+ * ever connect to a server run by a community provider:
+ *   1. highest-population live server on the season's assigned provider that
+ *      reports this exact build/sub-patch;
+ *   2. otherwise the highest-population live server on that same provider;
+ *   3. otherwise the highest-population live external server anywhere.
+ */
+export function routeExternalServer(
+  build: Build,
+  servers: CommunityServer[],
+): ExternalServerRoute {
+  const seasonKey = artKeyFor(build.season)
+  const providerId = build.onlineProvider?.id
+  const live = rankLobbies((servers || []).filter(isLiveExternalServer)) as CommunityServer[]
+  const providerServers = live.filter((server) => providerMatches(server.providerId, providerId))
+  const exactProvider = seasonKey
+    ? providerServers.filter((server) => server.seasonId === seasonKey)
+    : []
+  const exactAnywhere = seasonKey ? live.filter((server) => server.seasonId === seasonKey) : []
+
+  // Keep exact sub-patch rows at the top of the dropdown so friends can pick
+  // the one server that guarantees they land in the same match.
+  const options: CommunityServer[] = []
+  const seen = new Set<string>()
+  for (const server of [...exactProvider, ...providerServers]) {
+    const key = server.address.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    options.push(server)
+  }
+  if (options.length === 0) {
+    for (const server of [...exactAnywhere, ...live]) {
+      const key = server.address.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      options.push(server)
+    }
+  }
+
+  const server = exactProvider[0] ?? providerServers[0] ?? exactAnywhere[0] ?? live[0] ?? null
+  const tier: ExternalServerTier =
+    exactProvider.length > 0
+      ? 'exact'
+      : providerServers.length > 0
+        ? 'provider'
+        : live.length > 0
+          ? 'external'
+          : 'none'
+  return { server, tier, options }
 }
 
 /**

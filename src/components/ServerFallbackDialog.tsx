@@ -9,7 +9,6 @@ interface ServerFallbackDialogProps {
   /** null only when no other installed season has a joinable live lobby */
   choice: ActiveServerChoice | null
   onJoinAlternative: () => void
-  onStartServer: () => void
   onClose: () => void
 }
 
@@ -17,7 +16,6 @@ export function ServerFallbackDialog({
   selectedBuild,
   choice,
   onJoinAlternative,
-  onStartServer,
   onClose,
 }: ServerFallbackDialogProps) {
   useEffect(() => {
@@ -68,8 +66,9 @@ export function ServerFallbackDialog({
               Pick another way in
             </h2>
             <p className="mt-2 text-[12.5px] leading-relaxed text-fog">
-              We checked every configured community directory and the shared VAULTED lobby list. You do not
-              have to wait for a stranger to open a server.
+              We checked every configured community directory. VAULTED only joins live external servers, so
+              it never starts one on your PC. Try again in a moment or jump into a season that already has
+              players.
             </p>
           </div>
           <button
@@ -104,39 +103,10 @@ export function ServerFallbackDialog({
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={onStartServer}
-            className={
-              choice
-                ? 'group flex w-full items-center gap-3.5 rounded-2xl border border-line bg-white/[0.025] p-4 text-left transition-all duration-200 hover:border-white/20 hover:bg-white/[0.05]'
-                : 'group flex w-full items-center gap-3.5 rounded-2xl border border-arc/40 bg-arc/[0.09] p-4 text-left transition-all duration-200 hover:border-arc/70 hover:bg-arc/[0.15]'
-            }
-          >
-            <span
-              className={
-                choice
-                  ? 'grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-line bg-panel text-fog'
-                  : 'grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-arc/30 bg-arc/10 text-arc'
-              }
-            >
-              <Server className="h-5 w-5" />
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[13px] font-semibold leading-snug text-mist">
-                Start New Public Server for {seasonLabel}
-              </span>
-              <span className="mt-0.5 block text-[11px] leading-relaxed text-fog">
-                Publishes immediately to the VAULTED directory with UPnP / NAT-PMP, or uses your configured
-                playit.gg address.
-              </span>
-            </span>
-            <ArrowRight className="h-4 w-4 shrink-0 text-fog transition-transform duration-200 group-hover:translate-x-0.5" />
-          </button>
-
           <p className="mt-1 flex items-start gap-2 rounded-xl border border-line/70 bg-white/[0.015] px-3 py-2.5 text-[10.5px] leading-relaxed text-fog/85">
             <Server className="mt-0.5 h-3 w-3 shrink-0 text-arc/80" />
-            Your lobby flips to {selectedBuild.season.label} · ONLINE · 1 playing as soon as the host is ready.
+            No server starts on this PC. Pick a live community server from the hero dropdown, or check again
+            shortly for {selectedBuild.season.label}.
           </p>
         </div>
       </div>

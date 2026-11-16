@@ -14,9 +14,9 @@ import { artKeyFor } from './lib/art'
 import { fetchFriends, type LobbyInfo } from './lib/friends'
 import {
   findActiveServerChoice,
-  findBestPublicLobby,
   mergeLobbies,
   playModesForBuilds,
+  routeExternalServer,
   type ActiveServerChoice,
 } from './lib/playMode'
 import {
@@ -25,18 +25,21 @@ import {
   subscribeOnlineService,
   type OnlineStatus,
 } from './lib/onlineService'
-import { HostingStopQueue, LaunchAttemptTracker, runJoinFallback } from './lib/joinFallback'
+import { LaunchAttemptTracker } from './lib/joinFallback'
 import {
   canDownloadBuilds,
   cancelDownload,
   checkInstalledBuilds,
   closeBuildProcess,
   deleteBuild,
+  getBuildSize,
   hasNativeBridge,
   launchBuild,
   launchOnlineProvider,
+  openBuildFolder,
   pauseDownload,
   pickBuildFolder,
+  pickExistingBuildFolder,
   pickInstallDir,
   scanInstalledBuilds,
   startDownload,
@@ -141,11 +144,6 @@ function formatDuration(ms: number): string {
   return rest ? `${minutes}m ${rest}s` : `${minutes}m`
 }
 
-/** A failed local host must become a clean fallback, not a raw client log. */
-function isLocalHostFailure(message: string): boolean {
-  return /local game server|local hosting|port 7777|private server/i.test(message)
-}
-
 /** Short actionable summary of a failed build verification. */
 function verificationSummary(report: BuildVerifyReport): string {
   const groups: Array<[string, string[]]> = [
@@ -176,6 +174,8 @@ export default function App() {
   const [profilesLoaded, setProfilesLoaded] = useState(false)
   const [phase, setPhase] = useState<LaunchPhase>('idle')
   const [installed, setInstalled] = useState<Record<string, boolean>>({})
+  const [diskSizes, setDiskSizes] = useState<Record<string, number>>({})
+  const requestedDiskSizes = useRef(new Set<string>())
   const [downloads, setDownloads] = useState<Record<string, DownloadState>>({})
   const pausedDownloadIds = useRef(new Set<string>())
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -207,6 +207,9 @@ export default function App() {
   const [activeCounts, setActiveCounts] = useState<Record<string, number>>({})
   const [onlineLobbies, setOnlineLobbies] = useState<LobbyInfo[]>([])
   const [communityServers, setCommunityServers] = useState<CommunityServer[]>([])
+  // Per-season manual choice from the hero server dropdown. A missing entry
+  // means the external router's automatic best live server.
+  const [serverSelections, setServerSelections] = useState<Record<string, string>>({})
   const [communityStatuses, setCommunityStatuses] = useState<CommunityProviderStatus[]>([])
   const [communityDirectories, setCommunityDirectories] = useState<CommunityDirectoryEntry[]>([])
   const [onlineStatus, setOnlineStatus] = useState<OnlineStatus>('checking')
@@ -225,13 +228,6 @@ export default function App() {
   const autoScanned = useRef(false)
   const scannedRoot = useRef('')
   const [launchAttempts] = useState(() => new LaunchAttemptTracker())
-  const [hostingStops] = useState(
-    () =>
-      new HostingStopQueue({
-        stop: () => clearOnlineLobby(onlineServiceUrlRef.current),
-        isCurrent: (token) => launchAttempts.isCurrent(token),
-      }),
-  )
   const [updateState, setUpdateState] = useState<{
     state: 'idle' | 'checking' | 'current' | 'available' | 'error'
     message?: string
@@ -513,6 +509,20 @@ export default function App() {
   )
   const activePlayMode = activeBuild ? playModes[activeBuild.id] : undefined
 
+  // The hero dropdown and Play read the same external-only route. Exact
+  // sub-patch servers rank first, then the assigned provider, then any live
+  // external provider; a local address is never part of this result.
+  const activeServerRoute = useMemo(
+    () => (activeBuild ? routeExternalServer(activeBuild, communityServers) : null),
+    [activeBuild, communityServers],
+  )
+  const activeServerSelection =
+    activeBuild &&
+    serverSelections[activeBuild.id] &&
+    activeServerRoute?.options.some((server) => server.address === serverSelections[activeBuild.id])
+      ? serverSelections[activeBuild.id]
+      : null
+
   // validate a cached session once; a 401 sends the user back to the gate
   useEffect(() => {
     if (!session) return
@@ -729,6 +739,31 @@ export default function App() {
       cancelled = true
     }
   }, [builds, native, buildsRoot])
+
+  // Detected install sizes are read on demand and cached by path. Walking a
+  // 20 GB build can take a moment, so the active card is measured first and
+  // the sidebar fills in as each folder finishes.
+  useEffect(() => {
+    if (!native || !window.arc?.buildSize) return
+    const pending = builds
+      .filter((build) => installed[build.id] === true && build.path)
+      .sort((a, b) => Number(b.id === activeId) - Number(a.id === activeId))
+
+    const load = async () => {
+      for (const build of pending) {
+        if (requestedDiskSizes.current.has(build.path)) continue
+        requestedDiskSizes.current.add(build.path)
+        const bytes = await getBuildSize(build.path)
+        if (bytes === null) {
+          requestedDiskSizes.current.delete(build.path)
+          continue
+        }
+        setDiskSizes((prev) => (prev[build.path] === bytes ? prev : { ...prev, [build.path]: bytes }))
+      }
+    }
+
+    void load()
+  }, [activeId, builds, installed, native])
 
   // A download interrupted by a crash, quit, or network stop leaves its .part
   // plus progress metadata on disk. Surface it as a Continue download action
@@ -1187,11 +1222,85 @@ export default function App() {
   )
 
   // The only manual step left: point a card at a build already on disk.
-  const handleLocateExistingFolder = useCallback(async () => {
+  const handleLinkExistingFolder = useCallback(async () => {
     try {
-      const folder = await pickBuildFolder()
-      if (!folder) return
-      handleAdd(folder)
+      const picked = await pickExistingBuildFolder()
+      if (!picked) return
+      if (!picked.ok) {
+        pushToast({
+          tone: 'error',
+          title: 'No Fortnite client in that folder',
+          description: picked.error,
+        })
+        return
+      }
+
+      const folder = picked.folder
+      const duplicate = buildsRef.current.find(
+        (build) => build.path && build.path.toLowerCase() === folder.toLowerCase(),
+      )
+      if (duplicate) {
+        setActiveId(duplicate.id)
+        pushToast({
+          tone: 'info',
+          title: 'Already linked',
+          description: `${duplicate.season.label} is already using that folder.`,
+        })
+        return
+      }
+
+      // Match the picked folder to the existing 43-season card first. The
+      // path parser is a fallback for builds with an unusual folder name.
+      const detected = matchBuildFromFolder(folder, buildsRef.current, seasonManifest)
+      const parsed = buildFromPath(folder, uid())
+      const match =
+        detected?.build ??
+        buildsRef.current.find(
+          (build) =>
+            build.season.known &&
+            parsed.season.known &&
+            build.season.chapter === parsed.season.chapter &&
+            build.season.season === parsed.season.season,
+        )
+      if (!match && !parsed.season.known) {
+        pushToast({
+          tone: 'error',
+          title: 'Could not identify that build',
+          description: 'The folder name does not contain a Fortnite version VAULTED recognises.',
+        })
+        return
+      }
+
+      const base = match ?? parsed
+      const linked: Build = {
+        ...base,
+        id: base.id,
+        path: folder,
+        executable: picked.executable,
+        placeholder: false,
+        folderName: folderNameOf(folder),
+        version: detected?.version || parsed.version || base.version,
+      }
+
+      if (match) {
+        setBuilds((prev) =>
+          prev.map((item) =>
+            item.id === match.id ? { ...linked, addedAt: item.addedAt } : item,
+          ),
+        )
+      } else {
+        setBuilds((prev) => sortBuilds([...prev, linked]))
+      }
+      setInstalled((prev) => ({ ...prev, [linked.id]: true }))
+      requestedDiskSizes.current.delete(folder)
+      rememberInstalledBuild(linked, folder)
+      setActiveId(linked.id)
+      setPhase('idle')
+      pushToast({
+        tone: 'success',
+        title: 'Existing folder linked',
+        description: `${linked.season.label} is installed and ready to play.`,
+      })
     } catch (error) {
       pushToast({
         tone: 'error',
@@ -1199,7 +1308,7 @@ export default function App() {
         description: error instanceof Error ? error.message : 'Unknown error.',
       })
     }
-  }, [handleAdd, pushToast])
+  }, [pushToast, rememberInstalledBuild, seasonManifest])
 
   const beginDownload = useCallback(
     async (build: Build, url: string, sha256?: string, fallbackUrl?: string) => {
@@ -1404,17 +1513,17 @@ export default function App() {
     async (
       build: Build,
       join?: { host: string; port: number },
-      options: { forceHost?: boolean; promptOnEmpty?: boolean; autoPublish?: boolean } = {},
+      options: { promptOnEmpty?: boolean } = {},
     ) => {
-      if (!options.forceHost && phase === 'launching') return
+      if (phase === 'launching') return
       // A paused entry is an invitation to resume, not an active download.
-      if (!options.forceHost && downloads[build.id] && downloads[build.id].phase !== 'paused') return
+      if (downloads[build.id] && downloads[build.id].phase !== 'paused') return
 
-      if (!options.forceHost && runningId === build.id) {
+      if (runningId === build.id) {
         pushToast({ tone: 'info', title: 'Already running', description: `${build.season.label} is open now.` })
         return
       }
-      if (!options.forceHost && runningId) {
+      if (runningId) {
         pushToast({
           tone: 'info',
           title: 'Close the running build first',
@@ -1438,7 +1547,7 @@ export default function App() {
       // makes the click itself check Reboot/Eon/Era/EZFN/Neo/Stellar/Retrac
       // (and any other configured endpoint) instead of acting on stale rows.
       let availableCommunityServers = communityServers
-      if (!join && !options.forceHost) {
+      if (!join) {
         if (communityDiscoveryInFlight.current) return
         communityDiscoveryInFlight.current = true
         setLaunchStage('Checking live community servers…')
@@ -1451,57 +1560,57 @@ export default function App() {
         }
       }
 
-      // External directories are authoritative for Play. Only when none of
-      // them lists this exact season do we fall back to the VAULTED relay or a
-      // locally hosted fallback match.
-      const externalLobby = findBestPublicLobby(
-        build,
-        availableCommunityServers.filter((server) => server.external === true),
-        lanIp,
-        account.username,
-      )
-      const availableLobbies = mergeLobbies([...availableCommunityServers, ...onlineLobbies])
-      const liveLobby =
-        !join && !options.forceHost
-          ? externalLobby ?? findBestPublicLobby(build, availableLobbies, lanIp, account.username)
-          : null
-      let startEmptyServer = false
-      if (options.promptOnEmpty && !join && !options.forceHost && !liveLobby) {
+      // External-only routing: exact build on the assigned provider, then the
+      // same provider, then any live external provider. The router never
+      // returns a local address, so Play can never host a server on this PC.
+      const route = routeExternalServer(build, availableCommunityServers)
+      const preferred =
+        !join && serverSelections[build.id]
+          ? route.options.find((server) => server.address === serverSelections[build.id])
+          : undefined
+      const chosen = join ? null : preferred ?? route.server
+      const target = join ?? (chosen ? lobbyTarget(chosen.address) : null)
+
+      if (!target) {
         setLaunchStage(null)
-        const choice = findActiveServerChoice(
-          builds,
-          availableLobbies,
-          installed,
-          build.id,
-          lanIp,
-          account.username,
-        )
-        if (choice) {
-          setServerFallback({ build, choice })
-          return
+        if (options.promptOnEmpty) {
+          const choice = findActiveServerChoice(
+            builds,
+            mergeLobbies([...availableCommunityServers, ...onlineLobbies]),
+            installed,
+            build.id,
+            lanIp,
+            account.username,
+          )
+          if (choice) {
+            setServerFallback({ build, choice })
+            return
+          }
         }
-        // There is nowhere else to go, so turn Play into a working lobby
-        // instead of leaving the player on a zero-lobby screen.
-        startEmptyServer = true
+        const message = `No live external server is hosting ${build.season.label} right now. Try again in a moment or pick another season.`
+        setLaunchFailure({ id: build.id, message })
+        setPhase('error')
+        pushToast({ tone: 'info', title: 'No live external servers', description: message })
+        return
       }
 
-      // A provider season joins the healthiest public community server through
-      // the bundled open-source runtime. The selected host/port is handed to
-      // that runtime so Fortnite loads straight into the live match. If no
-      // public lobby is up, fall through to launchBuild() and start a clean
-      // local session instead of opening an external launcher or browser.
-      let targetJoin = join
-      let autoJoin = false
-      if (build.onlineProvider && !targetJoin && !options.forceHost && !startEmptyServer) {
-        const publicLobby =
-          externalLobby ?? findBestPublicLobby(build, availableLobbies, lanIp, account.username)
-        const publicTarget = publicLobby ? lobbyTarget(publicLobby.address) : null
-        if (publicTarget) {
-          const started = await startOnlineProvider(build, build.onlineProvider, publicTarget)
-          if (started) return
-          // Provider launch failed (for example a damaged bundled DLL). Keep
-          // Play usable by continuing into the local bundled runtime below.
-        }
+      // A provider season joins the chosen live server through the bundled
+      // open-source runtime. A failed provider launch is reported to the
+      // player; it never falls back to hosting the match on this PC.
+      if (build.onlineProvider) {
+        const started = await startOnlineProvider(build, build.onlineProvider, target)
+        if (started) return
+        setLaunchStage(null)
+        setLaunchFailure((current) =>
+          current?.id === build.id
+            ? current
+            : {
+                id: build.id,
+                message: `Could not connect to ${target.host}:${target.port}. Pick another live server and try again.`,
+              },
+        )
+        setPhase('error')
+        return
       }
 
       setLaunchFailure((current) => (current?.id === build.id ? null : current))
@@ -1532,189 +1641,41 @@ export default function App() {
         }
       }
 
-      // Installed -> join a live public lobby from the configured source for
-      // this exact season when one is listed, otherwise host the season. The
-      // source is authoritative, so Play never silently joins a different
-      // directory or relay while the card reads ONLINE READY.
-      let target = targetJoin
-      if (!target && !options.forceHost && !startEmptyServer) {
-        // The configured matchmaking feed is authoritative for ONLINE PLAY.
-        // Use the shared healthiest-lobby ranking so Play never joins a worse
-        // server just because a directory returned its rows out of order.
-        const listed =
-          externalLobby ?? findBestPublicLobby(build, availableLobbies, lanIp, account.username)
-        if (listed) {
-          const parsed = lobbyTarget(listed.address)
-          if (parsed) {
-            target = parsed
-            autoJoin = true
-          }
-        }
-      }
-      let attemptToken = launchAttempts.start(build.id, target ? 'join' : 'host')
+      const attemptToken = launchAttempts.start(build.id, 'join')
       setPhase('launching')
-      setLaunchStage(
-        target
-          ? autoJoin
-            ? 'Joining a public lobby…'
-            : 'Connecting to a live lobby…'
-          : 'Preparing the private server…',
-      )
+      setLaunchStage(chosen ? `Joining ${chosen.name}…` : 'Joining a live external server…')
       const sourceKey = artKeyFor(build.season)
       const runtimeProfile =
         (sourceKey ? seasonManifest[sourceKey]?.runtimeProfile : undefined) ??
         runtimeProfileFor(build.season.chapter, build.version)
 
       try {
-        const launch = (
-          joinTarget?: { host: string; port: number },
-          fallbackToHost = false,
-          botFill = false,
-        ) =>
-          launchBuild(
-            build,
-            session?.user.username,
-            {
-              items: inventoryItemsFor(shop.owned),
-              equipped: shop.equipped,
-            },
-            joinTarget,
-            fallbackToHost,
-            runtimeProfile,
-            { botFill },
-          )
-
-        let launched: Awaited<ReturnType<typeof launchBuild>>
-        // Mark this before the IPC call: a local client can exit while the host
-        // readiness promise is still pending, and that exit must still become
-        // the clean local fallback rather than a raw client-log report.
-        if (!target) localSessionRef.current = build.id
-        try {
-          // Bot fill is disabled for every launch, including local hosts.
-          launched = await launch(target, autoJoin, false)
-        } catch (error) {
-          // A fallback may already have taken over this launch. Never let the
-          // failed attempt report an error or start a second host.
-          if (!launchAttempts.isCurrent(attemptToken)) return
-          const message = error instanceof Error ? error.message : 'The client could not be started.'
-          if (isLocalHostFailure(message)) {
-            const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
-              localSessionRef.current = null
-              setRunningId(null)
-              setPhase('error')
-              setLaunchStage(null)
-              setLaunchFailure({
-                id: build.id,
-                local: true,
-                message: 'This build could not start its local game server. Try again, or choose another installed build.',
-              })
-              pushToast({
-                tone: 'info',
-                title: 'Local match unavailable',
-                description: `${build.season.label} did not open a local server, so no client was started.`,
-              })
-            })
-            if (!applied) return
-            return
-          }
-          // A relay lobby can be listed while its host is already closing. Do
-          // not leave Play stuck on that error: retry the same season locally
-          // and publish the replacement lobby. Explicit friend joins keep their
-          // normal error so the player is not silently redirected.
-          if (!autoJoin || !target) throw error
-          autoJoin = false
-          target = undefined
-          localSessionRef.current = build.id
-          attemptToken = launchAttempts.start(build.id, 'host')
-          setLaunchStage('Lobby closed — starting your own lobby…')
-          pushToast({
-            tone: 'info',
-            title: 'That lobby closed',
-            description: `Starting ${build.season.label} and listing your lobby instead.`,
-          })
-          launched = await launch(undefined, false, true)
-        }
-        if (launched.localHostUnavailable) {
-          const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
-            localSessionRef.current = null
-            setRunningId(null)
-            setPhase('error')
-            setLaunchStage(null)
-            setLaunchFailure({
-              id: build.id,
-              local: true,
-              message: 'This build could not start its local game server. Try again, or choose another installed build.',
-            })
-            pushToast({
-              tone: 'info',
-              title: 'Local match unavailable',
-              description: `${build.season.label} did not open a local server, so no client was started.`,
-            })
-          })
-          if (applied) return
-        }
-        // The initial join can resolve after its post-launch failure fallback
-        // has started. Run the entire running-state update through the real
-        // production guard: if the fallback has claimed the attempt, none of
-        // this (including the hosting stop) may execute.
+        // Bot fill stays off: the external server owns its population. The
+        // selected join target is mandatory, and main rejects a host launch.
+        await launchBuild(
+          build,
+          session?.user.username,
+          {
+            items: inventoryItemsFor(shop.owned),
+            equipped: shop.equipped,
+          },
+          target,
+          false,
+          runtimeProfile,
+          { botFill: false },
+        )
         const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
-          localSessionRef.current = target ? null : build.id
+          localSessionRef.current = null
           setRunningId(build.id)
           setPhase('running')
           setLaunchStage(null)
           setLaunchFailure((current) => (current?.id === build.id ? null : current))
           shop.sets.recordLaunch(build.id)
-          if (target) {
-            setHostedLobby(null)
-            // Queue with the launch token: if the join-failed fallback claims
-            // this attempt before the microtask runs, the stale join never
-            // sends a stop. If it already sent one, the fallback awaits it.
-            void hostingStops.stopFor(attemptToken)
-          } else {
-            // A locally hosted session is always registered. The public flag
-            // still controls whether other people can reach it, but every host
-            // now advertises its match so UPnP promotion or a manual playit.gg
-            // address makes it discoverable without restarting the lobby.
-            const publishHostedLobby = true
-            void (async () => {
-              if (!publishHostedLobby || !cloudSettings.onlineServiceUrl.trim()) return
-              try {
-                const endpoint = await window.arc?.publicAddress?.()
-                if (!launchAttempts.isCurrent(attemptToken)) return
-                // Keep a LAN registration when the router has not answered yet:
-                // the retry effect below can promote it to a public lobby later.
-                const address = endpoint?.address || lanIp
-                if (!address) return
-                setHostedLobby({
-                  address,
-                  port: endpoint?.port || 7777,
-                  buildId: build.id,
-                  label: build.season.label,
-                  public: Boolean(endpoint?.public),
-                  seasonId: artKeyFor(build.season),
-                  players: 1,
-                  publish: true,
-                })
-              } catch {
-                /* friends can still join by IP if the relay is offline */
-              }
-            })()
-          }
+          setHostedLobby(null)
           pushToast({
-            tone: launched.privateServer === false ? 'info' : 'success',
-            title: target
-              ? `Joining ${target.host}`
-              : launched.privateServer === false
-                ? 'Opening the lobby only'
-                : 'Fortnite is starting. Have fun.',
-            description: target
-              ? `${build.season.label} · your client is pointed at ${target.host}:${target.port}`
-              : launched.privateServer === false
-                ? `${build.season.label} · no match server available for this build — no queue was started.`
-                : (cloudSettings.hostPublicLobby || options.autoPublish || startEmptyServer) &&
-                    cloudSettings.onlineServiceUrl.trim()
-                  ? `${build.season.label} · v${build.version} · your lobby is listed for everyone in Open lobbies.`
-                  : `${build.season.label} · v${build.version} · local match started on this PC.`,
+            tone: 'success',
+            title: `Joining ${chosen?.name || target.host}`,
+            description: `${build.season.label} · your client is pointed at ${target.host}:${target.port}.`,
           })
         })
         if (!applied) return
@@ -1736,7 +1697,6 @@ export default function App() {
     [
       downloads,
       launchAttempts,
-      hostingStops,
       phase,
       installed,
       requestDownload,
@@ -1749,21 +1709,19 @@ export default function App() {
       refreshCommunityServers,
       builds,
       account.username,
-      profiles,
-      cloudSettings.hostPublicLobby,
-      cloudSettings.onlineServiceUrl,
+      serverSelections,
+      seasonManifest,
       session?.user.username,
       shop.sets,
       shop.owned,
       shop.equipped,
-      seasonManifest,
     ],
   )
 
   // A public-lobby join can resolve successfully at the process level and then
   // fail once Fortnite tries to connect. Main watches the client log after the
-  // launch; this turns that failure into a fresh local host instead of leaving
-  // the Play card stuck on "running". Explicit friend joins never send this.
+  // launch; this closes the doomed client and points the player back at the
+  // server dropdown instead of starting a server on this PC.
   const handleJoinFailure = useCallback(
     async (payload: { id?: string; host: string; port: number; reason: string }) => {
       if (!payload.id) return
@@ -1771,32 +1729,22 @@ export default function App() {
       const build = builds.find((item) => item.id === payload.id)
       if (!build) return
 
-      // This is the real production fallback. The coordinator claims the
-      // current automatic-join attempt synchronously, so duplicate failures are
-      // ignored and the original launch completion becomes stale.
-      await runJoinFallback(launchAttempts, payload, {
-        closeFailedClient: () => closeBuildProcess(build.id),
-        prepareHost: async () => {
-          setLaunchStage(`Could not join ${payload.host} — starting your own lobby…`)
-          setRunningId(null)
-          setPhase('idle')
-          setHostedLobby(null)
-          // Wait for any stop queued by the failed join before publishing the
-          // replacement host. This makes the original launch unable to clear
-          // the fallback lobby later in the network round trip.
-          await hostingStops.stopFor()
-        },
-        announce: () => {
-          pushToast({
-            tone: 'info',
-            title: payload.reason === 'timeout' ? 'That lobby did not respond' : 'That lobby closed',
-            description: `Starting ${build.season.label} and listing your lobby instead.`,
-          })
-        },
-        startHost: () => startBuild(build, undefined, { forceHost: true, autoPublish: true }),
+      await closeBuildProcess(build.id).catch(() => false)
+      setRunningId(null)
+      setPhase('error')
+      setLaunchStage(null)
+      setHostedLobby(null)
+      setLaunchFailure({
+        id: build.id,
+        message: `${payload.reason === 'timeout' ? 'That server did not respond' : 'That server closed'} (${payload.host}). Pick another live server and try again.`,
+      })
+      pushToast({
+        tone: 'info',
+        title: payload.reason === 'timeout' ? 'That server did not respond' : 'That server closed',
+        description: `Choose another live server for ${build.season.label} and press Play again.`,
       })
     },
-    [builds, hostingStops, launchAttempts, pushToast, runningId, startBuild],
+    [builds, pushToast, runningId],
   )
 
   useEffect(() => {
@@ -1869,7 +1817,7 @@ export default function App() {
       pushToast({
         tone: 'error',
         title: 'That lobby has no usable address',
-        description: 'Start a new public server for your selected season instead.',
+        description: 'Pick another live server from the hero dropdown instead.',
       })
       return
     }
@@ -1878,15 +1826,6 @@ export default function App() {
     setView('home')
     void startBuild(pending.choice.build, target)
   }, [pushToast, serverFallback, startBuild])
-
-  const handleStartFallbackServer = useCallback(() => {
-    const pending = serverFallback
-    if (!pending) return
-    setServerFallback(null)
-    setActiveId(pending.build.id)
-    setView('home')
-    void startBuild(pending.build, undefined, { forceHost: true, autoPublish: true })
-  }, [serverFallback, startBuild])
 
   // Keep the lobby listed while the host is up; the relay drops entries it has
   // not heard from for two minutes.
@@ -2177,27 +2116,40 @@ export default function App() {
     void runBuildVerification(build)
   }, [activeBuild, installed, profiles, pushToast, runBuildVerification])
 
-  const handleDeleteBuild = useCallback(async () => {
-    const build = activeBuild
+  const handleDeleteBuild = useCallback(async (target?: Build) => {
+    const build = target ?? activeBuild
     if (!build || !installed[build.id] || deletingId) return
-    if (!window.confirm(`Delete ${build.season.label} from this PC?\n\nThis removes the downloaded build and its archive.`)) return
+    const managed = isManagedBuild(build)
+    const prompt = managed
+      ? `Uninstall ${build.season.label} from this PC?\n\nThis permanently deletes the downloaded build and its archive from:\n${build.path}`
+      : `Remove ${build.season.label} from VAULTED?\n\nYour existing folder will not be deleted:\n${build.path}`
+    if (!window.confirm(prompt)) return
 
     setDeletingId(build.id)
     try {
-      const result = await deleteBuild(build.id, build.path)
-      if (!result.deleted) {
-        pushToast({
-          tone: 'error',
-          title: result.running ? 'Close the build first' : 'Could not delete this build',
-          description: result.running
-            ? 'The client is still running. Close it, then try again.'
-            : 'Only builds downloaded by VAULTED can be deleted from disk.',
-        })
-        return
+      if (managed) {
+        const result = await deleteBuild(build.id, build.path)
+        if (!result.deleted) {
+          pushToast({
+            tone: 'error',
+            title: result.running ? 'Close the build first' : 'Could not delete this build',
+            description: result.running
+              ? 'The client is still running. Close it, then try again.'
+              : 'VAULTED could not remove that downloaded build folder.',
+          })
+          return
+        }
       }
 
       setInstalled((prev) => ({ ...prev, [build.id]: false }))
       forgetBuildProfile(build)
+      requestedDiskSizes.current.delete(build.path)
+      setDiskSizes((prev) => {
+        if (!build.path || prev[build.path] === undefined) return prev
+        const next = { ...prev }
+        delete next[build.path]
+        return next
+      })
       setBuilds((prev) =>
         prev.map((item) =>
           item.id === build.id
@@ -2214,8 +2166,10 @@ export default function App() {
       setLaunchFailure((current) => (current?.id === build.id ? null : current))
       pushToast({
         tone: 'success',
-        title: 'Build deleted',
-        description: `${build.season.label} and its archive were removed from this PC.`,
+        title: managed ? 'Build uninstalled' : 'Removed from VAULTED',
+        description: managed
+          ? `${build.season.label} and its archive were removed from this PC.`
+          : `${build.season.label} was unlinked. Your folder at ${build.path} was not deleted.`,
       })
     } catch (error) {
       pushToast({
@@ -2227,6 +2181,19 @@ export default function App() {
       setDeletingId(null)
     }
   }, [activeBuild, deletingId, forgetBuildProfile, installed, pushToast])
+
+  const handleOpenBuildFolder = useCallback(async (target?: Build) => {
+    const folder = target?.path ?? activeBuild?.path
+    if (!folder) return
+    const result = await openBuildFolder(folder)
+    if (!result.ok) {
+      pushToast({
+        tone: 'error',
+        title: 'Could not open that folder',
+        description: result.error || 'The install folder may have been moved or deleted.',
+      })
+    }
+  }, [activeBuild?.path, pushToast])
 
   // settings tab: point the selected build at a different folder
   const handleBrowseFolder = useCallback(async () => {
@@ -2365,11 +2332,12 @@ export default function App() {
           providerLabel: profileProviderLabelFor(activeBuild, profiles),
         }
       : activeBuild
-  const canDeleteActive = Boolean(
+  const canVerifyActive = Boolean(
     activeBuild &&
       installed[activeBuild.id] &&
       /vaulted launcher[\\/]+builds[\\/]/i.test(activeBuild.path),
   )
+  const canRemoveActive = Boolean(activeBuild && installed[activeBuild.id])
 
   useEffect(() => {
     if (!session) return
@@ -2450,6 +2418,7 @@ export default function App() {
                 const root = profiles.defaultBuildsRoot || buildsRoot || ''
                 void scanExistingBuilds(root ? { rootOverride: root } : {})
               }}
+              onLinkExistingFolder={() => void handleLinkExistingFolder()}
               scanning={scanning}
               onOpenLibrary={() => {
                 setView('home')
@@ -2515,11 +2484,26 @@ export default function App() {
                 download={activeBuild ? downloads[activeBuild.id] ?? null : null}
                 activeNow={activeKey ? Math.max(0, (activeCounts[activeKey] ?? 0) - 1) : null}
                 playMode={activePlayMode}
+                serverOptions={activeServerRoute?.options ?? []}
+                autoServer={activeServerRoute?.server ?? null}
+                selectedServer={activeServerSelection}
+                onSelectServer={(address) => {
+                  if (!activeBuild) return
+                  setServerSelections((prev) => {
+                    const next = { ...prev }
+                    if (address) next[activeBuild.id] = address
+                    else delete next[activeBuild.id]
+                    return next
+                  })
+                }}
                 account={account}
                 sourceKeys={sourceKeys}
                 downloadSize={activeDownloadSize}
+                diskSize={activeBuild ? diskSizes[activeBuild.path] ?? null : null}
                 installed={installed}
-                canDelete={canDeleteActive}
+                canRemove={canRemoveActive}
+                canVerify={canVerifyActive}
+                managed={canVerifyActive}
                 deleting={deletingId === activeBuild?.id}
                 launchStage={launchStage}
                 launchError={activeLaunchFailure}
@@ -2527,7 +2511,8 @@ export default function App() {
                 hostedLobby={activeBuild && hostedLobby?.buildId === activeBuild.id ? hostedLobby : null}
                 verify={activeVerifyJob}
                 onVerify={handleVerifyBuild}
-                onLocateFolder={() => void handleLocateExistingFolder()}
+                onLocateFolder={() => void handleLinkExistingFolder()}
+                onOpenFolder={() => void handleOpenBuildFolder()}
                 onLogout={() => void handleLogout()}
                 onPrimary={handlePrimary}
                 onPauseDownload={() => void handlePauseDownload()}
@@ -2545,11 +2530,15 @@ export default function App() {
                 installed={installed}
                 sourceKeys={sourceKeys}
                 sourceSizes={sourceSizes}
+                diskSizes={diskSizes}
                 activeCounts={activeCounts}
                 activeKey={activeKey}
                 playModes={playModes}
                 onSelect={handleSelect}
                 onAdd={() => setDialogOpen(true)}
+                onLinkExisting={() => void handleLinkExistingFolder()}
+                onOpenFolder={(build) => void handleOpenBuildFolder(build)}
+                onRemove={(build) => void handleDeleteBuild(build)}
               />
             </div>
           </div>
@@ -2571,6 +2560,7 @@ export default function App() {
         installed={installed}
         sourceKeys={sourceKeys}
         sourceSizes={sourceSizes}
+        diskSizes={diskSizes}
         activeCounts={activeCounts}
         activeKey={activeKey}
         playModes={playModes}
@@ -2580,6 +2570,8 @@ export default function App() {
           setDrawerOpen(false)
           setDialogOpen(true)
         }}
+        onOpenFolder={(build) => void handleOpenBuildFolder(build)}
+        onRemove={(build) => void handleDeleteBuild(build)}
       />
 
       <AddBuildDialog open={dialogOpen} onClose={() => setDialogOpen(false)} onAdd={handleAdd} />
@@ -2589,7 +2581,6 @@ export default function App() {
           selectedBuild={serverFallback.build}
           choice={serverFallback.choice}
           onJoinAlternative={handleJoinFallbackSeason}
-          onStartServer={handleStartFallbackServer}
           onClose={() => setServerFallback(null)}
         />
       )}

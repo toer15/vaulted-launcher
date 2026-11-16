@@ -11,12 +11,15 @@ interface BuildDrawerProps {
   installed: Record<string, boolean>
   sourceKeys?: Set<string>
   sourceSizes?: Record<string, number>
+  diskSizes?: Record<string, number>
   activeCounts?: Record<string, number>
   activeKey?: string | null
   playModes: Record<string, SeasonPlayMode>
   onClose: () => void
   onSelect: (id: string) => void
   onAdd: () => void
+  onOpenFolder?: (build: Build) => void
+  onRemove?: (build: Build) => void
 }
 
 export function BuildDrawer({
@@ -26,12 +29,15 @@ export function BuildDrawer({
   installed,
   sourceKeys,
   sourceSizes,
+  diskSizes,
   activeCounts,
   activeKey,
   playModes,
   onClose,
   onSelect,
   onAdd,
+  onOpenFolder,
+  onRemove,
 }: BuildDrawerProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
 
@@ -82,6 +88,7 @@ export function BuildDrawer({
             installed={installed}
             sourceKeys={sourceKeys}
             sourceSizes={sourceSizes}
+            diskSizes={diskSizes}
             activeCounts={activeCounts}
             activeKey={activeKey}
             playModes={playModes}
@@ -90,6 +97,8 @@ export function BuildDrawer({
               onClose()
             }}
             onAdd={onAdd}
+            onOpenFolder={onOpenFolder}
+            onRemove={onRemove}
           />
         </div>
 

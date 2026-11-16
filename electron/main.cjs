@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
@@ -326,6 +326,60 @@ function writeAppSettings(next) {
 
 function buildsRoot() {
   return readAppSettings().defaultInstallDir
+}
+
+const folderSizeCache = new Map()
+const folderSizePending = new Map()
+
+/** Total bytes in an installed build folder, cached because cards re-render often. */
+async function folderSize(folder) {
+  const resolved = path.resolve(folder)
+  try {
+    const root = await fs.promises.stat(resolved)
+    if (!root.isDirectory()) return null
+  } catch {
+    return null
+  }
+
+  const cached = folderSizeCache.get(resolved)
+  if (cached && Date.now() - cached.at < 5 * 60 * 1000) return cached.bytes
+  if (folderSizePending.has(resolved)) return folderSizePending.get(resolved)
+
+  const pending = (async () => {
+    let bytes = 0
+    let entries = 0
+    const stack = [resolved]
+    while (stack.length > 0 && entries < 500000) {
+      const dir = stack.pop()
+      let children
+      try {
+        children = await fs.promises.readdir(dir, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const child of children) {
+        if (entries >= 500000) break
+        const full = path.join(dir, child.name)
+        if (child.isDirectory()) {
+          stack.push(full)
+          continue
+        }
+        if (!child.isFile()) continue
+        try {
+          const stat = await fs.promises.stat(full)
+          bytes += stat.size
+          entries += 1
+        } catch {
+          /* skip files another process is still writing */
+        }
+      }
+    }
+    folderSizeCache.set(resolved, { bytes, at: Date.now() })
+    return bytes
+  })().finally(() => folderSizePending.delete(resolved))
+
+  folderSizePending.set(resolved, pending)
+  return pending
 }
 
 function assertBuild(payload) {
@@ -3631,6 +3685,8 @@ function registerIpc() {
     if (!managedFolder || path.dirname(managedFolder) !== root) return { deleted: false, managed: false }
 
     await fs.promises.rm(managedFolder, { recursive: true, force: true, maxRetries: 3, retryDelay: 250 })
+    folderSizeCache.delete(path.resolve(managedFolder))
+    folderSizeCache.delete(path.resolve(payload.path))
     return { deleted: true, managed: true }
   })
 
@@ -3702,16 +3758,20 @@ function registerIpc() {
     const id = typeof payload.id === 'string' ? payload.id : null
     const join = joinTargetFromPayload(payload)
     const joinFallback = join && payload.joinFallback === true
+    // VAULTED is a client-only launcher. Without an external destination it
+    // must refuse the launch instead of starting a 127.0.0.1 game server on
+    // this PC; the renderer selects a live community server before Play.
+    if (!join) {
+      throw new Error('VAULTED connects to live external servers only. Pick a live server and try again.')
+    }
     if (id) stopJoinWatchdog(id)
     let injector = null
     let gamePid = null
-    let gameServerReady = false
     let matchmakingReady = false
 
     try {
-      send('arc:launch-status', { id: id ?? undefined, message: 'Preparing the private server…' })
-      if (join) writeJoinTarget(join.host, join.port)
-      else clearJoinTarget()
+      send('arc:launch-status', { id: id ?? undefined, message: 'Connecting to the live server…' })
+      writeJoinTarget(join.host, join.port)
       await ensureLocalBackend(payload.username)
       if (payload.inventory) {
         try {
@@ -3767,47 +3827,15 @@ function registerIpc() {
         })
       }
 
-      let serverSpawned = false
-      if (!join) {
-        try {
-          await ensureGameServer(payload)
-          serverSpawned = true
-        } catch (error) {
-          // Do not launch a client into a guaranteed-empty local session. A
-          // failed host used to fall through to the player client, which then
-          // crashed and left the UI showing a raw client log. Return a clean
-          // result so the renderer can explain the fallback and keep the player
-          // in the launcher instead of starting a doomed client.
-          const reason = error instanceof Error ? error.message : String(error)
-          console.warn(`[VAULTED] Local game server unavailable: ${reason}`)
-          await stopGameServer()
-          await stopOwnedListener(MATCHMAKER_PORT, 'matchmaker.cjs')
-          send('arc:launch-status', { id: id ?? undefined, message: 'Local hosting is unavailable for this build.' })
-          return {
-            pid: null,
-            privateServer: false,
-            matchmaking: matchmakingReady,
-            joined: null,
-            localHostUnavailable: true,
-            reason,
-          }
-        }
-      } else {
-        send('arc:launch-status', {
-          id: id ?? undefined,
-          message: `Joining ${join.host}:${join.port}…`,
-        })
-      }
+      send('arc:launch-status', {
+        id: id ?? undefined,
+        message: `Joining ${join.host}:${join.port}…`,
+      })
 
       send('arc:launch-status', { id: id ?? undefined, message: 'Starting Fortnite…' })
       const launched = await launchInjectedGame(payload)
       const playerStartedAt = Date.now()
       registerPlayer(launched)
-
-      if (serverSpawned) {
-        await awaitGameServerReady()
-        gameServerReady = true
-      }
 
       // The launch resolves before the client has connected to the remote
       // lobby. Keep watching the log so a host that disappears during loading
@@ -3825,9 +3853,9 @@ function registerIpc() {
       send('arc:launch-status', { id: id ?? undefined, message: 'Signing in to the private server…' })
       return {
         pid: gamePid,
-        privateServer: gameServerReady,
+        privateServer: false,
         matchmaking: matchmakingReady,
-        joined: join ? `${join.host}:${join.port}` : null,
+        joined: `${join.host}:${join.port}`,
       }
     } catch (error) {
       if (id) stopJoinWatchdog(id)
@@ -3993,6 +4021,45 @@ function registerIpc() {
 
     if (result.canceled || result.filePaths.length === 0) return null
     return result.filePaths[0]
+  })
+
+  ipcMain.handle('arc:link-build-folder', async () => {
+    const parent = mainWindow ?? undefined
+    const options = {
+      title: 'Link an existing Fortnite season folder',
+      buttonLabel: 'Link this folder',
+      properties: ['openDirectory'],
+    }
+    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return null
+
+    const picked = result.filePaths[0]
+    const executable = findExecutable(picked)
+    if (!executable) {
+      return {
+        ok: false,
+        error: 'FortniteClient-Win64-Shipping.exe was not found in that folder. Pick the build root or its FortniteGame\\Binaries\\Win64 folder.',
+      }
+    }
+
+    return { ok: true, folder: folderForExecutable(executable), executable }
+  })
+
+  ipcMain.handle('arc:build-size', (_event, folder) => {
+    if (typeof folder !== 'string' || !folder.trim()) return null
+    return folderSize(folder)
+  })
+
+  ipcMain.handle('arc:open-build-folder', async (_event, folder) => {
+    if (typeof folder !== 'string' || !folder.trim()) return { ok: false, error: 'No install folder.' }
+    try {
+      const stat = await fs.promises.stat(folder)
+      if (!stat.isDirectory()) return { ok: false, error: 'That install folder no longer exists.' }
+      const error = await shell.openPath(folder)
+      return error ? { ok: false, error } : { ok: true }
+    } catch {
+      return { ok: false, error: 'That install folder no longer exists.' }
+    }
   })
 
   ipcMain.handle('win:minimize', () => {

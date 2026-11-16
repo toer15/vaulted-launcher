@@ -328,7 +328,9 @@ export function withInstalledBuild(
       [key]: {
         seasonId: key,
         buildFolderPath: folder,
-        executablePath: existing?.executablePath ?? null,
+        // Persist the exact client the linker verified (some builds only ship a
+        // bootstrapper executable). Existing per-card overrides still win.
+        executablePath: existing?.executablePath ?? (build.executable || null),
         providerLabel: existing?.providerLabel ?? '',
         isInstalled: true,
         version: build.version || existing?.version,

@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('arc', {
   pickInstallDir: () => ipcRenderer.invoke('arc:pick-install-dir'),
   pickExecutable: () => ipcRenderer.invoke('arc:pick-executable'),
   pickBuildsRoot: () => ipcRenderer.invoke('arc:pick-builds-root'),
+  linkBuildFolder: () => ipcRenderer.invoke('arc:link-build-folder'),
+  buildSize: (folder) => ipcRenderer.invoke('arc:build-size', folder),
+  openBuildFolder: (folder) => ipcRenderer.invoke('arc:open-build-folder', folder),
   getBuildsRoot: () => ipcRenderer.invoke('arc:builds-root'),
   settings: {
     read: () => ipcRenderer.invoke('arc:settings-read'),
