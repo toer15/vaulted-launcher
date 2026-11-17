@@ -61,6 +61,10 @@ interface ActiveBuildCardProps {
   serverOptions?: CommunityServer[]
   /** explicitly selected external server address, null = Auto */
   selectedServer?: string | null
+  /** explicit global provider selection, e.g. the local Neo lobby-only option */
+  selectedGlobalId?: string | null
+  /** bundled local lobby-only engine exposed as an explicit fallback */
+  localBackend?: GlobalBackend | null
   onSelectServer?: (address: string | null) => void
   /** whether a VAULTED or verified provider session is active */
   signedIn?: boolean
@@ -278,6 +282,8 @@ export function ActiveBuildCard({
   autoGlobalBackend,
   serverOptions = [],
   selectedServer = null,
+  selectedGlobalId = null,
+  localBackend = null,
   onSelectServer,
   signedIn = true,
   onSignIn,
@@ -418,9 +424,14 @@ export function ActiveBuildCard({
   const selectedServerOption = selectedServer
     ? serverOptions.find((server) => server.address === selectedServer) ?? null
     : null
-  const serverBadge = liveServers > 0
-    ? `ONLINE · ${liveServers} ${liveServers === 1 ? 'SERVER' : 'SERVERS'}`
-    : 'OFFLINE'
+  const selectedLocalBackend =
+    localBackend && selectedGlobalId === localBackend.id ? localBackend : null
+  const serverBadge = selectedLocalBackend
+    ? 'LOCAL ONLY'
+    : liveServers > 0
+      ? `ONLINE · ${liveServers} ${liveServers === 1 ? 'SERVER' : 'SERVERS'}`
+      : 'OFFLINE'
+  const serverBadgeLive = liveServers > 0 && !selectedLocalBackend
   const activeBackendHealth = healthForBackend(activeGlobalBackend)
   const activeBackendOffline = activeBackendHealth.state === 'down'
   const heroHealth: ServerHealth | null = autoServer
@@ -765,20 +776,30 @@ export function ActiveBuildCard({
               <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[10.5px] text-fog backdrop-blur transition-colors duration-200 hover:border-emerald-400/35 [&::-webkit-details-marker]:hidden">
                 <Server className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
                 <span className="min-w-0 flex-1 truncate font-semibold text-mist">
-                  {selectedServerOption ? selectedServerOption.address : 'Auto · best live server'}
+                  {selectedLocalBackend
+                    ? `${selectedLocalBackend.label} · Local Lobby Only`
+                    : selectedServerOption
+                      ? selectedServerOption.address
+                      : 'Auto · best live server'}
                 </span>
                 <span
                   className={cx(
                     'inline-flex shrink-0 items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em]',
-                    liveServers > 0
-                      ? 'border-emerald-300/45 bg-emerald-400/20 text-emerald-200'
-                      : 'border-rose-400/25 bg-rose-500/[0.08] text-rose-200/80',
+                    selectedLocalBackend
+                      ? 'border-amber-300/40 bg-amber-400/15 text-amber-200'
+                      : serverBadgeLive
+                        ? 'border-emerald-300/45 bg-emerald-400/20 text-emerald-200'
+                        : 'border-rose-400/25 bg-rose-500/[0.08] text-rose-200/80',
                   )}
                 >
                   <span
                     className={cx(
                       'h-1.5 w-1.5 rounded-full',
-                      liveServers > 0 ? 'bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]' : 'bg-rose-400/80',
+                      selectedLocalBackend
+                        ? 'bg-amber-400'
+                        : serverBadgeLive
+                          ? 'bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]'
+                          : 'bg-rose-400/80',
                     )}
                   />
                   {serverBadge}
@@ -843,6 +864,38 @@ export function ActiveBuildCard({
                         </span>
                       </button>
                     ))}
+                  </>
+                )}
+                {localBackend && (
+                  <>
+                    <p className="px-2.5 pb-1 pt-2 text-[8.5px] font-bold uppercase tracking-[0.16em] text-fog/60">
+                      Local fallback · lobby only
+                    </p>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        onSelectServer(`global:${localBackend.id}`)
+                        event.currentTarget.closest('details')?.removeAttribute('open')
+                      }}
+                      className={cx(
+                        'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                        selectedGlobalId === localBackend.id
+                          ? 'bg-amber-400/[0.09]'
+                          : 'hover:bg-white/[0.05]',
+                      )}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[11.5px] font-semibold text-mist">
+                          {localBackend.label} · Local Lobby Only
+                        </span>
+                        <span className="mt-0.5 block truncate text-[9.5px] text-fog/80">
+                          {localBackend.id === 'neo' ? 'Neonite V2' : localBackend.name} · 127.0.0.1 · local lobby, no global matchmaking
+                        </span>
+                      </span>
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-300/35 bg-amber-400/15 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-[0.06em] text-amber-200">
+                        LOCAL ONLY
+                      </span>
+                    </button>
                   </>
                 )}
               </div>

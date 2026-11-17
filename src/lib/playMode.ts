@@ -152,6 +152,12 @@ function privateIpv4(host: string): boolean {
   return parts[0] === 10 || (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) || (parts[0] === 192 && parts[1] === 168)
 }
 
+/** A loopback row belongs to this PC and is never a remote multiplayer target. */
+export function isRemoteServer(server: Pick<CommunityServer, 'host'> | null | undefined): boolean {
+  const host = String(server?.host || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
+  return Boolean(host) && host !== '127.0.0.1' && host !== 'localhost' && host !== '::1'
+}
+
 /** Public lobbies work anywhere; a private address is only useful on this LAN. */
 export function lobbyIsReachable(lobby: LobbyInfo, lanIp: string | null): boolean {
   if (lobby.public) return true
@@ -215,14 +221,18 @@ export function isLocalEngine(provider: Pick<GlobalBackend, 'global' | 'mode'>):
 /**
  * The badge and Play use one rule: any mapped engine whose probe is reachable
  * is routable. A missing population/server payload is not a reason to skip the
- * engine while the UI is already showing that season as ONLINE.
+ * engine while the UI is already showing that season as ONLINE. A local
+ * lobby-only engine (Neo/Neonite) never wins Auto over an exact live remote
+ * server: its health probe only proves this PC can start a private lobby.
  */
 export function providerCanAutoRoute(
-  _provider: GlobalBackend,
+  provider: GlobalBackend,
   live: ProviderLiveStatus | undefined,
-  _exactServer?: CommunityServer | null,
+  exactServer?: CommunityServer | null,
 ): boolean {
-  return live?.online === true
+  if (live?.online !== true) return false
+  if (isLocalEngine(provider) && isRemoteServer(exactServer)) return false
+  return true
 }
 
 /** A public, fresh row with a real address can be joined directly. */
@@ -466,6 +476,10 @@ export function playModesForBuilds(
 ): Record<string, SeasonPlayMode> {
   const globalBySeason = new Map<string, GlobalBackend[]>()
   for (const backend of globalBackends) {
+    // Local launchers are not global multiplayer backends. Their probe only
+    // confirms the bundled private lobby can start, so it must not make a
+    // season look globally ONLINE or become Auto's chosen server.
+    if (isLocalEngine(backend)) continue
     // Every mapped engine contributes to the season's live badge and count.
     // Reachability is the only requirement; the probe already supplies one
     // server when a backend does not publish a player or server count.

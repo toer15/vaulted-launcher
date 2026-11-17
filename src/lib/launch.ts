@@ -373,6 +373,8 @@ export interface LauncherBridge {
     buildFolderPath: string
     joinHost?: string
     joinPort?: number
+    /** explicit opt-in for the bundled lobby-only backend when no remote server exists */
+    allowLocalLobby?: boolean
   }): Promise<OnlineProviderLaunchResult>
   window?: WindowControls
 }
@@ -489,6 +491,7 @@ export async function launchOnlineProvider(
   build: Build,
   provider: OnlineProviderConfig,
   server?: Pick<CommunityServer, 'host' | 'port'> | null,
+  options: { allowLocalLobby?: boolean } = {},
 ): Promise<OnlineProviderLaunchResult> {
   if (!window.arc?.launchOnlineProvider) {
     throw new Error('Online play needs the desktop app.')
@@ -501,6 +504,7 @@ export async function launchOnlineProvider(
       version: build.version,
       buildFolderPath: build.path,
       ...(server ? { joinHost: server.host, joinPort: server.port } : {}),
+      ...(options.allowLocalLobby ? { allowLocalLobby: true } : {}),
     })
   } catch (error) {
     throw cleanIpcError(error)

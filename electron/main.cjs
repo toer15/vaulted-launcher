@@ -4915,6 +4915,16 @@ async function launchOnlineProvider(payload) {
   }
 
   const join = joinTargetFromPayload(payload)
+  // A local launcher profile is a private Neonite-style lobby, not a hosted
+  // multiplayer backend. It may only start without a remote join target when
+  // the renderer explicitly asked for that lobby-only fallback (the "Local
+  // Lobby Only" dropdown choice, or a season with no exact remote server).
+  // This prevents Auto from silently queueing a global season on 127.0.0.1.
+  if (localLauncher && !join && payload?.allowLocalLobby !== true) {
+    throw new Error(
+      `${profile.label} is a local lobby-only backend. Choose a live server, or select ${profile.label} · Local Lobby Only to play a private lobby.`,
+    )
+  }
   if (join) writeJoinTarget(join.host, join.port)
   else clearJoinTarget()
 

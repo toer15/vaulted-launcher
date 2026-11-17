@@ -20,6 +20,8 @@ import {
   providerMatches,
   routeExternalServer,
   seasonLabelForId,
+  isLocalEngine,
+  isRemoteServer,
 } from './lib/playMode'
 import {
   clearOnlineLobby,
@@ -492,6 +494,15 @@ export default function App() {
         }),
     [providerAuthStatus, providerBuilds, providerCatalog, providerLiveStatusWithDirectories],
   )
+  // Auto may use a hosted provider's dynamically discovered seasons, but a
+  // bundled local launcher must stay behind every remote route. The provider
+  // catalog can list both, so de-duplicate by id and let selection rank them.
+  const autoGlobalProviders = useMemo(() => {
+    const byId = new Map<string, GlobalBackend>()
+    for (const provider of nativeProviders) byId.set(provider.id, provider)
+    for (const provider of verifiedOAuthProviders) byId.set(provider.id, provider)
+    return [...byId.values()]
+  }, [nativeProviders, verifiedOAuthProviders])
   const providerVerified = useMemo(
     () => verifiedOAuthProviders.some((provider) => providerAuthStatus[provider.id]?.signedIn),
     [providerAuthStatus, verifiedOAuthProviders],
@@ -907,17 +918,19 @@ export default function App() {
   )
   const activeGlobalBackends = useMemo(() => {
     if (!activeKey) return []
-    return nativeProviders.filter((provider) => provider.supportedSeasons.includes(activeKey))
-  }, [activeKey, nativeProviders])
+    return autoGlobalProviders.filter((provider) => provider.supportedSeasons.includes(activeKey))
+  }, [activeKey, autoGlobalProviders])
   const selectedServerValue = activeBuild ? serverSelections[activeBuild.id] : undefined
-  const healthyAutoProviders = activeGlobalBackends.filter(
-    (provider) =>
-      providerCanAutoRoute(provider, provider.live, activeServerRoute?.exactServer) &&
-      (provider.auth === 'none' ||
-        provider.auth === 'oauth' ||
-        provider.auth === 'deeplink' ||
-        provider.auth === 'embedded_web'),
-  )
+  const healthyAutoProviders = activeGlobalBackends
+    .filter(
+      (provider) =>
+        providerCanAutoRoute(provider, provider.live, activeServerRoute?.exactServer) &&
+        (provider.auth === 'none' ||
+          provider.auth === 'oauth' ||
+          provider.auth === 'deeplink' ||
+          provider.auth === 'embedded_web'),
+    )
+    .sort((left, right) => Number(isLocalEngine(left)) - Number(isLocalEngine(right)))
   const autoGlobalBackend =
     activeBuild && !selectedServerValue && !activeServerRoute?.exactServer
       ? healthyAutoProviders.find((provider) => provider.id === activeBuild.onlineProvider?.id) ??
@@ -2558,6 +2571,7 @@ export default function App() {
         /** true when this target belongs to a different season */
         fallback?: boolean
       },
+      options: { allowLocalLobby?: boolean } = { allowLocalLobby: true },
     ): Promise<boolean> => {
       if (!window.arc?.launchOnlineProvider) {
         pushToast({
@@ -2677,7 +2691,7 @@ export default function App() {
               : 'Joining a public server…'
             : `Starting ${build.season.label} online…`,
         )
-        const result = await launchOnlineProvider(build, provider, server)
+        const result = await launchOnlineProvider(build, provider, server, options)
         if (!result.launched) throw new Error('Online play could not be started.')
         const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
           setRunningId(build.id)
@@ -3070,7 +3084,7 @@ export default function App() {
       const selection = !join ? serverSelections[build.id] : undefined
       const seasonKey = artKeyFor(build.season)
       const globalOptions = seasonKey
-        ? nativeProviders.filter((provider) => provider.supportedSeasons.includes(seasonKey))
+        ? autoGlobalProviders.filter((provider) => provider.supportedSeasons.includes(seasonKey))
         : []
       const selectedGlobal = selection?.startsWith('global:')
         ? globalOptions.find((provider) => `global:${provider.id}` === selection) ?? null
@@ -3093,30 +3107,40 @@ export default function App() {
       const mappedGlobal = build.onlineProvider
         ? globalOptions.find((provider) => provider.id === build.onlineProvider?.id) ?? null
         : null
+      // Only an explicit local pick or a season with no exact remote server may
+      // use the bundled lobby-only engine. The final fallback below used to
+      // route a live remote season back into Neo's 127.0.0.1 matchmaker.
+      const remoteExactServer = isRemoteServer(route.exactServer)
+      const autoLocalAllowed = !remoteExactServer
+      const autoCandidates = globalOptions.filter(
+        (provider) => autoLocalAllowed || !isLocalEngine(provider),
+      )
       const autoGlobal =
-        globalOptions.find(
+        autoCandidates.find(
           (provider) =>
             providerIsSignedIn(provider) &&
             providerIsAutoRoutable(provider) &&
             provider.id === build.onlineProvider?.id,
         ) ??
-        globalOptions.find(
+        autoCandidates.find(
           (provider) =>
             providerCanRoute(provider) &&
             providerIsAutoRoutable(provider) &&
             provider.id === build.onlineProvider?.id,
         ) ??
-        globalOptions.find(
+        autoCandidates.find(
           (provider) => providerIsSignedIn(provider) && providerIsAutoRoutable(provider),
         ) ??
-        globalOptions.find(
+        autoCandidates.find(
           (provider) => providerCanRoute(provider) && providerIsAutoRoutable(provider),
         ) ??
         // The badge can be ONLINE through any mapped engine. If the mapped
         // engine is the only route left, still attempt it instead of falling
         // through to a dead-end "no live server" message.
         (playModes[build.id]?.online || playModes[build.id]?.globalOnline
-          ? mappedGlobal ?? globalOptions[0] ?? null
+          ? autoCandidates.find((provider) => provider.id === mappedGlobal?.id) ??
+            autoCandidates[0] ??
+            null
           : null)
       const chosen = join
         ? null
@@ -3143,7 +3167,7 @@ export default function App() {
       // matching live server is selected, start the client through that
       // launcher's redirect profile instead of the generic VAULTED runtime.
       const localLauncher =
-        !globalTarget && !selectedGlobal && build.onlineProvider
+        !remoteExactServer && !globalTarget && !selectedGlobal && build.onlineProvider
           ? providerCatalog.find(
               (provider) =>
                 provider.id === build.onlineProvider?.id &&
@@ -3179,6 +3203,10 @@ export default function App() {
                   fallback: Boolean(fallbackNote),
                 }
               : undefined),
+          {
+            allowLocalLobby:
+              autoLocalAllowed || Boolean(selectedGlobal && isLocalEngine(selectedGlobal)),
+          },
         )
         if (started) return
         if (accountPromptRef.current) return
@@ -4316,6 +4344,19 @@ export default function App() {
                 selectedServer={
                   selectedServerValue && !selectedServerValue.startsWith('global:')
                     ? selectedServerValue
+                    : null
+                }
+                selectedGlobalId={
+                  selectedServerValue?.startsWith('global:')
+                    ? selectedServerValue.slice('global:'.length)
+                    : null
+                }
+                localBackend={
+                  activeBuild?.onlineProvider
+                    ? autoGlobalProviders.find(
+                        (provider) =>
+                          provider.id === activeBuild.onlineProvider?.id && isLocalEngine(provider),
+                      ) ?? null
                     : null
                 }
                 onSelectServer={(address) => {
