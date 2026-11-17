@@ -91,6 +91,12 @@ interface ActiveBuildCardProps {
   launchErrorLocal?: boolean
   /** provider account verification URL for an actionable launch failure */
   launchVerificationUrl?: string | null
+  /** provider build.verify rejected the installed files */
+  buildVerificationRequired?: boolean
+  /** exact live version the repair will install, e.g. "6.21" */
+  liveBuildVersion?: string | null
+  /** one-click download/repair to the provider's live manifest */
+  onUpdateLiveBuild?: () => void
   /** explicit action; the embedded provider page is never opened by Play */
   onOpenVerification?: () => void
   onRetryLaunch?: () => void
@@ -233,6 +239,9 @@ export function ActiveBuildCard({
   launchError,
   launchErrorLocal,
   launchVerificationUrl,
+  buildVerificationRequired,
+  liveBuildVersion,
+  onUpdateLiveBuild,
   onOpenVerification,
   onRetryLaunch,
   hostedLobby,
@@ -279,11 +288,14 @@ export function ActiveBuildCard({
   const { season } = build
   const busy = state === 'launching' || state === 'downloading'
   const verificationRequired = Boolean(launchVerificationUrl)
+  const buildUpdateRequired = Boolean(buildVerificationRequired && onUpdateLiveBuild)
   const pill = verificationRequired
     ? { label: 'Verification needed', dot: 'bg-amber-400', text: 'text-amber-300' }
-    : launchErrorLocal
-      ? { label: 'Unavailable', dot: 'bg-amber-400', text: 'text-amber-300' }
-      : STATE_PILL[state]
+    : buildUpdateRequired
+      ? { label: 'Build update needed', dot: 'bg-amber-400', text: 'text-amber-300' }
+      : launchErrorLocal
+        ? { label: 'Unavailable', dot: 'bg-amber-400', text: 'text-amber-300' }
+        : STATE_PILL[state]
   const isOnlineProvider = Boolean(build.onlineProvider)
   const showLocateExisting = !busy && state !== 'running' && !isOnlineProvider
   const isInstalled = Boolean(installed?.[build.id])
@@ -955,33 +967,37 @@ export function ActiveBuildCard({
             <div
               className={cx(
                 'mb-3 rounded-2xl border px-3.5 py-3 text-[11.5px] leading-relaxed backdrop-blur',
-                verificationRequired
+                verificationRequired || buildUpdateRequired
                   ? 'border-amber-400/35 bg-amber-400/[0.08] text-amber-100'
                   : launchErrorLocal
                     ? 'border-amber-400/30 bg-amber-400/[0.07] text-amber-100'
                     : 'border-rose-400/30 bg-rose-500/[0.08] text-rose-100',
               )}
-              role={verificationRequired || launchErrorLocal ? 'status' : 'alert'}
+              role={verificationRequired || buildUpdateRequired || launchErrorLocal ? 'status' : 'alert'}
             >
               <div className="flex items-start gap-2">
                 <TriangleAlert
                   className={cx(
                     'mt-0.5 h-4 w-4 shrink-0',
-                    verificationRequired || launchErrorLocal ? 'text-amber-300' : 'text-rose-300',
+                    verificationRequired || buildUpdateRequired || launchErrorLocal
+                      ? 'text-amber-300'
+                      : 'text-rose-300',
                   )}
                 />
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold">
                     {verificationRequired
                       ? 'Account verification needed'
-                      : launchErrorLocal
-                        ? 'Local match unavailable'
-                        : 'Why the last launch stopped'}
+                      : buildUpdateRequired
+                        ? 'Build files need updating'
+                        : launchErrorLocal
+                          ? 'Local match unavailable'
+                          : 'Why the last launch stopped'}
                   </p>
                   <p
                     className={cx(
                       'mt-1 break-words',
-                      verificationRequired
+                      verificationRequired || buildUpdateRequired
                         ? 'text-[11px] leading-relaxed text-amber-100/90'
                         : launchErrorLocal
                           ? 'text-[11px] text-amber-100/85'
@@ -990,6 +1006,19 @@ export function ActiveBuildCard({
                   >
                     {launchError}
                   </p>
+                  {buildUpdateRequired && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onUpdateLiveBuild?.()}
+                        title="Download or repair the exact files from Era's live build, then launch"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300/40 bg-amber-300/15 px-2.5 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.05em] text-amber-100 transition-colors duration-200 hover:border-amber-200/70 hover:bg-amber-300/25 hover:text-white"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Update to Era&apos;s Live Build{liveBuildVersion ? ` (${liveBuildVersion})` : ''}
+                      </button>
+                    </div>
+                  )}
                   {verificationRequired && launchVerificationUrl && onOpenVerification && (
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button

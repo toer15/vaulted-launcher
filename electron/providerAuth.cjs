@@ -4,6 +4,7 @@ const fs = require('node:fs')
 const http = require('node:http')
 const path = require('node:path')
 const crypto = require('node:crypto')
+const WebSocket = require('ws')
 
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
 const VERIFICATION_TIMEOUT_MS = 5 * 60 * 1000
@@ -11,6 +12,14 @@ const VERIFICATION_POLL_MS = 5_000
 const REQUEST_TIMEOUT_MS = 20_000
 const TOKEN_FILE = 'provider-auth.bin'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const BUILD_VERIFICATION_STATUS = 'build_verification_required'
+const GAME_VERIFY_MAX_FILES = 64
+const GAME_VERIFY_EXE = 'FortniteGame/Binaries/Win64/FortniteClient-Win64-Shipping.exe'
+const GAME_VERIFY_ROOTS = ['FortniteGame/Content/Paks', 'FortniteGame/Plugins']
+const GAME_VERIFY_EXT = /\.(?:pak|sig|utoc|ucas)$/i
+const BUILD_MANIFEST_FORMAT = 'era-chunks-v3'
+const BUILD_CHUNK_HASH = /^[0-9a-f]{32}$/i
+const BUILD_RELATIVE_PATH_MAX = 320
 
 function safeText(value, limit = 300) {
   return typeof value === 'string' ? value.trim().slice(0, limit) : ''
@@ -80,8 +89,32 @@ function accountStatusCode(json) {
   return ''
 }
 
+function isGameFileVerification(json, detail) {
+  const text = [
+    json?.message,
+    json?.detail,
+    json?.errorMessage,
+    json?.error && typeof json.error === 'object' ? json.error.message : '',
+    json?.error && typeof json.error === 'object' ? json.error.detail : '',
+    detail,
+  ]
+    .filter((value) => typeof value === 'string')
+    .join(' ')
+  return /verify(?:\s+the)?\s+game\s+files|game\s+files?\s+(?:must\s+be\s+verified|need\s+to\s+be\s+verified|verification|integrity)|verify\s+files\s+before\s+launching/i.test(
+    text,
+  )
+}
+
 function accountStatusFor(json, status, detail) {
   const code = accountStatusCode(json)
+  // Era returns `verification_required` for two unrelated things: an account
+  // that still needs Discord/account verification, and a completely valid
+  // account whose local game files failed the build-integrity gate. The
+  // message is the only discriminator; the latter must never open an account
+  // verification page or trigger a token refresh.
+  if (status >= 400 && status < 500 && isGameFileVerification(json, detail)) {
+    return BUILD_VERIFICATION_STATUS
+  }
   if (code && (ACCOUNT_STATUS_CODES.has(code) || ACCOUNT_STATUS_PATTERN.test(code))) return code
   if (
     status >= 400 &&
@@ -94,6 +127,7 @@ function accountStatusFor(json, status, detail) {
 }
 
 function isVerificationStatus(code) {
+  if (code === BUILD_VERIFICATION_STATUS) return false
   return (
     VERIFICATION_STATUS_CODES.has(code) ||
     /verification|verify|verified|discord|guild|membership|whitelist/i.test(code)
@@ -176,11 +210,18 @@ function createProviderAuth({
   loginTimeoutMs = LOGIN_TIMEOUT_MS,
   verificationTimeoutMs = VERIFICATION_TIMEOUT_MS,
   verificationPollMs = VERIFICATION_POLL_MS,
+  // Injectable only for the focused harness. Production uses the real build
+  // file hashes and Era realtime gateway.
+  buildVerifyImpl = null,
+  gameFileHashesImpl = null,
 }) {
   if (!app || !safeStorage || !BrowserWindow) throw new Error('Provider authentication requires Electron.')
   if (typeof listProviders !== 'function' || typeof profileForId !== 'function') {
     throw new Error('Provider authentication has no provider catalog.')
   }
+  const providerUserAgent = `VAULTED-Launcher/${
+    safeText(typeof app.getVersion === 'function' ? app.getVersion() : '', 40) || 'unknown'
+  } (${process.platform}; ${process.arch})`
 
   /** providerId -> in-flight login promise */
   const activeLogins = new Map()
@@ -189,6 +230,8 @@ function createProviderAuth({
   /** providerId|buildId -> verification URL/diagnostic awaiting an explicit Verify Account click */
   const pendingVerifications = new Map()
   const loggedVerificationResponses = new Set()
+  /** build root -> { fingerprint, files } so unchanged installs are not rehashed */
+  const gameFileHashCache = new Map()
   let tokenCache = null
 
   function tokenFilePath() {
@@ -329,6 +372,11 @@ function createProviderAuth({
         methods,
       },
       apiBaseUrl: apiBaseUrl.origin,
+      // Era's game-file integrity check is a realtime-gateway operation, not an
+      // HTTP route. Keep the gateway origin beside the API origin so the
+      // exchange can perform the same pre-launch handshake as Era's launcher.
+      realtimeUrl:
+        websocketUrl(profile.realtimeUrl) || (id === 'era' ? 'wss://rt.erafn.dev' : ''),
       buildsPath: safePath(profile.buildsPath, '/launcher/v1/builds'),
       exchangeCodePath: safePath(profile.exchangeCodePath, '/launcher/v1/game/exchange-code'),
       profilePath: safeText(profile.profilePath, 220),
@@ -447,7 +495,13 @@ function createProviderAuth({
         : requiredAction && typeof requiredAction === 'object'
           ? requiredAction.verification_url || requiredAction.verificationUrl || requiredAction.url
           : ''
-    if (accountStatus) {
+    if (accountStatus === BUILD_VERIFICATION_STATUS) {
+      // This is a game-file integrity answer, not an account status. Keep it
+      // separate so the launch path cannot mistake it for a Discord/account
+      // verification failure or clear the still-valid OAuth session.
+      error.code = BUILD_VERIFICATION_STATUS
+      error.buildVerificationRequired = true
+    } else if (accountStatus) {
       error.code = accountStatus
       error.accountStatus = accountStatus
       error.verificationRequired = isVerificationStatus(accountStatus)
@@ -584,6 +638,16 @@ function createProviderAuth({
       const url = new URL(String(value || '').trim())
       if (url.protocol !== 'https:' || url.username || url.password) return null
       return url.toString()
+    } catch {
+      return null
+    }
+  }
+
+  function websocketUrl(value) {
+    try {
+      const url = new URL(String(value || '').trim())
+      if (url.protocol !== 'wss:' || url.username || url.password) return null
+      return url.toString().replace(/\/+$/, '')
     } catch {
       return null
     }
@@ -839,6 +903,188 @@ function createProviderAuth({
     return [name, version ? `v${version}` : ''].filter(Boolean).join(' ')
   }
 
+  /** Keep manifest paths relative to the install root and Windows-safe. */
+  function safeBuildRelativePath(value) {
+    const raw = safeText(value, BUILD_RELATIVE_PATH_MAX).replace(/\\/g, '/')
+    if (!raw || raw.startsWith('/') || /^[a-z]:/i.test(raw)) return ''
+    const parts = raw.split('/')
+    if (
+      parts.some(
+        (part) =>
+          !part ||
+          part === '.' ||
+          part === '..' ||
+          /[<>:"|?*\x00-\x1f]/.test(part),
+      )
+    ) {
+      return ''
+    }
+    return parts.join('/')
+  }
+
+  /** Content manifests list bare filenames, never subdirectories. */
+  function safeBuildFileName(value) {
+    const raw = safeText(value, 180)
+    if (!raw || raw !== path.basename(raw)) return ''
+    if (/[<>:"/\\|?*\x00-\x1f]/.test(raw) || raw === '.' || raw === '..') return ''
+    return raw
+  }
+
+  function manifestSourceUrl(value) {
+    return httpsUrl(value) || ''
+  }
+
+  /**
+   * Era's `era-chunks-v3` manifest stores every file as an ordered list of
+   * independently gzipped MD5-addressed chunks. Validate the whole list before
+   * handing it to the downloader so a malformed manifest cannot create paths
+   * outside the install folder or silently write a sparse file.
+   */
+  function parseBuildFileList(payload, label) {
+    const root = payload?.data ?? payload
+    if (!root || typeof root !== 'object') {
+      throw new Error(`${label} returned an unreadable build manifest.`)
+    }
+    if (root.format && root.format !== BUILD_MANIFEST_FORMAT) {
+      throw new Error(`${label} returned an unsupported build manifest (${safeText(root.format, 40)}).`)
+    }
+    const rawFiles = Array.isArray(root.fileList)
+      ? root.fileList
+      : Array.isArray(root.files)
+        ? root.files
+        : []
+    if (rawFiles.length === 0) {
+      throw new Error(`${label} returned an empty build manifest.`)
+    }
+
+    const files = []
+    const seen = new Set()
+    for (const item of rawFiles) {
+      const relative = safeBuildRelativePath(item?.pathName ?? item?.path)
+      if (!relative) {
+        throw new Error(`${label} returned an unsafe file path in its build manifest.`)
+      }
+      if (seen.has(relative.toLowerCase())) {
+        throw new Error(`${label} returned the same file twice in its build manifest.`)
+      }
+      seen.add(relative.toLowerCase())
+
+      const size = Number(item?.size)
+      if (!Number.isSafeInteger(size) || size < 0) {
+        throw new Error(`${label} returned an invalid size for ${relative}.`)
+      }
+
+      const chunks = []
+      for (const itemChunk of Array.isArray(item?.chunkList) ? item.chunkList : []) {
+        const hash = safeText(itemChunk?.hash, 32).toLowerCase()
+        const offset = Number(itemChunk?.offset)
+        const chunkSize = Number(itemChunk?.size)
+        if (!BUILD_CHUNK_HASH.test(hash) || !Number.isSafeInteger(offset) || offset < 0) {
+          throw new Error(`${label} returned an invalid chunk for ${relative}.`)
+        }
+        if (!Number.isSafeInteger(chunkSize) || chunkSize <= 0) {
+          throw new Error(`${label} returned an invalid chunk size for ${relative}.`)
+        }
+        chunks.push({ hash, offset, size: chunkSize })
+      }
+      chunks.sort((a, b) => a.offset - b.offset)
+      let nextOffset = 0
+      for (const chunk of chunks) {
+        if (chunk.offset !== nextOffset) {
+          throw new Error(`${label} returned a gap in the chunks for ${relative}.`)
+        }
+        nextOffset += chunk.size
+      }
+      if (nextOffset !== size) {
+        throw new Error(`${label} returned a chunk list that does not add up for ${relative}.`)
+      }
+      files.push({ path: relative, size, chunks })
+    }
+    return files
+  }
+
+  async function liveBuildManifest(config, token, build) {
+    const authHeaders = {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      'User-Agent': providerUserAgent,
+    }
+    const manifestPath = `${config.buildsPath}/${encodeURIComponent(build.id)}/manifest`
+    const response = await requestJson(
+      new URL(manifestPath, config.apiBaseUrl),
+      { headers: authHeaders },
+      `${config.label} could not load the live build manifest.`,
+    )
+    const data = response?.data ?? response
+    if (!data || typeof data !== 'object') {
+      throw new Error(`${config.label} returned an unreadable build manifest.`)
+    }
+    if (data.format && data.format !== BUILD_MANIFEST_FORMAT) {
+      throw new Error(`${config.label} returned an unsupported build manifest (${safeText(data.format, 40)}).`)
+    }
+
+    // The API returns a signed R2 URL and an API-proxied fallback. Prefer the
+    // fallback: browser/Node fetch cannot add the R2 signature's required
+    // x-amz-content-sha256 header, while the proxy accepts the provider token.
+    const fallback = data.fallback && typeof data.fallback === 'object' ? data.fallback : {}
+    const manifestUrl = manifestSourceUrl(fallback.manifest_url) || manifestSourceUrl(data.manifest_url)
+    // The chunk base is public and long-lived; the fallback proxy URL expires
+    // with the signed manifest and cannot carry a 26 GB download.
+    const chunkBaseUrl =
+      manifestSourceUrl(data.chunk_base_url) || manifestSourceUrl(fallback.chunk_base_url)
+    if (!manifestUrl || !chunkBaseUrl) {
+      throw new Error(`${config.label} did not return a usable build manifest or chunk source.`)
+    }
+
+    const manifest = await requestJson(
+      manifestUrl,
+      { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } },
+      `${config.label} could not download the live build manifest.`,
+    )
+    const files = parseBuildFileList(manifest, config.label)
+    const contentSource = data.content && typeof data.content === 'object' ? data.content : null
+    const contentManifestUrl = manifestSourceUrl(contentSource?.manifest_url)
+    const contentBaseUrl = manifestSourceUrl(contentSource?.file_base_url)
+    const contentFiles = []
+    if (contentManifestUrl && contentBaseUrl) {
+      const content = await requestJson(
+        contentManifestUrl,
+        { headers: { Accept: 'application/json', Authorization: `Bearer ${token}` } },
+        `${config.label} could not load the live content manifest.`,
+      )
+      const changes = Array.isArray(content?.changes)
+        ? content.changes
+        : Array.isArray(content?.data?.changes)
+          ? content.data.changes
+          : []
+      for (const change of changes) {
+        const name = safeBuildFileName(change?.name)
+        const size = Number(change?.size)
+        if (!name || !Number.isSafeInteger(size) || size < 0) {
+          throw new Error(`${config.label} returned an invalid content file in its live manifest.`)
+        }
+        const type = safeText(change?.type, 40).toUpperCase()
+        if (type && !/DOWNLOAD|UPDATE/.test(type)) continue
+        contentFiles.push({ name, size, hash: safeText(change?.hash, 64).toLowerCase() })
+      }
+    }
+
+    const totalBytes =
+      files.reduce((sum, file) => sum + file.size, 0) +
+      contentFiles.reduce((sum, file) => sum + file.size, 0)
+    return {
+      buildId: build.id,
+      buildName: safeText(manifest?.buildName, 120) || safeText(build.name, 120),
+      buildVersion: safeText(build.version, 40),
+      files,
+      contentFiles,
+      totalBytes,
+      chunkBaseUrl,
+      contentBaseUrl,
+      expiresAt: safeText(data.expires_at, 80) || null,
+    }
+  }
+
   function chooseBuild(builds, config, seasonId, version) {
     const available = Array.isArray(builds) ? builds : []
     const requestedId = config.buildIds[seasonId]
@@ -894,6 +1140,392 @@ function createProviderAuth({
     return build
   }
 
+  async function gameFilesToVerify(buildPath) {
+    const root = path.resolve(buildPath)
+    const files = []
+    const add = async (relative) => {
+      const stat = await fs.promises.stat(path.join(root, relative)).catch(() => null)
+      if (stat?.isFile()) files.push(relative)
+    }
+    await add(GAME_VERIFY_EXE)
+
+    const content = []
+    const walk = async (relativeDir) => {
+      let entries
+      try {
+        entries = await fs.promises.readdir(path.join(root, relativeDir), { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const entry of entries) {
+        const relative = `${relativeDir}/${entry.name}`
+        if (entry.isDirectory()) await walk(relative)
+        else if (entry.isFile() && GAME_VERIFY_EXT.test(entry.name)) content.push(relative)
+      }
+    }
+    for (const relativeDir of GAME_VERIFY_ROOTS) await walk(relativeDir)
+    content.sort()
+    return [...files, ...content].slice(0, GAME_VERIFY_MAX_FILES)
+  }
+
+  function sha256File(file) {
+    return new Promise((resolve, reject) => {
+      const hash = crypto.createHash('sha256')
+      const stream = fs.createReadStream(file, { highWaterMark: 4 * 1024 * 1024 })
+      stream.on('data', (chunk) => hash.update(chunk))
+      stream.on('end', () => resolve(hash.digest('hex')))
+      stream.on('error', reject)
+    })
+  }
+
+  async function gameFileHashes(buildPath) {
+    const root = path.resolve(buildPath)
+    const relativeFiles = await gameFilesToVerify(root)
+    if (relativeFiles.length === 0) {
+      throw new Error(
+        `VAULTED could not find a Fortnite install to verify at ${root}. Download the build before launching.`,
+      )
+    }
+    const fingerprint = (
+      await Promise.all(
+        relativeFiles.map(async (relative) => {
+          const stat = await fs.promises.stat(path.join(root, ...relative.split('/'))).catch(() => null)
+          return stat ? `${relative}:${stat.size}:${stat.mtimeMs}` : `${relative}:missing`
+        }),
+      )
+    ).join('|')
+    const cacheKey = root.toLowerCase()
+    const cached = gameFileHashCache.get(cacheKey)
+    if (cached?.fingerprint === fingerprint) return cached.files
+
+    const results = new Array(relativeFiles.length)
+    let next = 0
+    const worker = async () => {
+      while (next < relativeFiles.length) {
+        const index = next++
+        const relative = relativeFiles[index]
+        results[index] = {
+          path: relative,
+          sha256: await sha256File(path.join(root, ...relative.split('/'))),
+        }
+      }
+    }
+    // Four streams is the same bounded parallelism Era's own launcher uses.
+    await Promise.all(Array.from({ length: Math.min(4, relativeFiles.length) }, worker))
+    gameFileHashCache.set(cacheKey, { fingerprint, files: results })
+    return results
+  }
+
+  /** MD5/SHA-256 selected by the digest length published in Era's manifest. */
+  function manifestHashAlgorithm(value) {
+    const hash = safeText(value, 64).toLowerCase()
+    if (!hash) return ''
+    if (/^[a-f0-9]{32}$/.test(hash)) return 'md5'
+    if (/^[a-f0-9]{64}$/.test(hash)) return 'sha256'
+    return 'invalid'
+  }
+
+  async function readExactBytes(handle, length, position) {
+    const buffer = Buffer.alloc(length)
+    let total = 0
+    while (total < length) {
+      const { bytesRead } = await handle.read(buffer, total, length - total, position + total)
+      if (!bytesRead) break
+      total += bytesRead
+    }
+    return total === length ? buffer : buffer.subarray(0, total)
+  }
+
+  function hashFileWithAlgorithm(file, algorithm) {
+    return new Promise((resolve, reject) => {
+      const digest = crypto.createHash(algorithm)
+      const stream = fs.createReadStream(file, { highWaterMark: 4 * 1024 * 1024 })
+      stream.on('data', (chunk) => digest.update(chunk))
+      stream.on('end', () => resolve(digest.digest('hex')))
+      stream.on('error', reject)
+    })
+  }
+
+  /**
+   * Compare one installed file with the provider's complete manifest entry.
+   * Base files use every ordered MD5 chunk; content files use their published
+   * MD5/SHA-256. Size is checked first so a truncated archive is reported
+   * without reading gigabytes of wrong bytes.
+   */
+  async function verifyManifestEntry(root, relative, expectedSize, chunks, expectedHash, contentName = '') {
+    const file = path.resolve(root, ...relative.split('/'))
+    const stat = await fs.promises.stat(file).catch(() => null)
+    if (!stat?.isFile()) return { path: relative, kind: 'missing', expectedSize }
+    if (stat.size !== expectedSize) {
+      return { path: relative, kind: 'size', expectedSize, actualSize: stat.size }
+    }
+
+    // Era's content manifest hash is an identity of `<name>:<size>`, not a
+    // digest of the PAK bytes. Match the launcher's own check exactly; a
+    // content file with the wrong size still changes this identity.
+    if (contentName) {
+      const algorithm = manifestHashAlgorithm(expectedHash)
+      if (algorithm === 'invalid') {
+        return { path: relative, kind: 'hash-format', expectedHash }
+      }
+      const actualHash = crypto
+        .createHash('md5')
+        .update(`${contentName}:${stat.size}`)
+        .digest('hex')
+      if (actualHash !== String(expectedHash).toLowerCase()) {
+        return { path: relative, kind: 'hash', expectedHash, actualHash, identity: true }
+      }
+      return null
+    }
+
+    if (chunks.length > 0) {
+      let handle
+      try {
+        handle = await fs.promises.open(file, 'r')
+        for (const chunk of chunks) {
+          const buffer = await readExactBytes(handle, chunk.size, chunk.offset)
+          if (buffer.length !== chunk.size) {
+            return {
+              path: relative,
+              kind: 'size',
+              expectedSize,
+              actualSize: stat.size,
+              chunkOffset: chunk.offset,
+            }
+          }
+          const digest = crypto.createHash('md5').update(buffer).digest('hex')
+          if (digest !== chunk.hash) {
+            return {
+              path: relative,
+              kind: 'hash',
+              expectedHash: chunk.hash,
+              actualHash: digest,
+              chunkOffset: chunk.offset,
+            }
+          }
+        }
+      } finally {
+        await handle?.close().catch(() => {})
+      }
+    }
+
+    if (expectedHash) {
+      const algorithm = manifestHashAlgorithm(expectedHash)
+      if (algorithm === 'invalid') {
+        return { path: relative, kind: 'hash-format', expectedHash }
+      }
+      const actualHash = await hashFileWithAlgorithm(file, algorithm)
+      if (actualHash !== String(expectedHash).toLowerCase()) {
+        return { path: relative, kind: 'hash', expectedHash, actualHash, algorithm }
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * Validate every expected base and content file, not just the executable and
+   * first PAK set that Era's realtime build.verify checks. This is deliberately
+   * run before the exchange so a bad archive cannot spend an exchange request.
+   */
+  async function verifyManifestTree(manifest, buildPath) {
+    const root = path.resolve(buildPath)
+    const entries = [
+      ...(Array.isArray(manifest.files) ? manifest.files : []).map((file) => ({
+        path: file.path,
+        size: file.size,
+        chunks: Array.isArray(file.chunks) ? file.chunks : [],
+        hash: '',
+      })),
+      ...(Array.isArray(manifest.contentFiles) ? manifest.contentFiles : []).map((file) => ({
+        path: `FortniteGame/Content/Paks/${file.name}`,
+        size: file.size,
+        chunks: [],
+        hash: file.hash || '',
+        contentName: file.name,
+      })),
+    ]
+
+    const issues = []
+    let checkedFiles = 0
+    let bytes = 0
+    let next = 0
+    const worker = async () => {
+      while (next < entries.length) {
+        const entry = entries[next++]
+        let issue
+        try {
+          issue = await verifyManifestEntry(
+            root,
+            entry.path,
+            entry.size,
+            entry.chunks,
+            entry.hash,
+            entry.contentName || '',
+          )
+        } catch (error) {
+          issue = {
+            path: entry.path,
+            kind: 'read',
+            error: error instanceof Error ? error.message : String(error),
+          }
+        }
+        if (issue) issues.push(issue)
+        else {
+          checkedFiles += 1
+          bytes += entry.size
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(4, Math.max(1, entries.length)) }, worker))
+
+    const missing = issues.filter((issue) => issue.kind === 'missing').length
+    const sizeMismatches = issues.filter((issue) => issue.kind === 'size').length
+    const hashMismatches = issues.filter((issue) => issue.kind === 'hash').length
+    return {
+      root,
+      expectedFiles: entries.length,
+      checkedFiles,
+      bytes,
+      ok: issues.length === 0,
+      issueCount: issues.length,
+      missing,
+      sizeMismatches,
+      hashMismatches,
+      issues,
+      mismatched: issues.map((issue) => issue.path),
+      elapsedMs: 0,
+    }
+  }
+
+  async function verifyBuildManifest(providerId, options = {}) {
+    const config = providerConfig(providerId)
+    const buildPath = safeText(options.buildPath, 2048)
+    if (!buildPath) throw new Error('VAULTED did not receive the extracted build path to verify.')
+    const manifest = await buildManifest(providerId, {
+      seasonId: safeText(options.seasonId, 40),
+      buildId: safeText(options.buildId, 64),
+    })
+    const startedAt = Date.now()
+    const report = await verifyManifestTree(manifest, buildPath)
+    return {
+      providerId: config.id,
+      providerLabel: config.label,
+      buildId: manifest.buildId,
+      buildName: manifest.buildName,
+      buildVersion: manifest.buildVersion,
+      ...report,
+      elapsedMs: Date.now() - startedAt,
+    }
+  }
+
+  async function sendBuildVerify(config, token, buildId, files) {
+    if (!config.realtimeUrl) {
+      throw new Error(`${config.label} did not provide a game-file verification service.`)
+    }
+    const url = `${config.realtimeUrl}/v1`
+    return await new Promise((resolve, reject) => {
+      let settled = false
+      let sent = false
+      const ws = new WebSocket(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'User-Agent': providerUserAgent,
+        },
+        handshakeTimeout: 15_000,
+        maxPayload: 64 * 1024,
+      })
+      const timer = setTimeout(() => finish(new Error(`${config.label} did not answer the game-file check in time.`)), 20_000)
+
+      function finish(error, reply) {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        try {
+          ws.close(1000)
+        } catch {
+          /* already closed */
+        }
+        if (error) reject(error)
+        else resolve(reply)
+      }
+
+      ws.on('message', (raw) => {
+        let frame
+        try {
+          frame = JSON.parse(raw.toString())
+        } catch {
+          return
+        }
+        if (frame?.op === 'welcome' && !sent) {
+          sent = true
+          try {
+            ws.send(
+              JSON.stringify({
+                op: 'build.verify',
+                ref: '1',
+                d: { build_id: buildId, files },
+              }),
+            )
+          } catch (error) {
+            finish(error instanceof Error ? error : new Error(String(error)))
+          }
+          return
+        }
+        if (frame?.ref !== '1') return
+        if (frame.op === 'error') {
+          const code = safeText(frame.d?.code, 80) || 'verification_failed'
+          finish(new Error(`${config.label} could not verify the game files (${code}).`))
+          return
+        }
+        if (frame.op !== 'build.verify.ok') {
+          finish(new Error(`${config.label} returned an unexpected game-file check response.`))
+          return
+        }
+        finish(null, frame.d)
+      })
+      ws.on('error', (error) => finish(error instanceof Error ? error : new Error(String(error))))
+      ws.on('close', () => {
+        if (!settled) finish(new Error(`${config.label} closed the game-file check connection.`))
+      })
+    })
+  }
+
+  async function verifyLocalBuild(config, token, build, buildPath) {
+    if (!buildPath) {
+      const error = new Error(
+        `${config.label} requires a game-file integrity check, but VAULTED did not receive the installed build path.`,
+      )
+      error.code = BUILD_VERIFICATION_STATUS
+      error.buildVerificationRequired = true
+      throw error
+    }
+    const files = gameFileHashesImpl
+      ? await gameFileHashesImpl(buildPath)
+      : await gameFileHashes(buildPath)
+    const result = buildVerifyImpl
+      ? await buildVerifyImpl({ config, token, build, buildPath, files })
+      : await sendBuildVerify(config, token, build.id, files)
+    if (result?.ok === true) return result
+    const mismatched = Array.isArray(result?.mismatched) ? result.mismatched : []
+    const detail = mismatched.length
+      ? `${mismatched.length} file(s) do not match ${buildLabel(build)}: ${mismatched.slice(0, 5).join(', ')}${mismatched.length > 5 ? ', …' : ''}`
+      : `the files do not match ${buildLabel(build)}`
+    const error = new Error(
+      `${config.label} rejected the installed game files: ${detail}. Download or repair the matching build before launching.`,
+    )
+    error.code = BUILD_VERIFICATION_STATUS
+    error.buildVerificationRequired = true
+    error.buildVerificationMismatches = mismatched
+    // Keep the verified build's identity with the failure. The renderer uses
+    // this to offer the exact live-version repair button without trusting a
+    // local folder name (6.31 versus Era's 6.21, for example).
+    error.buildId = build.id
+    error.buildVersion = safeText(build.version, 40)
+    error.buildName = safeText(build.name, 120)
+    throw error
+  }
+
   async function gameCode(config, token, build) {
     let response
     try {
@@ -905,6 +1537,7 @@ function createProviderAuth({
             Accept: 'application/json',
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
+            'User-Agent': providerUserAgent,
           },
           body: JSON.stringify({ build_id: build.id }),
         },
@@ -915,8 +1548,8 @@ function createProviderAuth({
       // fixable account state, not an expired session, so preserve the
       // structured status for the interactive verification flow instead of
       // clearing the token or surfacing a raw provider code.
-      if (error?.accountStatus || error?.verificationRequired) {
-        logVerificationResponse(config, error)
+      if (error?.accountStatus || error?.verificationRequired || error?.buildVerificationRequired) {
+        if (!error?.buildVerificationRequired) logVerificationResponse(config, error)
         throw error
       }
       if (error?.status === 401 || error?.status === 403) {
@@ -936,8 +1569,8 @@ function createProviderAuth({
         `${config.label} could not create a game login code.`,
         response.headers,
       )
-      if (envelopeError.accountStatus) {
-        logVerificationResponse(config, envelopeError)
+      if (envelopeError.accountStatus || envelopeError.buildVerificationRequired) {
+        if (!envelopeError.buildVerificationRequired) logVerificationResponse(config, envelopeError)
         throw envelopeError
       }
     }
@@ -1312,11 +1945,54 @@ function createProviderAuth({
     cacheVerificationCode(config, build, result)
   }
 
+  async function buildManifest(providerId, options = {}) {
+    const config = providerConfig(providerId)
+    const token = await accessToken(config)
+    const buildsJson = await requestJson(
+      new URL(config.buildsPath, config.apiBaseUrl),
+      {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      `${config.label} could not list its live builds.`,
+    )
+    const builds = Array.isArray(buildsJson?.data)
+      ? buildsJson.data
+      : Array.isArray(buildsJson)
+        ? buildsJson
+        : []
+    const requestedId = safeText(options.buildId, 64)
+    let build = requestedId
+      ? builds.find((candidate) => String(candidate?.id).toLowerCase() === requestedId.toLowerCase())
+      : null
+    if (!build) build = chooseBuild(builds, config, safeText(options.seasonId, 40), '')
+    const manifest = await liveBuildManifest(config, token, build)
+    return {
+      providerId: config.id,
+      providerLabel: config.label,
+      ...manifest,
+    }
+  }
+
+  /** Main-process headers for manifest/chunk downloads; never sent to the renderer. */
+  async function resourceHeaders(providerId) {
+    const config = providerConfig(providerId)
+    const token = await accessToken(config)
+    return {
+      Accept: '*/*',
+      Authorization: `Bearer ${token}`,
+      'User-Agent': providerUserAgent,
+    }
+  }
+
   async function exchangeCode(providerId, options = {}) {
     const config = providerConfig(providerId)
     const token = await accessToken(config)
     const seasonId = safeText(options.seasonId, 40)
     const version = safeText(options.version, 40)
+    const buildPath = safeText(options.buildPath, 2048)
 
     const buildsJson = await requestJson(
       new URL(config.buildsPath, config.apiBaseUrl),
@@ -1338,11 +2014,29 @@ function createProviderAuth({
     const cached = takeVerificationCode(config, build)
     if (cached) return cached
 
+    // Match the official launcher's order: build.verify runs before the
+    // exchange when the installed folder is known. This avoids spending an
+    // exchange request just to be told the same gate applies.
+    let buildVerified = false
+    if (buildPath && config.realtimeUrl) {
+      await verifyLocalBuild(config, token, build, buildPath)
+      buildVerified = true
+    }
+
     try {
       const result = await gameCode(config, token, build)
       markVerificationCompleted(config)
       return result
     } catch (error) {
+      // Era's exchange endpoint is gated on a successful realtime
+      // `build.verify` for the installed files. This is not an account
+      // verification state, so verify the build and retry the exchange once.
+      if (error?.buildVerificationRequired) {
+        if (!buildVerified) await verifyLocalBuild(config, token, build, buildPath)
+        const result = await gameCode(config, token, build)
+        markVerificationCompleted(config)
+        return result
+      }
       if (!isVerificationFailure(error)) throw error
       logVerificationResponse(config, error)
       const recovery = await trySilentVerificationRecovery(config, token, build)
@@ -1826,6 +2520,9 @@ function createProviderAuth({
     logout,
     exchangeCode,
     verifyAccount,
+    buildManifest,
+    verifyBuildManifest,
+    resourceHeaders,
   }
 }
 

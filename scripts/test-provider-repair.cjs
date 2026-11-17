@@ -16,6 +16,14 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
+const {
+  PROVIDER_OVERLAY_MAX_BYTES,
+  PROVIDER_OVERLAY_MAX_FILES,
+  findCachedRepairArchive,
+  planProviderOverlay,
+  selectProviderArchiveSource,
+} = require('../electron/providerArchive.cjs')
+
 const projectRoot = path.join(__dirname, '..')
 const providerIds = ['reboot', 'neo', 'era', 'ezfn', 'ezfn-hybrid']
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-provider-repair-'))
@@ -32,6 +40,134 @@ function targetPath(id) {
 
 function fileHash(file) {
   return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+}
+
+function testProviderOverlayCaps() {
+  const manifest = {
+    files: [
+      { path: 'FortniteGame/Content/Paks/base-a.pak', size: 1024 },
+      { path: 'FortniteGame/Content/Paks/base-b.pak', size: 2048 },
+    ],
+    contentFiles: [{ name: 'content-a.pak', size: 512, hash: md5('content-a.pak:512') }],
+  }
+  const issue = (file) => ({ path: file, kind: 'missing' })
+  const manyIssues = Array.from({ length: PROVIDER_OVERLAY_MAX_FILES + 1 }, (_, index) =>
+    issue(`missing-${index}.pak`),
+  )
+  assert.throws(
+    () =>
+      planProviderOverlay({
+        report: { issueCount: manyIssues.length, issues: manyIssues },
+        manifest,
+      }),
+    /too incomplete/i,
+    'the overlay must reject more than its file cap',
+  )
+
+  assert.throws(
+    () =>
+      planProviderOverlay({
+        report: {
+          issueCount: 2,
+          issues: [
+            issue('FortniteGame/Content/Paks/base-a.pak'),
+            issue('FortniteGame/Content/Paks/base-b.pak'),
+          ],
+        },
+        manifest: {
+          files: [
+            { path: 'FortniteGame/Content/Paks/base-a.pak', size: PROVIDER_OVERLAY_MAX_BYTES },
+            { path: 'FortniteGame/Content/Paks/base-b.pak', size: 1 },
+          ],
+          contentFiles: [],
+        },
+      }),
+    /too incomplete/i,
+    'the overlay must reject more than its byte cap',
+  )
+
+  const atCap = planProviderOverlay({
+    report: {
+      issueCount: PROVIDER_OVERLAY_MAX_FILES,
+      issues: Array.from({ length: PROVIDER_OVERLAY_MAX_FILES }, () =>
+        issue('FortniteGame/Content/Paks/base-a.pak'),
+      ),
+    },
+    manifest,
+  })
+  assert.ok(atCap, 'the overlay must allow the exact file cap')
+
+  const plan = planProviderOverlay({
+    report: {
+      issueCount: 2,
+      issues: [issue('FortniteGame/Content/Paks/base-a.pak'), issue('FortniteGame/Content/Paks/content-a.pak')],
+    },
+    manifest,
+  })
+  assert.ok(plan)
+  assert.equal(plan.files, 2)
+  assert.equal(plan.bytes, 1536)
+  assert.equal(plan.patchBase.has('fortnitegame/content/paks/base-a.pak'), true)
+  assert.equal(plan.patchContent.has('fortnitegame/content/paks/content-a.pak'), true)
+}
+
+async function testCachedRepairArchiveReuse() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-cached-repair-'))
+  const archive = path.join(root, 'cached-build.rar')
+  fs.writeFileSync(archive, 'cached archive bytes')
+  const previousFetch = global.fetch
+  let networkCalls = 0
+  global.fetch = () => {
+    networkCalls += 1
+    throw new Error('cached archive reuse must not use the network')
+  }
+  try {
+    let probeCalls = 0
+    const selected = await selectProviderArchiveSource({
+      targetDir: root,
+      requestedName: 'cached-build.rar',
+      repair: true,
+      probe: () => {
+        probeCalls += 1
+        throw new Error('cached archive reuse must not probe the network')
+      },
+    })
+    assert.deepEqual(selected.cached, { path: archive, size: 'cached archive bytes'.length })
+    assert.equal(probeCalls, 0, 'cache selection ran the network probe')
+
+    const cached = await findCachedRepairArchive({
+      targetDir: root,
+      requestedName: 'cached-build.rar',
+      repair: true,
+    })
+    assert.deepEqual(cached, { path: archive, size: 'cached archive bytes'.length })
+    assert.equal(
+      await findCachedRepairArchive({ targetDir: root, requestedName: 'cached-build.rar', repair: false }),
+      null,
+      'a non-repair download must not reuse an existing archive',
+    )
+    let missProbeCalls = 0
+    const miss = await selectProviderArchiveSource({
+      targetDir: root,
+      requestedName: 'not-cached.rar',
+      repair: true,
+      probe: () => {
+        missProbeCalls += 1
+        return { supported: true, total: 5 }
+      },
+    })
+    assert.equal(miss.cached, null)
+    assert.equal(miss.probe.total, 5)
+    assert.equal(missProbeCalls, 1, 'a cache miss should probe the source once')
+    assert.equal(networkCalls, 0, 'cache lookup performed a network request')
+  } finally {
+    global.fetch = previousFetch
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+}
+
+function md5(value) {
+  return crypto.createHash('md5').update(value).digest('hex')
 }
 
 function preparePackagedTree() {
@@ -59,6 +195,8 @@ function preparePackagedTree() {
 }
 
 async function main() {
+  testProviderOverlayCaps()
+  await testCachedRepairArchiveReuse()
   preparePackagedTree()
   process.resourcesPath = packageRoot
   process.env.APPDATA = appDataRoot
@@ -123,7 +261,9 @@ async function main() {
     assert.match(rejected.errors.find((item) => item.id === id)?.error || '', /checksum|missing/i)
   }
 
-  console.log('provider repair end-to-end passed: bundled validated DLL copied for 5/5 providers; no network used')
+  console.log(
+    'provider repair end-to-end passed: overlay caps and cached archive reuse checked without network; bundled validated DLL copied for 5/5 providers',
+  )
 }
 
 main()

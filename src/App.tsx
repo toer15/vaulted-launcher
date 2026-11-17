@@ -41,6 +41,7 @@ import {
   pickInstallDir,
   scanInstalledBuilds,
   startDownload,
+  syncProviderBuild,
   subscribeBuildExit,
   subscribeDownloadProgress,
   subscribeJoinFailed,
@@ -86,7 +87,11 @@ import {
 } from './lib/profiles'
 import { loadCloudSettings, persistCloudSettings, readLocalCloudSettings, type CloudSettings } from './lib/cloudSettings'
 import { normalizeCloudUrl, resolveCloudSource, type CloudSourceMode } from './lib/cloudSource'
-import { parseProviderAccountIssue } from './lib/providerErrors'
+import {
+  parseProviderAccountIssue,
+  parseProviderBuildIssue,
+  type ProviderBuildIssue,
+} from './lib/providerErrors'
 import defaultBuilds from './assets/builds.json'
 import { buildForSeason, ensureAllSeasons, seedBuilds, sortBuilds } from './lib/sampleBuilds'
 import { loadState, saveState, uid } from './lib/storage'
@@ -332,6 +337,8 @@ export default function App() {
     local?: boolean
     verificationUrl?: string
     providerId?: string
+    /** Era's game-file integrity rejection, including its live build version */
+    buildIssue?: ProviderBuildIssue
   } | null>(null)
   const [launchStage, setLaunchStage] = useState<string | null>(null)
   const localSessionRef = useRef<string | null>(null)
@@ -340,6 +347,20 @@ export default function App() {
   const communityDiscoveryInFlight = useRef(false)
   const verificationPromises = useRef(new Map<string, Promise<VerifyJob | null>>())
   const autoVerifiedIds = useRef(new Set<string>())
+  // Assigned after startBuild is defined; the one-click live-build repair
+  // finishes in an effect once its download state has cleared.
+  const startBuildRef = useRef<
+    | ((
+        build: Build,
+        join?: { host: string; port: number },
+        options?: { promptOnEmpty?: boolean; forceProviderId?: string },
+      ) => Promise<void>)
+    | null
+  >(null)
+  const pendingProviderLaunchRef = useRef<{
+    build: Build
+    forceProviderId?: string
+  } | null>(null)
   // Assigned after the verifier is defined; startBuild needs the preflight but
   // is declared earlier in the component, so it reads through this ref.
   const runBuildVerificationRef = useRef<
@@ -638,6 +659,8 @@ export default function App() {
     launchFailure?.id === activeBuild?.id ? launchFailure.verificationUrl ?? null : null
   const activeLaunchProviderId =
     launchFailure?.id === activeBuild?.id ? launchFailure.providerId ?? null : null
+  const activeBuildIssue =
+    launchFailure?.id === activeBuild?.id ? launchFailure.buildIssue ?? null : null
 
   const providerIdentity = useMemo(() => {
     const providersSignedIn = verifiedOAuthProviders.filter(
@@ -1695,8 +1718,25 @@ export default function App() {
   }, [pushToast, rememberInstalledBuild, seasonManifest])
 
   const beginDownload = useCallback(
-    async (build: Build, url: string, sha256?: string, fallbackUrl?: string) => {
+    async (
+      build: Build,
+      url: string,
+      sha256?: string,
+      fallbackUrl?: string,
+      options: {
+        repair?: boolean
+        launchAfter?: boolean
+        forceProviderId?: string
+        preferredFolder?: string
+        buildVersion?: string
+        providerId?: string
+        seasonId?: string
+        buildId?: string
+        validateProvider?: boolean
+      } = {},
+    ) => {
       const key = artKeyFor(build.season) ?? build.id
+      pendingProviderLaunchRef.current = null
       pausedDownloadIds.current.delete(build.id)
       autoVerifiedIds.current.delete(build.id)
       setVerifyJobs((prev) => {
@@ -1716,12 +1756,30 @@ export default function App() {
           url,
           fallbackUrl,
           sha256: sha256 ?? null,
+          providerBuild: undefined,
+          repair: options.repair === true,
+          launchAfter: options.launchAfter === true,
+          forceProviderId: options.forceProviderId,
+          preferredFolder: options.preferredFolder,
+          buildVersion: options.buildVersion,
+          providerId: options.providerId,
+          seasonId: options.seasonId,
+          buildId: options.buildId,
+          validateProvider: options.validateProvider,
         },
       }))
       setPhase('idle')
+      if (options.launchAfter) setLaunchStage(`Updating ${build.season.label} to the live build…`)
 
       try {
-        const result = await startDownload(build.id, key, url, sha256, fallbackUrl)
+        const result = await startDownload(build.id, key, url, sha256, fallbackUrl, {
+          repair: options.repair,
+          preferredFolder: options.preferredFolder,
+          providerId: options.providerId,
+          seasonId: options.seasonId,
+          buildId: options.buildId,
+          validateProvider: options.validateProvider,
+        })
         setInstalled((prev) => ({ ...prev, [build.id]: Boolean(result.executable) }))
 
         if (result.executable) {
@@ -1732,7 +1790,9 @@ export default function App() {
             executable,
             path: result.folder,
             folderName: parsed.folderName,
-            version: parsed.version !== 'unknown' ? parsed.version : build.version,
+            version:
+              options.buildVersion ??
+              (parsed.version !== 'unknown' ? parsed.version : build.version),
             season: parsed.season.known ? parsed.season : build.season,
             placeholder: false,
           }
@@ -1742,10 +1802,20 @@ export default function App() {
             ),
           )
           rememberInstalledBuild(downloaded, result.folder)
+          if (options.launchAfter) {
+            pendingProviderLaunchRef.current = {
+              build: downloaded,
+              forceProviderId: options.forceProviderId,
+            }
+          }
           pushToast({
             tone: 'success',
-            title: 'Download complete',
-            description: `${build.season.label} is ready — press Play.`,
+            title: options.launchAfter
+              ? `Updated to the live ${downloaded.version} build`
+              : 'Download complete',
+            description: options.launchAfter
+              ? `${build.season.label} now matches the live build — signing in and launching…`
+              : `${build.season.label} is ready — press Play.`,
           })
         } else {
           pushToast({
@@ -1758,6 +1828,7 @@ export default function App() {
           })
         }
       } catch (error) {
+        setLaunchStage(null)
         if (pausedDownloadIds.current.has(build.id)) {
           // Pause already aborted this request on purpose; keep the entry so
           // the primary button becomes Continue download.
@@ -1785,6 +1856,129 @@ export default function App() {
     [pushToast, rememberInstalledBuild],
   )
 
+  const beginProviderSync = useCallback(
+    async (
+      build: Build,
+      options: {
+        providerId?: string
+        seasonId?: string
+        buildId?: string
+        launchAfter?: boolean
+      } = {},
+    ) => {
+      const providerId = options.providerId || build.onlineProvider?.id
+      const seasonId = options.seasonId || artKeyFor(build.season) || build.id
+      const key = artKeyFor(build.season) ?? build.id
+      if (!providerId) {
+        pushToast({
+          tone: 'error',
+          title: 'No provider for this season',
+          description: 'VAULTED has no live build provider mapped to this card.',
+        })
+        return
+      }
+      if (!window.arc?.syncProviderBuild) {
+        pushToast({
+          tone: 'error',
+          title: 'Build updates need the desktop app',
+          description: 'Run "npm run app".',
+        })
+        return
+      }
+
+      pausedDownloadIds.current.delete(build.id)
+      autoVerifiedIds.current.delete(build.id)
+      pendingProviderLaunchRef.current = null
+      setVerifyJobs((prev) => {
+        const next = { ...prev }
+        delete next[build.id]
+        return next
+      })
+      setLaunchFailure((current) => (current?.id === build.id ? null : current))
+      setDownloads((prev) => ({
+        ...prev,
+        [build.id]: {
+          ...prev[build.id],
+          percent: prev[build.id]?.percent ?? 0,
+          phase: 'downloading',
+          etaSeconds: null,
+          speedBytesPerSecond: null,
+          url: undefined,
+          fallbackUrl: undefined,
+          sha256: null,
+          providerBuild: {
+            providerId,
+            seasonId,
+            ...(options.buildId ? { buildId: options.buildId } : {}),
+          },
+        },
+      }))
+      setPhase('idle')
+      setLaunchStage(`Updating ${build.season.label} to the live build…`)
+
+      try {
+        const result = await syncProviderBuild({
+          id: build.id,
+          key,
+          providerId,
+          seasonId,
+          ...(options.buildId ? { buildId: options.buildId } : {}),
+        })
+        const synced: Build = {
+          ...build,
+          executable: result.executable,
+          path: result.folder,
+          folderName: result.buildName || build.folderName,
+          version: result.buildVersion || build.version,
+          placeholder: false,
+        }
+        setBuilds((prev) =>
+          prev.map((item) =>
+            item.id === build.id ? { ...synced, addedAt: item.addedAt } : item,
+          ),
+        )
+        setInstalled((prev) => ({ ...prev, [build.id]: true }))
+        requestedDiskSizes.current.delete(result.folder)
+        setDiskSizes((prev) => ({ ...prev, [result.folder]: result.totalBytes }))
+        setActiveId(build.id)
+        rememberInstalledBuild(synced, result.folder)
+        pushToast({
+          tone: 'success',
+          title: result.buildVersion
+            ? `Updated to the live ${result.buildVersion} build`
+            : 'Live build updated',
+          description: `${build.season.label} now matches the provider manifest — launching…`,
+        })
+        if (options.launchAfter) {
+          pendingProviderLaunchRef.current = { build: synced, forceProviderId: providerId }
+        } else {
+          setLaunchStage(null)
+        }
+      } catch (error) {
+        setLaunchStage(null)
+        if (pausedDownloadIds.current.has(build.id)) return
+        const message = error instanceof Error ? error.message : 'The live build could not be downloaded.'
+        if (/abort|cancel/i.test(message)) {
+          pushToast({ tone: 'info', title: 'Update cancelled', description: build.season.label })
+        } else {
+          pushToast({ tone: 'error', title: 'Live build update failed', description: message })
+        }
+      } finally {
+        const paused = pausedDownloadIds.current.delete(build.id)
+        setDownloads((prev) => {
+          const next = { ...prev }
+          if (paused && next[build.id]) {
+            next[build.id] = { ...next[build.id], phase: 'paused', etaSeconds: null }
+          } else {
+            delete next[build.id]
+          }
+          return next
+        })
+      }
+    },
+    [pushToast, rememberInstalledBuild],
+  )
+
   const requestDownload = useCallback(
     (build: Build) => {
       if (!canDownloadBuilds()) {
@@ -1795,8 +1989,22 @@ export default function App() {
       // Continue must use the source that produced the bytes already on disk,
       // even when the manifest has since changed.
       const paused = downloads[build.id]?.phase === 'paused' ? downloads[build.id] : null
+      if (paused?.providerBuild) {
+        void beginProviderSync(build, { ...paused.providerBuild })
+        return
+      }
       if (paused?.url) {
-        void beginDownload(build, paused.url, paused.sha256 ?? undefined, paused.fallbackUrl)
+        void beginDownload(build, paused.url, paused.sha256 ?? undefined, paused.fallbackUrl, {
+          repair: paused.repair,
+          launchAfter: paused.launchAfter,
+          forceProviderId: paused.forceProviderId,
+          preferredFolder: paused.preferredFolder,
+          buildVersion: paused.buildVersion,
+          providerId: paused.providerId,
+          seasonId: paused.seasonId,
+          buildId: paused.buildId,
+          validateProvider: paused.validateProvider,
+        })
         return
       }
 
@@ -1811,19 +2019,73 @@ export default function App() {
       }
 
       const source = seasonManifest[key]
-      if (!source?.downloadUrl) {
-        pushToast({
-          tone: 'error',
-          title: 'No source for this season yet',
-          description: 'Add its archive to builds.json, then Refresh sources in Settings.',
+      if (source?.downloadUrl) {
+        void beginDownload(build, source.downloadUrl, source.sha256, source.fallbackDownloadUrl, {
+          // A provider-mapped season may have an old nested client on disk;
+          // its bundled archive is the exact repair source, not a second copy.
+          repair: Boolean(source.providerBuild),
+          preferredFolder: source.providerBuild ? source.buildVersion || undefined : undefined,
+          buildVersion: source.providerBuild ? source.buildVersion || undefined : undefined,
+          providerId: source.providerBuild?.providerId,
+          seasonId: source.providerBuild?.seasonId || key,
+          buildId: source.providerBuild?.buildId,
+          validateProvider: Boolean(source.providerBuild?.buildId),
         })
         return
       }
-
-      void beginDownload(build, source.downloadUrl, source.sha256, source.fallbackDownloadUrl)
+      if (source?.providerBuild) {
+        void beginProviderSync(build, { ...source.providerBuild })
+        return
+      }
+      pushToast({
+        tone: 'error',
+        title: 'No source for this season yet',
+        description: 'Add its archive to builds.json, then Refresh sources in Settings.',
+      })
     },
-    [beginDownload, downloads, pushToast, seasonManifest],
+    [beginDownload, beginProviderSync, downloads, pushToast, seasonManifest],
   )
+
+  /** One-click repair to the exact live provider build, then Play. */
+  const handleUpdateLiveBuild = useCallback(() => {
+    const build = activeBuild
+    if (!build) return
+    const seasonId = artKeyFor(build.season) ?? build.id
+    const source = seasonManifest[seasonId]
+    const providerId = activeBuildIssue?.providerId || build.onlineProvider?.id
+    if (!providerId) {
+      pushToast({
+        tone: 'error',
+        title: 'No live build provider',
+        description: 'VAULTED could not find the provider mapped to this season.',
+      })
+      return
+    }
+    // Prefer VAULTED's existing archive downloader for the provider's exact
+    // public build. The repair flag lets it replace a season that is already
+    // installed, and the preferred folder keeps an old nested 6.31 client from
+    // being detected after the 6.21 archive is unpacked beside it.
+    if (source?.downloadUrl) {
+      void beginDownload(build, source.downloadUrl, source.sha256, source.fallbackDownloadUrl, {
+        repair: true,
+        launchAfter: true,
+        forceProviderId: providerId,
+        preferredFolder: source.buildVersion || undefined,
+        buildVersion: source.buildVersion || undefined,
+        providerId,
+        seasonId,
+        buildId: activeBuildIssue?.buildId || source.providerBuild?.buildId,
+        validateProvider: Boolean(activeBuildIssue?.buildId || source.providerBuild?.buildId),
+      })
+      return
+    }
+    void beginProviderSync(build, {
+      providerId,
+      seasonId,
+      buildId: activeBuildIssue?.buildId || source?.providerBuild?.buildId,
+      launchAfter: true,
+    })
+  }, [activeBuild, activeBuildIssue, beginDownload, beginProviderSync, pushToast, seasonManifest])
 
   /** Launch a downloaded season directly through its bundled provider profile. */
   const handleVerifyAccount = useCallback(
@@ -1970,9 +2232,12 @@ export default function App() {
         return applied || result.launched
       } catch (error) {
         launchAttempts.commitIfCurrent(attemptToken, () => {
+          const parsedBuildIssue = parseProviderBuildIssue(error)
+          const buildIssue = parsedBuildIssue?.issue
           const parsedIssue = parseProviderAccountIssue(error)
           const providerIssue = parsedIssue?.issue
           const message =
+            parsedBuildIssue?.message ||
             parsedIssue?.message ||
             (error instanceof Error ? error.message : `${providerLabel} could not be started.`)
           const verificationUrl =
@@ -1984,13 +2249,15 @@ export default function App() {
             message,
             providerId: provider.id,
             ...(verificationUrl ? { verificationUrl } : {}),
+            ...(buildIssue ? { buildIssue } : {}),
           })
           setPhase('error')
           setLaunchStage(null)
           pushToast({
             tone: 'error',
-            title:
-              providerIssue?.verificationRequired === true
+            title: buildIssue
+              ? 'Build files need updating'
+              : providerIssue?.verificationRequired === true
                 ? `${providerLabel} verification needed`
                 : providerIssue
                   ? `${providerLabel} account needs attention`
@@ -2035,7 +2302,7 @@ export default function App() {
     async (
       build: Build,
       join?: { host: string; port: number },
-      _options: { promptOnEmpty?: boolean } = {},
+      options: { promptOnEmpty?: boolean; forceProviderId?: string } = {},
     ) => {
       if (!signedIn) {
         setSignInOpen(true)
@@ -2067,6 +2334,30 @@ export default function App() {
 
       localSessionRef.current = null
       setLaunchFailure((current) => (current?.id === build.id ? null : current))
+
+      // A provider repair must re-run the live exchange immediately after the
+      // archive is installed. Do not let the normal community-server selection
+      // route this click away from Era and leave Play without a launch code.
+      const forcedProvider = options.forceProviderId
+        ? verifiedOAuthProviders.find((provider) => provider.id === options.forceProviderId) ??
+          providerCatalog.find((provider) => provider.id === options.forceProviderId) ??
+          null
+        : null
+      if (forcedProvider) {
+        const started = await startOnlineProvider(build, forcedProvider)
+        if (started) return
+        setLaunchStage(null)
+        setLaunchFailure((current) =>
+          current?.id === build.id
+            ? current
+            : {
+                id: build.id,
+                message: `${forcedProvider.label} could not issue a login code. Check the build and try Play again.`,
+              },
+        )
+        setPhase('error')
+        return
+      }
 
       // Play always consults the live community directories before choosing a
       // destination. The 20-second background poll is only a cache; this scan
@@ -2302,6 +2593,7 @@ export default function App() {
       relayLobbies,
       manualLobbies,
       verifiedOAuthProviders,
+      providerCatalog,
       providerAuthPrompt,
       refreshCommunityServers,
       signedIn,
@@ -2317,6 +2609,24 @@ export default function App() {
       shop.equipped,
     ],
   )
+
+  useEffect(() => {
+    startBuildRef.current = startBuild
+  }, [startBuild])
+
+  // The provider sync clears its DownloadState in a finally block. Wait for
+  // that render before launching, otherwise startBuild would still see the
+  // active download and return without starting the freshly repaired build.
+  useEffect(() => {
+    const pending = pendingProviderLaunchRef.current
+    if (!pending) return
+    if (downloads[pending.build.id] || !installed[pending.build.id]) return
+    pendingProviderLaunchRef.current = null
+    void startBuildRef.current?.(pending.build, undefined, {
+      promptOnEmpty: true,
+      forceProviderId: pending.forceProviderId,
+    })
+  }, [downloads, installed])
 
   const handleAddManualServer = useCallback(
     async (input: string): Promise<string | null> => {
@@ -3316,6 +3626,12 @@ export default function App() {
                 launchError={activeLaunchFailure}
                 launchErrorLocal={activeLaunchFailureLocal}
                 launchVerificationUrl={activeLaunchVerificationUrl}
+                buildVerificationRequired={Boolean(activeBuildIssue)}
+                liveBuildVersion={
+                  activeBuildIssue?.buildVersion ??
+                  (activeKey ? seasonManifest[activeKey]?.buildVersion ?? null : null)
+                }
+                onUpdateLiveBuild={handleUpdateLiveBuild}
                 onOpenVerification={() => {
                   if (activeBuild && verificationProvider) {
                     void handleVerifyAccount(activeBuild, verificationProvider)

@@ -16,6 +16,7 @@
  */
 const assert = require('node:assert/strict')
 const { EventEmitter } = require('node:events')
+const crypto = require('node:crypto')
 const fs = require('node:fs')
 const http = require('node:http')
 const os = require('node:os')
@@ -91,6 +92,13 @@ function jsonResponse(status, body) {
   }
 }
 
+function buildVerificationRequiredResponse() {
+  return jsonResponse(409, {
+    error: 'verification_required',
+    message: 'Verify the game files before launching.',
+  })
+}
+
 function verificationRequiredResponse(url = VERIFY_URL) {
   return jsonResponse(403, {
     error: {
@@ -107,6 +115,55 @@ function verificationRequiredResponse(url = VERIFY_URL) {
 
 function successResponse() {
   return jsonResponse(200, { data: { code: SUCCESS_CODE, expires_in: 300 } })
+}
+
+function md5(value) {
+  return crypto.createHash('md5').update(value).digest('hex')
+}
+
+function manifestBaseFile(filePath, contents) {
+  return {
+    pathName: filePath,
+    size: contents.length,
+    chunkList: [{ hash: md5(contents), offset: 0, size: contents.length }],
+  }
+}
+
+function manifestContentFile(name, size) {
+  return {
+    name,
+    size,
+    type: 'DOWNLOAD',
+    hash: md5(`${name}:${size}`),
+  }
+}
+
+function createManifestFetch({ fileList, changes }) {
+  const manifestUrl = 'https://cdn.erafn.dev/era/manifest.json'
+  const contentManifestUrl = 'https://cdn.erafn.dev/era/content.json'
+  return async (url) => {
+    const target = String(url)
+    if (target === 'https://api.erafn.dev/launcher/v1/builds') {
+      return jsonResponse(200, { data: [BUILD] })
+    }
+    if (target.endsWith(`/launcher/v1/builds/${ERA_BUILD_ID}/manifest`)) {
+      return jsonResponse(200, {
+        manifest_url: manifestUrl,
+        chunk_base_url: 'https://cdn.erafn.dev/era/chunks/',
+        content: {
+          manifest_url: contentManifestUrl,
+          file_base_url: 'https://cdn.erafn.dev/era/content/',
+        },
+      })
+    }
+    if (target === manifestUrl) {
+      return jsonResponse(200, { format: 'era-chunks-v3', fileList })
+    }
+    if (target === contentManifestUrl) {
+      return jsonResponse(200, { changes })
+    }
+    throw new Error(`Unexpected manifest fetch URL: ${target}`)
+  }
 }
 
 /**
@@ -182,6 +239,8 @@ function createHarness({
   seedVerificationCompleted = false,
   verificationPollMs = 5,
   verificationTimeoutMs = 2000,
+  buildVerifyImpl = null,
+  gameFileHashesImpl = null,
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-provider-verification-'))
   const userData = path.join(root, 'userData')
@@ -344,6 +403,8 @@ function createHarness({
     loginTimeoutMs: 3000,
     verificationTimeoutMs,
     verificationPollMs,
+    buildVerifyImpl,
+    gameFileHashesImpl,
   })
 
   return {
@@ -585,6 +646,157 @@ async function testExplicitVerificationTimeoutCleansUp() {
   }
 }
 
+async function testBuildIntegrityGateRunsBeforeExchange() {
+  const fakeFetch = createFakeFetch({ exchange: [() => successResponse()] })
+  const verifications = []
+  const harness = createHarness({
+    fetchImpl: fakeFetch.fetchImpl,
+    seedToken: true,
+    gameFileHashesImpl: async (buildPath) => [
+      { path: `fake/${buildPath.length}.pak`, sha256: '0'.repeat(64) },
+    ],
+    buildVerifyImpl: async ({ build, buildPath, files }) => {
+      verifications.push({ buildId: build.id, buildPath, files })
+      return { ok: true, mismatched: [] }
+    },
+  })
+  try {
+    const result = await harness.auth.exchangeCode('era', {
+      seasonId: 'ch1-s6',
+      version: '6.0',
+      buildPath: 'C:\\fake-build',
+    })
+
+    assert.equal(result.code, SUCCESS_CODE)
+    assert.equal(verifications.length, 1, 'the official build.verify handshake did not run')
+    assert.equal(verifications[0].buildId, ERA_BUILD_ID)
+    assert.equal(verifications[0].buildPath, 'C:\\fake-build')
+    assert.equal(verifications[0].files.length, 1)
+    assert.equal(fakeFetch.exchangeCalls().length, 1, 'exchange should follow a successful verification')
+    assert.equal(fakeFetch.tokenCalls().length, 0, 'build verification must not refresh the account')
+    assert.equal(harness.windows.length, 0, 'build verification must never open an account window')
+  } finally {
+    await harness.cleanup()
+  }
+}
+
+async function testFullManifestValidator() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-full-manifest-'))
+  const fileList = [
+    manifestBaseFile('base-ok.pak', Buffer.from('hello')),
+    manifestBaseFile('base-missing.pak', Buffer.from('missing')),
+    manifestBaseFile('base-size.pak', Buffer.from('123456')),
+    manifestBaseFile('base-hash.pak', Buffer.from('hello')),
+  ]
+  const changes = [
+    manifestContentFile('content-ok.pak', 12),
+    {
+      ...manifestContentFile('content-bad.pak', 12),
+      hash: md5('different-name:12'),
+    },
+    manifestContentFile('content-size.pak', 12),
+  ]
+  const write = (relative, contents) => {
+    const target = path.join(root, ...relative.split('/'))
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, contents)
+  }
+
+  try {
+    // Base files: one valid, one missing, one wrong size, one same-size wrong bytes.
+    write('base-ok.pak', Buffer.from('hello'))
+    write('base-size.pak', Buffer.from('123'))
+    write('base-hash.pak', Buffer.from('HELLO'))
+
+    // Content identity is MD5(name:size), not MD5(bytes). The valid content
+    // file therefore passes even though its bytes are deliberately arbitrary.
+    write('FortniteGame/Content/Paks/content-ok.pak', Buffer.alloc(12, 0x41))
+    write('FortniteGame/Content/Paks/content-bad.pak', Buffer.alloc(12, 0x42))
+    write('FortniteGame/Content/Paks/content-size.pak', Buffer.alloc(4, 0x43))
+
+    const harness = createHarness({
+      fetchImpl: createManifestFetch({ fileList, changes }),
+      seedToken: true,
+    })
+    try {
+      const report = await harness.auth.verifyBuildManifest('era', {
+        seasonId: 'ch1-s6',
+        buildPath: root,
+      })
+
+      assert.equal(report.ok, false)
+      assert.equal(report.expectedFiles, 7)
+      assert.equal(report.checkedFiles, 2)
+      assert.equal(report.bytes, 17)
+      assert.equal(report.missing, 1)
+      assert.equal(report.sizeMismatches, 2)
+      assert.equal(report.hashMismatches, 2)
+      assert.deepEqual(
+        report.issues.map((issue) => issue.path).sort(),
+        [
+          'FortniteGame/Content/Paks/content-bad.pak',
+          'FortniteGame/Content/Paks/content-size.pak',
+          'base-hash.pak',
+          'base-missing.pak',
+          'base-size.pak',
+        ].sort(),
+      )
+      assert.equal(report.issues.find((issue) => issue.path === 'base-missing.pak').kind, 'missing')
+      assert.equal(report.issues.find((issue) => issue.path === 'base-size.pak').kind, 'size')
+      assert.equal(report.issues.find((issue) => issue.path === 'base-hash.pak').kind, 'hash')
+      const badContent = report.issues.find(
+        (issue) => issue.path === 'FortniteGame/Content/Paks/content-bad.pak',
+      )
+      assert.equal(badContent.kind, 'hash')
+      assert.equal(badContent.identity, true)
+      assert.equal(
+        report.issues.some(
+          (issue) => issue.path === 'FortniteGame/Content/Paks/content-ok.pak',
+        ),
+        false,
+        'Era content identity should accept matching name:size even with different bytes',
+      )
+    } finally {
+      await harness.cleanup()
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+}
+
+async function testBuildIntegrityMismatchDoesNotConsumeExchange() {
+  const fakeFetch = createFakeFetch({ exchange: [() => successResponse()] })
+  const harness = createHarness({
+    fetchImpl: fakeFetch.fetchImpl,
+    seedToken: true,
+    gameFileHashesImpl: async () => [{ path: 'fake.pak', sha256: '0'.repeat(64) }],
+    buildVerifyImpl: async () => ({ ok: false, mismatched: ['fake.pak'] }),
+  })
+  try {
+    let failure = null
+    try {
+      await harness.auth.exchangeCode('era', {
+        seasonId: 'ch1-s6',
+        version: '6.0',
+        buildPath: 'C:\\fake-build',
+      })
+    } catch (error) {
+      failure = error
+    }
+    assert.ok(failure, 'mismatched build files should reject the launch')
+    assert.equal(failure.code, 'build_verification_required')
+    assert.equal(failure.buildVerificationRequired, true)
+    assert.equal(failure.accountStatus, undefined)
+    assert.equal(failure.verificationRequired, undefined)
+    assert.match(failure.message, /do not match/i)
+    assert.equal(fakeFetch.exchangeCalls().length, 0, 'a failed verification should not spend an exchange request')
+    assert.equal(fakeFetch.tokenCalls().length, 0)
+    assert.equal(harness.windows.length, 0)
+  } finally {
+    await harness.cleanup()
+  }
+}
+
 async function main() {
   await testSilentRecoveryCompletesWithoutWindow()
   await testVerificationRequiredNeedsExplicitButton()
@@ -593,8 +805,11 @@ async function main() {
   await testDiscordInviteIsNeverAValidVerificationPage()
   await testCancelCleansUpExplicitVerification()
   await testExplicitVerificationTimeoutCleansUp()
+  await testFullManifestValidator()
+  await testBuildIntegrityGateRunsBeforeExchange()
+  await testBuildIntegrityMismatchDoesNotConsumeExchange()
   console.log(
-    'provider verification checks passed: silent refresh/retry, no automatic window, explicit HTTPS verification, Discord rejection, cache reuse, cancel/timeout cleanup',
+    'provider verification checks passed: full manifest missing/size/hash, Era content identity, build.verify-before-exchange, integrity mismatch handling, silent refresh/retry, no automatic window, explicit HTTPS verification, Discord rejection, cache reuse, cancel/timeout cleanup',
   )
 }
 

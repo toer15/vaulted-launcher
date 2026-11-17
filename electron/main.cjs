@@ -3,6 +3,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 const os = require('node:os')
 const crypto = require('node:crypto')
+const zlib = require('node:zlib')
 const dns = require('node:dns')
 const net = require('node:net')
 const { spawn, execFile } = require('node:child_process')
@@ -20,6 +21,7 @@ const {
 const { fetchCommunityServers, normalizeHostPort, probePing } = require('./communityServers.cjs')
 const { createProviderAuth } = require('./providerAuth.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
+const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 
 const { botFillPreferences } = require('./botFill.cjs')
 
@@ -29,6 +31,12 @@ const SMOKE = process.argv.includes('--smoke')
 const SMOKE_URL = process.env.RIFT_SMOKE_URL ?? ''
 /** optional expected hash for a smoke download */
 const SMOKE_SHA256 = process.env.RIFT_SMOKE_SHA256 ?? ''
+/** optional provider metadata so smoke mode exercises archive repair validation */
+const SMOKE_PROVIDER_ID = process.env.RIFT_SMOKE_PROVIDER_ID ?? ''
+const SMOKE_SEASON_ID = process.env.RIFT_SMOKE_SEASON_ID ?? ''
+const SMOKE_BUILD_ID = process.env.RIFT_SMOKE_BUILD_ID ?? ''
+const SMOKE_PREFERRED_FOLDER = process.env.RIFT_SMOKE_PREFERRED_FOLDER ?? ''
+const SMOKE_REPAIR = process.env.RIFT_SMOKE_REPAIR === '1'
 /** e.g. RIFT_SMOKE_SIZE=1600x900 — lets the smoke capture use a larger window */
 const SMOKE_SIZE = process.env.RIFT_SMOKE_SIZE ?? ''
 
@@ -748,6 +756,10 @@ function matchmakerLogPath() {
   return path.join(app.getPath('userData'), 'logs', 'matchmaker.log')
 }
 
+function injectorLogPath() {
+  return path.join(app.getPath('userData'), 'logs', 'injector.log')
+}
+
 function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
@@ -1359,6 +1371,67 @@ function usesEosAuth(payload) {
 }
 
 /**
+ * 6.21 reads [UAC-FE] from its saved config, not from command-line -ini:
+ * overrides. With the launcher check left enabled it closes the client with
+ * "Fortnite was not started correctly". These values are restored once the
+ * client has finished authenticating so an official install sharing the same
+ * config folder is not affected.
+ */
+function applyProviderEnvironmentBypass() {
+  const localAppData = process.env.LOCALAPPDATA || path.join(app.getPath('home'), 'AppData', 'Local')
+  const configDirectory = path.join(localAppData, 'FortniteGame', 'Saved', 'Config', 'WindowsClient')
+  const backups = []
+  for (const name of ['Engine.ini', 'Game.ini']) {
+    const file = path.join(configDirectory, name)
+    let original = null
+    try {
+      original = fs.readFileSync(file)
+    } catch {
+      /* the client creates it on first run */
+    }
+    const text = original ? original.toString('utf8') : ''
+    if (/\[UAC-FE\][\s\S]*?bAllowLauncherCheck\s*=\s*False/i.test(text)) continue
+    const addition =
+      `${text.length && !text.endsWith('\n') ? '\r\n' : ''}` +
+      `\r\n[UAC-FE]\r\nbAllowLauncherCheck=False\r\nbAllowPakCheck=False\r\nbCloseOnPakCheck=False\r\n`
+    try {
+      fs.mkdirSync(configDirectory, { recursive: true })
+      fs.appendFileSync(file, addition, 'utf8')
+      backups.push({ file, original })
+    } catch {
+      /* a read-only install still gets the portal flags below */
+    }
+  }
+  return () => {
+    for (const backup of backups.reverse()) {
+      try {
+        if (backup.original === null) fs.rmSync(backup.file, { force: true })
+        else fs.writeFileSync(backup.file, backup.original)
+      } catch {
+        /* the next launch can overwrite it */
+      }
+    }
+  }
+}
+
+function restoreEnvironmentWhenClientExits(pid, restore) {
+  let done = false
+  const finish = () => {
+    if (done) return
+    done = true
+    clearInterval(watcher)
+    clearTimeout(fallback)
+    restore()
+  }
+  const watcher = setInterval(() => {
+    if (!processAlive(pid)) finish()
+  }, 2000)
+  const fallback = setTimeout(finish, 120_000)
+  watcher.unref?.()
+  fallback.unref?.()
+}
+
+/**
  * Newer clients expect these bootstrappers to exist, but letting them run starts
  * a second, anti-cheat-protected copy of the game. They are started suspended and
  * killed when the real client exits, which is how OGFN launchers bypass EAC.
@@ -1368,6 +1441,7 @@ function suspendedBootstrappers(executable) {
     const directory = path.dirname(executable)
     return [
       'FortniteLauncher.exe',
+      'FortniteClient-Win64-Shipping_BE.exe',
       'FortniteClient-Win64-Shipping_EAC.exe',
       'FortniteClient-Win64-Shipping_EAC_EOS.exe',
     ]
@@ -1403,10 +1477,15 @@ function providerFortniteArgs(backendUrl, authCode = '') {
   const args = [
     '-epicapp=Fortnite',
     '-epicenv=Prod',
+    '-epiclocale=en-us',
     '-epicportal',
     '-noeac',
     '-nobe',
-    '-fltoken=none',
+    '-nouac',
+    '-nocodeguards',
+    '-fromfl=eac',
+    `-caldera=${LEGACY_CALDERA}`,
+    '-fltoken=7a848a93a74ba68876c36C1c',
     '-skippatchcheck',
   ]
   if (authCode) {
@@ -1417,8 +1496,8 @@ function providerFortniteArgs(backendUrl, authCode = '') {
     )
   }
   // Tellurium reads the value after -backend= from the raw command line, so
-  // this must remain the final argument. The injector quotes it; the DLL strips
-  // that closing quote before using the URL as its redirect origin.
+  // this must remain the final argument. Values without whitespace stay
+  // unquoted, which also keeps the exchange code intact for FParse::Value.
   if (backendUrl) args.push(`-backend=${backendUrl}`)
   return args
 }
@@ -1458,9 +1537,12 @@ function fortniteLaunchArgs(payload, options = {}) {
 }
 
 /**
- * Starts the game suspended, loads the redirect DLL into it, then resumes it.
- * Doing this before any client code runs is what guarantees the very first
- * OAuth request is redirected instead of hitting Epic and failing with 1015.
+ * Starts the game, lets its loader unpack the client image, then loads the
+ * redirect DLL. Injecting a packed build while it is still suspended makes
+ * Tellurium scan encrypted code and crash the client with 0xc0000005. The
+ * injector waits for the client's own post-unpack readiness marker, so slower
+ * machines can take longer without risking an early scan or missing the first
+ * OAuth request.
  */
 function launchInjectedGame(payload, options = {}) {
   return new Promise((resolve, reject) => {
@@ -1487,6 +1569,20 @@ function launchInjectedGame(payload, options = {}) {
       env: { ...process.env, OPENSSL_ia32cap: '~0x20000000', ...(options.env || {}) },
     })
 
+    const logPath = injectorLogPath()
+    const appendLog = (stream, chunk) => {
+      try {
+        fs.mkdirSync(path.dirname(logPath), { recursive: true })
+        fs.appendFileSync(logPath, `[${new Date().toISOString()}] [${stream}] ${chunk.toString()}`)
+      } catch {
+        /* diagnostics must never prevent a launch */
+      }
+    }
+    const safeArgs = injectorArgs.map((argument) =>
+      /^-AUTH_PASSWORD=/i.test(argument) ? '-AUTH_PASSWORD=<redacted>' : argument,
+    )
+    appendLog('launcher', `\n=== ${new Date().toISOString()} ===\ninjector: ${injector}\ndll: ${dll}\nargs: ${safeArgs.join(' ')}\n`)
+
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -1494,6 +1590,7 @@ function launchInjectedGame(payload, options = {}) {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      appendLog('launcher', `error: ${message}\n`)
       reject(new Error(message))
     }
     const timer = setTimeout(() => {
@@ -1502,19 +1599,23 @@ function launchInjectedGame(payload, options = {}) {
     }, 30_000)
 
     child.stdout?.on('data', (chunk) => {
+      appendLog('stdout', chunk)
       stdout = (stdout + chunk.toString()).slice(-4000)
       const match = /(?:^|\r?\n)PID=(\d+)/.exec(stdout)
       if (match && !settled) {
         settled = true
         clearTimeout(timer)
+        appendLog('launcher', `ready: pid=${match[1]}\n`)
         resolve({ child, pid: Number(match[1]) })
       }
     })
     child.stderr?.on('data', (chunk) => {
+      appendLog('stderr', chunk)
       stderr = (stderr + chunk.toString()).slice(-4000)
     })
     child.on('error', (error) => finishError(`Could not run the game injector: ${error.message}`))
     child.on('exit', (code) => {
+      appendLog('launcher', `injector exited: ${code === null ? 'unknown' : code}\n`)
       if (settled) return
       const detail = stderr.trim() || stdout.trim()
       finishError(`Fortnite could not start.${detail ? `\n${detail}` : code ? ` (injector exited ${code})` : ''}`)
@@ -2387,6 +2488,67 @@ function extractArchive(archivePath, destination, controller, id) {
   })
 }
 
+/**
+ * Read the complete archive once before replacing an installed build. A
+ * truncated or corrupt RAR/ZIP is rejected here instead of being unpacked and
+ * sent through another exchange attempt.
+ */
+function testArchive(archivePath, controller) {
+  let binary
+  try {
+    binary = sevenZipBinary()
+  } catch (error) {
+    return Promise.reject(error)
+  }
+
+  return new Promise((resolve, reject) => {
+    let stderr = ''
+    let finished = false
+    const child = spawn(binary, ['t', '-bso0', '-bse1', archivePath], {
+      windowsHide: true,
+    })
+
+    const onAbort = () => {
+      try {
+        child.kill()
+      } catch {
+        /* already gone */
+      }
+    }
+    const finish = (error) => {
+      if (finished) return
+      finished = true
+      controller.signal.removeEventListener('abort', onAbort)
+      if (error) reject(error)
+      else resolve()
+    }
+
+    controller.signal.addEventListener('abort', onAbort, { once: true })
+    child.stderr?.on('data', (chunk) => {
+      stderr = (stderr + chunk.toString()).slice(-8000)
+    })
+    child.on('error', (error) => {
+      finish(new Error(`Could not test the archive: ${error.message}`))
+    })
+    child.on('close', (code) => {
+      if (controller.signal.aborted) finish(abortError())
+      else if (code === 0 || code === 1) finish()
+      else {
+        const detail = stderr.trim()
+        finish(
+          new Error(
+            `The downloaded archive is corrupt and was rejected before extraction (7-Zip exited ${code}).${
+              detail ? `\n${detail}` : ''
+            }`,
+          ),
+        )
+      }
+    })
+
+    if (controller.signal.aborted) onAbort()
+  })
+}
+
 // Archive.org is the main source and caps useful concurrency around a dozen
 // sockets. A small chunk queue keeps every socket busy and prevents one slow
 // tail request from holding up the last gigabytes of a build.
@@ -2983,6 +3145,15 @@ async function downloadBuild(payload) {
   let { id, key, url } = payload ?? {}
   if (typeof id !== 'string' || !id) throw new Error('Invalid download request.')
   const expectedSha256 = normalizeSha256(payload?.sha256)
+  // Provider repair deliberately re-downloads over an existing season folder.
+  // Normal downloads keep the no-overwrite guard so a second click can never
+  // silently replace a build the user already has.
+  const repair = payload?.repair === true
+  const requestedFolder =
+    typeof payload?.preferredFolder === 'string' ? payload.preferredFolder.trim() : ''
+  const preferredFolder = /^[a-z0-9][a-z0-9._ -]{0,79}$/i.test(requestedFolder)
+    ? requestedFolder
+    : ''
 
   let parsed
   try {
@@ -3014,11 +3185,30 @@ async function downloadBuild(payload) {
   }
 
   const safeKey = String(key ?? id).replace(/[^a-z0-9_-]/gi, '') || 'build'
+  const providerId =
+    typeof payload?.providerId === 'string'
+      ? payload.providerId.trim().toLowerCase().split(':')[0]
+      : ''
+  const seasonId =
+    (typeof payload?.seasonId === 'string' ? payload.seasonId.trim() : '') || safeKey
+  const buildId =
+    typeof payload?.buildId === 'string' ? payload.buildId.trim().slice(0, 64) : ''
+  const validateProvider = payload?.validateProvider === true
+  if (validateProvider && (!providerId || !buildId)) {
+    throw new Error('The provider build ID is required to validate this archive.')
+  }
   if (downloads.has(id)) throw new Error('This build is already downloading.')
 
   const targetDir = path.join(buildsRoot(), safeKey)
+  const preferredRoot = preferredFolder ? path.join(targetDir, preferredFolder) : ''
+  if (
+    preferredRoot &&
+    path.dirname(preferredRoot) !== targetDir
+  ) {
+    throw new Error('The preferred build folder is outside this season.')
+  }
   const existingExecutable = findExecutable(targetDir)
-  if (existingExecutable) {
+  if (existingExecutable && !repair) {
     throw new Error(
       `A build is already installed for this season at:\n${folderForExecutable(existingExecutable)}\n\nVAULTED will not overwrite or delete it. Delete that build first if you really want to download another copy.`,
     )
@@ -3049,9 +3239,25 @@ async function downloadBuild(payload) {
   let lastSent = 0
   let startedAt = Date.now()
   let sessionReceived = 0
+  let previousRootBackup = ''
   let persistTimer = null
   let lastPersist = 0
   let probe = { supported: false, total: 0, finalUrl: String(parsed), contentType: '', contentDisposition: '' }
+
+  const restorePreferredRoot = async () => {
+    if (!previousRootBackup || !preferredRoot) return
+    try {
+      await fs.promises.rm(preferredRoot, { recursive: true, force: true })
+      await fs.promises.rename(previousRootBackup, preferredRoot)
+      previousRootBackup = ''
+    } catch (error) {
+      console.warn(
+        `[VAULTED] Could not restore the previous build after a rejected archive: ${
+          error instanceof Error ? error.message : error
+        }`,
+      )
+    }
+  }
 
   const persistNow = () => {
     if (persistTimer) {
@@ -3116,12 +3322,42 @@ async function downloadBuild(payload) {
   }
 
   try {
-    try {
-      probe = await probeRangeSupport(parsed, controller.signal)
-    } catch (error) {
-      if (controller.signal.aborted) throw abortError()
-      // A normal GET may still work when the probe cannot be completed.
-    }
+    downloadBlock: {
+      // A prior repair keeps its downloaded archive. Reuse it so a retry does
+      // not spend another 10.8 GB before the strict manifest check can reject
+      // or install it. The archive is still re-tested and re-extracted below.
+      let source
+      try {
+        source = await selectProviderArchiveSource({
+          targetDir,
+          requestedName,
+          repair,
+          probe: () => probeRangeSupport(parsed, controller.signal),
+        })
+      } catch (error) {
+        if (controller.signal.aborted) throw abortError()
+        // A normal GET may still work when the probe cannot be completed.
+        source = { cached: null, probe: null }
+      }
+      if (source.cached) {
+        const cachedArchive = source.cached
+        filePath = cachedArchive.path
+        received = cachedArchive.size
+        total = cachedArchive.size
+        partPath = ''
+        send('arc:download-progress', {
+          id,
+          received,
+          total,
+          percent: 100,
+          etaSeconds: null,
+          bytesPerSecond: null,
+          phase: 'downloading',
+        })
+        if (SMOKE_URL) smokeLog(`reusing cached archive ${cachedArchive.path}`)
+        break downloadBlock
+      }
+      if (source.probe) probe = source.probe
 
     const probedTotal = Number(probe.total) || 0
     if (total > 0 && probedTotal > 0 && total !== probedTotal) {
@@ -3293,32 +3529,108 @@ async function downloadBuild(payload) {
     // never removed or overwritten; a second copy gets a -1/-2 suffix.
     await fs.promises.rename(partPath, filePath)
     removeDownloadMeta(partPath)
-
-    send('arc:download-progress', {
-      id,
-      received,
-      total,
-      percent: 100,
-      etaSeconds: null,
-      bytesPerSecond: null,
-      phase: 'extracting',
-    })
-    if (SMOKE_URL) smokeLog('download complete, extracting')
+    }
 
     const mobileArchive = path.extname(filePath).toLowerCase() === '.ipa' || path.extname(filePath).toLowerCase() === '.apk'
     if (!mobileArchive) {
+      send('arc:download-progress', {
+        id,
+        received,
+        total,
+        percent: 100,
+        etaSeconds: null,
+        bytesPerSecond: null,
+        phase: 'verifying',
+      })
+      // Read the whole archive before replacing anything. This catches a
+      // truncated RAR/ZIP before the old build is touched or the exchange runs.
+      if (repair || validateProvider) await testArchive(filePath, controller)
+      if (controller.signal.aborted) throw abortError()
+
+      send('arc:download-progress', {
+        id,
+        received,
+        total,
+        percent: 100,
+        etaSeconds: null,
+        bytesPerSecond: null,
+        phase: 'extracting',
+      })
+      if (SMOKE_URL) smokeLog('download complete, extracting')
+
+      if (repair && preferredRoot && fs.existsSync(preferredRoot)) {
+        // Keep the old install recoverable until the new archive passes the
+        // full manifest check. A bad archive must not destroy a usable build.
+        const backup = uniqueFilePath(
+          targetDir,
+          `${preferredFolder || path.basename(preferredRoot)}.vaulted-previous`,
+        )
+        await fs.promises.rename(preferredRoot, backup)
+        previousRootBackup = backup
+      }
       await extractArchive(filePath, targetDir, controller, id)
       if (controller.signal.aborted) throw abortError()
     }
 
-    let executable = findPrimaryExecutable(targetDir)
+    // A repair archive can sit beside an older nested build. Prefer the
+    // folder named by the provider version so detection cannot accidentally
+    // return the old 6.31 client that just failed build.verify.
+    let executable = preferredRoot ? findPrimaryExecutable(preferredRoot) : null
+    if (!executable) executable = findPrimaryExecutable(targetDir)
     if (!executable && !mobileArchive) {
       executable = await unpackNestedArchives(targetDir, filePath, controller, id)
     }
     if (!executable) executable = findExecutable(targetDir)
 
+    let manifestReport = null
+    if (validateProvider) {
+      if (!executable) {
+        throw new Error(
+          'The downloaded archive does not contain a Windows Fortnite client. No exchange was attempted.',
+        )
+      }
+      send('arc:download-progress', {
+        id,
+        received,
+        total,
+        percent: 100,
+        etaSeconds: null,
+        bytesPerSecond: null,
+        phase: 'verifying',
+      })
+      manifestReport = await providerAuth.verifyBuildManifest(providerId, {
+        seasonId,
+        buildId,
+        buildPath: folderForExecutable(executable),
+      })
+      if (!manifestReport.ok) {
+        const buildRoot = folderForExecutable(executable)
+        const overlay = await repairProviderOverlay({
+          targetDir: buildRoot,
+          providerId,
+          seasonId,
+          buildId,
+          report: manifestReport,
+          signal: controller.signal,
+        })
+        if (overlay) {
+          manifestReport = await providerAuth.verifyBuildManifest(providerId, {
+            seasonId,
+            buildId,
+            buildPath: buildRoot,
+          })
+        }
+        if (!manifestReport.ok) throw new Error(providerMismatchMessage(manifestReport))
+      }
+    }
+
     const mobile = !executable && (mobileArchive || hasMobilePayload(targetDir))
     const reason = executable ? null : mobile ? 'mobile' : 'no-executable'
+
+    if (previousRootBackup) {
+      await fs.promises.rm(previousRootBackup, { recursive: true, force: true }).catch(() => {})
+      previousRootBackup = ''
+    }
 
     // Deliberately never delete filePath here. The user's download is kept even
     // after a successful install, and nothing is removed on failure either.
@@ -3327,10 +3639,18 @@ async function downloadBuild(payload) {
       executable,
       folder: executable ? folderForExecutable(executable) : targetDir,
       reason,
+      ...(manifestReport
+        ? {
+            manifestVerified: true,
+            manifestFiles: manifestReport.expectedFiles,
+            manifestBytes: manifestReport.bytes,
+          }
+        : {}),
     }
   } catch (error) {
     // Never wipe the target folder, archive, or extracted files because of a
     // failed detection, extraction, checksum, or cancellation.
+    await restorePreferredRoot()
     throw error
   } finally {
     if (persistTimer) {
@@ -3348,6 +3668,527 @@ async function downloadBuild(payload) {
     }
     extractions.delete(id)
     downloads.delete(id)
+  }
+}
+
+const PROVIDER_SYNC_STATE = '.vaulted-provider-sync.json'
+
+function providerSyncStatePath(targetDir) {
+  return path.join(targetDir, PROVIDER_SYNC_STATE)
+}
+
+async function readProviderSyncState(targetDir, buildId) {
+  try {
+    const parsed = JSON.parse(await fs.promises.readFile(providerSyncStatePath(targetDir), 'utf8'))
+    if (parsed?.buildId === buildId && parsed.files && typeof parsed.files === 'object') {
+      return { buildId, files: parsed.files, content: parsed.content || {} }
+    }
+  } catch {
+    /* a missing/corrupt cache only costs one verification pass */
+  }
+  return { buildId, files: {}, content: {} }
+}
+
+async function writeProviderSyncState(targetDir, state) {
+  const destination = providerSyncStatePath(targetDir)
+  const temporary = `${destination}.tmp`
+  try {
+    await fs.promises.writeFile(temporary, JSON.stringify(state))
+    await fs.promises.rm(destination, { force: true })
+    await fs.promises.rename(temporary, destination)
+  } catch {
+    await fs.promises.rm(temporary, { force: true }).catch(() => {})
+  }
+}
+
+function providerChunkUrl(chunkBaseUrl, hash) {
+  // Era's CDN stores chunk filenames with the manifest's uppercase hash.
+  // The parser lowercases hashes for local MD5 comparison, so restore the
+  // filename casing here; a lowercase URL returns HTTP 404.
+  return `${String(chunkBaseUrl).replace(/\/+$/, '')}/${encodeURIComponent(
+    String(hash).toUpperCase(),
+  )}.chunk`
+}
+
+function providerContentUrl(contentBaseUrl, name) {
+  return `${String(contentBaseUrl).replace(/\/+$/, '')}/${encodeURIComponent(name)}`
+}
+
+/** Read exactly `length` bytes, or return a shorter buffer at EOF. */
+async function readExact(handle, length, position) {
+  const buffer = Buffer.alloc(length)
+  let total = 0
+  while (total < length) {
+    const { bytesRead } = await handle.read(buffer, total, length - total, position + total)
+    if (!bytesRead) break
+    total += bytesRead
+  }
+  return total === length ? buffer : buffer.subarray(0, total)
+}
+
+async function providerChunkMatches(handle, chunk) {
+  const buffer = await readExact(handle, chunk.size, chunk.offset)
+  if (buffer.length !== chunk.size) return false
+  const digest = crypto.createHash('md5').update(buffer).digest('hex')
+  return digest === chunk.hash
+}
+
+function decodeProviderChunk(buffer, chunk) {
+  const candidates = [buffer]
+  if (buffer.length >= 2 && buffer[0] === 0x1f && buffer[1] === 0x8b) {
+    try {
+      candidates.unshift(zlib.gunzipSync(buffer))
+    } catch {
+      /* try the raw bytes and let the size/hash check explain the failure */
+    }
+  }
+  for (const candidate of candidates) {
+    if (candidate.length !== chunk.size) continue
+    if (crypto.createHash('md5').update(candidate).digest('hex') !== chunk.hash) continue
+    return candidate
+  }
+  throw new Error(`Era returned a chunk that does not match its manifest (${chunk.hash}).`)
+}
+
+async function fetchProviderBytes(url, signal, getHeaders, label) {
+  let lastError = null
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (signal.aborted) throw abortError()
+    const headers = await getHeaders(attempt > 0)
+    const response = await fetch(url, { headers, signal, redirect: 'follow' })
+    if (response.status === 401 && attempt === 0) {
+      lastError = new Error(`${label} rejected the provider session while downloading.`)
+      continue
+    }
+    if (!response.ok) {
+      throw new Error(`${label} download answered HTTP ${response.status}.`)
+    }
+    return Buffer.from(await response.arrayBuffer())
+  }
+  throw lastError || new Error(`${label} download failed.`)
+}
+
+/**
+ * Download/repair one manifest file. Existing chunks are hashed in place and
+ * only mismatched or missing chunks are fetched, so a 6.31 install can be
+ * repaired to Era's 6.21 manifest without replacing unchanged multi-gigabyte
+ * PAKs.
+ */
+async function syncProviderFile({
+  targetDir,
+  file,
+  chunkBaseUrl,
+  signal,
+  getHeaders,
+  progress,
+  state,
+  saveState,
+}) {
+  const destination = path.join(targetDir, ...file.path.split('/'))
+  await fs.promises.mkdir(path.dirname(destination), { recursive: true })
+
+  const stat = await fs.promises.stat(destination).catch(() => null)
+  const cached = state.files[file.path]
+  if (
+    stat?.isFile() &&
+    stat.size === file.size &&
+    cached?.size === file.size &&
+    cached?.mtimeMs === stat.mtimeMs
+  ) {
+    progress(file.size, 0)
+    return { reused: file.size, downloaded: 0 }
+  }
+
+  const canPatch = Boolean(stat?.isFile() && stat.size === file.size && file.chunks.length > 0)
+  const handle = await fs.promises.open(destination, canPatch ? 'r+' : 'w')
+  let reused = 0
+  let downloaded = 0
+  try {
+    if (!canPatch) await handle.truncate(0)
+    const valid = new Array(file.chunks.length).fill(false)
+
+    if (canPatch) {
+      for (let index = 0; index < file.chunks.length; index += 1) {
+        if (signal.aborted) throw abortError()
+        const chunk = file.chunks[index]
+        if (await providerChunkMatches(handle, chunk)) {
+          valid[index] = true
+          reused += chunk.size
+          progress(chunk.size, 0)
+        }
+      }
+    }
+
+    let next = 0
+    const worker = async () => {
+      while (next < file.chunks.length) {
+        const index = next++
+        if (valid[index]) continue
+        if (signal.aborted) throw abortError()
+        const chunk = file.chunks[index]
+        let buffer
+        try {
+          buffer = decodeProviderChunk(
+            await fetchProviderBytes(
+              providerChunkUrl(chunkBaseUrl, chunk.hash),
+              signal,
+              getHeaders,
+              'Era chunk',
+            ),
+            chunk,
+          )
+        } catch (error) {
+          if (signal.aborted) throw abortError()
+          throw error
+        }
+        await handle.write(buffer, 0, buffer.length, chunk.offset)
+        downloaded += buffer.length
+        progress(buffer.length, buffer.length)
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(4, Math.max(1, file.chunks.length)) }, () => worker()),
+    )
+    await handle.sync()
+  } finally {
+    await handle.close().catch(() => {})
+  }
+
+  const after = await fs.promises.stat(destination)
+  state.files[file.path] = { size: after.size, mtimeMs: after.mtimeMs }
+  await saveState()
+  return { reused, downloaded }
+}
+
+/**
+ * Remove game payloads that are not in the live manifest. A previous build can
+ * leave differently named PAKs beside the repaired files; Era's verifier scans
+ * that folder, so stale entries would keep the install at a non-zero mismatch
+ * count even after every manifest file was replaced.
+ */
+async function pruneProviderGameFiles(targetDir, expectedRelativePaths) {
+  const expected = new Set(expectedRelativePaths.map((value) => value.toLowerCase()))
+  const payload = /\.(?:pak|sig|utoc|ucas)$/i
+  const walk = async (relativeDir) => {
+    let entries
+    try {
+      entries = await fs.promises.readdir(path.join(targetDir, ...relativeDir.split('/')), {
+        withFileTypes: true,
+      })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const relative = `${relativeDir}/${entry.name}`
+      if (entry.isDirectory()) {
+        await walk(relative)
+        continue
+      }
+      if (!entry.isFile() || !payload.test(entry.name)) continue
+      if (expected.has(relative.toLowerCase())) continue
+      await fs.promises.rm(path.join(targetDir, ...relative.split('/')), { force: true }).catch(() => {})
+    }
+  }
+  await walk('FortniteGame/Content/Paks')
+  await walk('FortniteGame/Plugins')
+}
+
+async function syncProviderContentFile({
+  targetDir,
+  file,
+  contentBaseUrl,
+  signal,
+  getHeaders,
+  progress,
+  state,
+  saveState,
+}) {
+  const destination = path.join(targetDir, 'FortniteGame', 'Content', 'Paks', file.name)
+  await fs.promises.mkdir(path.dirname(destination), { recursive: true })
+  const stat = await fs.promises.stat(destination).catch(() => null)
+  const cached = state.content[file.name]
+  if (
+    stat?.isFile() &&
+    stat.size === file.size &&
+    cached?.size === file.size &&
+    cached?.mtimeMs === stat.mtimeMs
+  ) {
+    progress(file.size, 0)
+    return { reused: file.size, downloaded: 0 }
+  }
+
+  const buffer = await fetchProviderBytes(
+    providerContentUrl(contentBaseUrl, file.name),
+    signal,
+    getHeaders,
+    `Era content ${file.name}`,
+  )
+  if (buffer.length !== file.size) {
+    throw new Error(`Era returned an incomplete content file for ${file.name}.`)
+  }
+  const temporary = `${destination}.part`
+  await fs.promises.writeFile(temporary, buffer)
+  await fs.promises.rm(destination, { force: true })
+  await fs.promises.rename(temporary, destination)
+  const after = await fs.promises.stat(destination)
+  state.content[file.name] = { size: after.size, mtimeMs: after.mtimeMs }
+  await saveState()
+  progress(buffer.length, buffer.length)
+  return { reused: 0, downloaded: buffer.length }
+}
+
+/**
+ * A public archive can be a valid base build while still missing Era's small
+ * overlay (content PAKs, imgui.ini, EMS config, and the provider launcher).
+ * Repair only those bounded mismatches from the live manifest; a genuinely
+ * wrong archive is too large to patch and is rejected instead of triggering
+ * another multi-gigabyte download.
+ */
+async function repairProviderOverlay({
+  targetDir,
+  providerId,
+  seasonId,
+  buildId,
+  report,
+  signal,
+}) {
+  if (!report?.issues?.length) return null
+  const manifest = await providerAuth.buildManifest(providerId, { seasonId, buildId })
+  const plan = planProviderOverlay({ report, manifest })
+  if (!plan) return null
+  const { patchBase, patchContent, bytes } = plan
+  if (!manifest.contentBaseUrl && patchContent.size > 0) {
+    throw new Error('Era did not return a content source for the archive overlay; the archive was rejected.')
+  }
+
+  const headers = await providerAuth.resourceHeaders(providerId)
+  const getHeaders = async () => headers
+  const state = { files: {}, content: {} }
+  const saveState = async () => {}
+  const total = bytes
+  let completed = 0
+  const progress = (amount) => {
+    completed += Math.max(0, Number(amount) || 0)
+    if (total > 0) {
+      send('arc:download-progress', {
+        id: 'provider-overlay',
+        received: Math.min(completed, total),
+        total,
+        percent: Math.min(100, Math.round((completed / total) * 100)),
+        etaSeconds: null,
+        bytesPerSecond: null,
+        phase: 'verifying',
+      })
+    }
+  }
+
+  for (const file of patchBase.values()) {
+    if (signal.aborted) throw abortError()
+    await syncProviderFile({
+      targetDir,
+      file,
+      chunkBaseUrl: manifest.chunkBaseUrl,
+      signal,
+      getHeaders,
+      progress,
+      state,
+      saveState,
+    })
+  }
+  for (const file of patchContent.values()) {
+    if (signal.aborted) throw abortError()
+    await syncProviderContentFile({
+      targetDir,
+      file,
+      contentBaseUrl: manifest.contentBaseUrl,
+      signal,
+      getHeaders,
+      progress,
+      state,
+      saveState,
+    })
+  }
+  await pruneProviderGameFiles(targetDir, [
+    ...manifest.files.map((file) => file.path),
+    ...manifest.contentFiles.map((file) => `FortniteGame/Content/Paks/${file.name}`),
+  ])
+  return { files: plan.files, bytes }
+}
+
+function providerMismatchMessage(report) {
+  const sample = report.issues
+    .slice(0, 5)
+    .map((issue) => {
+      if (issue.kind === 'size') {
+        return `${issue.path} (size ${issue.actualSize ?? '?'} / expected ${issue.expectedSize})`
+      }
+      if (issue.kind === 'hash') {
+        return `${issue.path} (hash ${issue.actualHash || '?'} / expected ${issue.expectedHash || '?'})`
+      }
+      return `${issue.path} (${issue.kind})`
+    })
+    .join('\n')
+  return (
+    `The downloaded archive does not match Era's live ${report.buildVersion || 'provider'} build: ` +
+    `${report.issueCount} of ${report.expectedFiles} expected files failed verification ` +
+    `(${report.missing} missing, ${report.sizeMismatches} size, ${report.hashMismatches} hash). ` +
+    `No exchange was attempted.\n${sample}`
+  )
+}
+
+/**
+ * Sync a downloaded season to the provider's live chunk manifest. This is the
+ * one-click repair path: the manifest is fetched with the signed-in provider
+ * token, every local chunk is checked, and only missing/mismatched chunks are
+ * downloaded. Files are written under the season's managed folder, so the
+ * resulting tree is the exact build Era's build.verify expects.
+ */
+async function syncProviderBuild(payload) {
+  const id = typeof payload?.id === 'string' ? payload.id : ''
+  const providerId =
+    typeof payload?.providerId === 'string'
+      ? payload.providerId.trim().toLowerCase().split(':')[0]
+      : ''
+  const key = String(payload?.key || id).replace(/[^a-z0-9_-]/gi, '') || 'build'
+  const seasonId = typeof payload?.seasonId === 'string' ? payload.seasonId : key
+  if (!id || !providerId) throw new Error('Invalid provider build sync request.')
+  if (downloads.has(id)) throw new Error('This build is already downloading.')
+
+  const targetDir = path.join(buildsRoot(), key)
+  await fs.promises.mkdir(targetDir, { recursive: true })
+
+  const controller = new AbortController()
+  downloads.set(id, controller)
+  const signal = controller.signal
+
+  let headers = null
+  let headersAt = 0
+  const getHeaders = async (force = false) => {
+    if (!headers || force || Date.now() - headersAt > 10 * 60 * 1000) {
+      headers = await providerAuth.resourceHeaders(providerId)
+      headersAt = Date.now()
+    }
+    return headers
+  }
+
+  try {
+    await getHeaders(true)
+    const manifest = await providerAuth.buildManifest(providerId, {
+      seasonId,
+      buildId: typeof payload?.buildId === 'string' ? payload.buildId : '',
+    })
+    const total = Number(manifest.totalBytes) || 0
+    const state = await readProviderSyncState(targetDir, manifest.buildId)
+    state.buildId = manifest.buildId
+    const startedAt = Date.now()
+    let received = 0
+    let downloaded = 0
+    let reused = 0
+    let lastSent = 0
+
+    const report = (force = false) => {
+      const now = Date.now()
+      if (!force && now - lastSent < PROGRESS_INTERVAL_MS) return
+      lastSent = now
+      const elapsed = (now - startedAt) / 1000
+      const bytesPerSecond = elapsed > 0 ? downloaded / elapsed : 0
+      const remaining = Math.max(0, total - received)
+      send('arc:download-progress', {
+        id,
+        received,
+        total,
+        percent: total > 0 ? Math.min(100, Math.round((received / total) * 100)) : null,
+        etaSeconds:
+          bytesPerSecond > 0 && elapsed >= 1 ? Math.max(0, Math.round(remaining / bytesPerSecond)) : null,
+        bytesPerSecond: Math.round(bytesPerSecond),
+        url: 'provider-live-build',
+        phase: 'downloading',
+      })
+    }
+    const progress = (bytes, downloadedBytes) => {
+      received += bytes
+      downloaded += downloadedBytes
+      report()
+    }
+    const saveState = async () => {
+      await writeProviderSyncState(targetDir, state)
+    }
+
+    report(true)
+    for (const file of manifest.files) {
+      if (signal.aborted) throw abortError()
+      const result = await syncProviderFile({
+        targetDir,
+        file,
+        chunkBaseUrl: manifest.chunkBaseUrl,
+        signal,
+        getHeaders,
+        progress,
+        state,
+        saveState,
+      })
+      reused += result.reused
+    }
+    for (const file of manifest.contentFiles) {
+      if (signal.aborted) throw abortError()
+      const result = await syncProviderContentFile({
+        targetDir,
+        file,
+        contentBaseUrl: manifest.contentBaseUrl,
+        signal,
+        getHeaders,
+        progress,
+        state,
+        saveState,
+      })
+      reused += result.reused
+    }
+
+    if (signal.aborted) throw abortError()
+    // The manifest is the complete expected game payload. Removing stale
+    // PAK/SIG/UTOC/UCAS files here is what makes build.verify report zero
+    // mismatches after repairing an older 6.31 folder.
+    await pruneProviderGameFiles(targetDir, [
+      ...manifest.files.map((file) => file.path),
+      ...manifest.contentFiles.map((file) => `FortniteGame/Content/Paks/${file.name}`),
+    ])
+    if (total > 0) received = total
+    send('arc:download-progress', {
+      id,
+      received,
+      total,
+      percent: 100,
+      etaSeconds: null,
+      bytesPerSecond: null,
+      url: 'provider-live-build',
+      phase: 'verifying',
+    })
+
+    const executable = path.join(
+      targetDir,
+      'FortniteGame',
+      'Binaries',
+      'Win64',
+      CLIENT_EXE,
+    )
+    if (!fs.existsSync(executable)) {
+      throw new Error(
+        `Era's live build was downloaded, but ${CLIENT_EXE} is missing. Try the update again.`,
+      )
+    }
+    return {
+      folder: targetDir,
+      executable,
+      buildId: manifest.buildId,
+      buildName: manifest.buildName,
+      buildVersion: manifest.buildVersion,
+      files: manifest.files.length + manifest.contentFiles.length,
+      totalBytes: total,
+      downloadedBytes: downloaded,
+      reusedBytes: reused,
+    }
+  } finally {
+    if (downloads.get(id) === controller) downloads.delete(id)
   }
 }
 
@@ -3536,6 +4377,7 @@ async function verifyBuild(payload) {
 }
 
 const PROVIDER_ACCOUNT_STATUS_PREFIX = 'VAULTED_PROVIDER_ACCOUNT_STATUS:'
+const PROVIDER_BUILD_STATUS_PREFIX = 'VAULTED_PROVIDER_BUILD_STATUS:'
 
 /** Only an explicit, non-Discord HTTPS verification page may open in VAULTED. */
 function providerVerificationUrl(value) {
@@ -3556,6 +4398,25 @@ function providerVerificationUrl(value) {
     return url.toString()
   } catch {
     return ''
+  }
+}
+
+/** Turn a game-file integrity rejection into an actionable live-build repair. */
+function providerBuildIssue(profile, error) {
+  if (error?.buildVerificationRequired !== true) return null
+  const buildVersion = String(error?.buildVersion || '').trim()
+  const buildName = String(error?.buildName || '').trim()
+  return {
+    code: 'build_verification_required',
+    providerId: String(profile?.id || ''),
+    providerLabel: String(profile?.label || profile?.name || profile?.id || 'Provider'),
+    buildId: String(error?.buildId || '').trim(),
+    buildVersion,
+    buildName,
+    mismatched: Array.isArray(error?.buildVerificationMismatches)
+      ? error.buildVerificationMismatches.filter((path) => typeof path === 'string').slice(0, 40)
+      : [],
+    message: error instanceof Error ? error.message : String(error || ''),
   }
 }
 
@@ -3619,7 +4480,7 @@ function providerAccountIssue(profile, error) {
  * Launch a downloaded season directly inside VAULTED. The bundled provider
  * profile supplies the backend URL and the redirect DLL; no vendor installer
  * or external launcher is involved. The redirect DLL is injected before the
- * first client frame, using the same suspended-process injector as the local
+ * first client frame, using the same unpack-aware injector as the local
  * runtime.
  */
 async function launchOnlineProvider(payload) {
@@ -3647,7 +4508,11 @@ async function launchOnlineProvider(payload) {
   let executable
   try {
     if (!fs.statSync(folder).isDirectory()) throw new Error('not a folder')
-    executable = findPrimaryExecutable(folder)
+    // A repaired provider build lives directly under the managed season
+    // folder. Prefer that executable over an older nested copy left by a
+    // previous archive download.
+    const direct = path.join(folder, 'FortniteGame', 'Binaries', 'Win64', CLIENT_EXE)
+    executable = fs.existsSync(direct) ? direct : findPrimaryExecutable(folder)
   } catch {
     throw new Error('The downloaded season folder is incomplete. Download the season again from VAULTED.')
   }
@@ -3705,10 +4570,26 @@ async function launchOnlineProvider(payload) {
 
   let authCode = ''
   try {
-    const exchange = await providerAuth.exchangeCode(providerId, { seasonId, version })
+    const exchange = await providerAuth.exchangeCode(providerId, {
+      seasonId,
+      version,
+      // Era gates exchange-code on its realtime build.verify operation. Pass
+      // the exact installed folder so providerAuth can hash the same
+      // executable/PAK files the official launcher verifies.
+      buildPath: folder,
+    })
     authCode = normalizeProviderAuthCode(exchange.code)
     if (!authCode) throw new Error('The provider returned an invalid login code.')
   } catch (error) {
+    const buildIssue = providerBuildIssue(profile, error)
+    if (buildIssue) {
+      // A build integrity rejection is not an account-status issue. Keep it
+      // separate so the card can offer the exact live-build repair instead of
+      // an account-verification button.
+      throw new Error(
+        `${buildIssue.message}\n${PROVIDER_BUILD_STATUS_PREFIX}${JSON.stringify(buildIssue)}`,
+      )
+    }
     const issue = providerAccountIssue(profile, error)
     if (issue) {
       // Keep the friendly explanation first, then carry an opaque marker so the
@@ -3728,28 +4609,36 @@ async function launchOnlineProvider(payload) {
   if (join) writeJoinTarget(join.host, join.port)
   else clearJoinTarget()
 
-  const launched = await launchInjectedGame(launchPayload, {
-    injector: runtime.injector,
-    dll: redirectDll,
-    args: providerFortniteArgs(profile.backendUrl, authCode),
-    env: {
-      VAULTED_PROVIDER_ID: providerId,
-      // Retained for diagnostics; the redirect itself receives -backend= below.
-      VAULTED_PROVIDER_BACKEND_URL: profile.backendUrl,
-      VAULTED_PROVIDER_CONFIG: profile.configPath,
-      VAULTED_PROVIDER_DLL: redirectDll,
-      VAULTED_SEASON_ID: seasonId,
-      VAULTED_BUILD_VERSION: version,
-      VAULTED_BUILD_FOLDER: folder,
-      ...(join
-        ? {
-            VAULTED_JOIN_FILE: joinTargetPath(),
-            VAULTED_PUBLIC_SERVER_HOST: join.host,
-            VAULTED_PUBLIC_SERVER_PORT: String(join.port),
-          }
-        : {}),
-    },
-  })
+  const restoreEnvironment = applyProviderEnvironmentBypass()
+  let launched
+  try {
+    launched = await launchInjectedGame(launchPayload, {
+      injector: runtime.injector,
+      dll: redirectDll,
+      args: providerFortniteArgs(profile.backendUrl, authCode),
+      env: {
+        VAULTED_PROVIDER_ID: providerId,
+        // Retained for diagnostics; the redirect itself receives -backend= below.
+        VAULTED_PROVIDER_BACKEND_URL: profile.backendUrl,
+        VAULTED_PROVIDER_CONFIG: profile.configPath,
+        VAULTED_PROVIDER_DLL: redirectDll,
+        VAULTED_SEASON_ID: seasonId,
+        VAULTED_BUILD_VERSION: version,
+        VAULTED_BUILD_FOLDER: folder,
+        ...(join
+          ? {
+              VAULTED_JOIN_FILE: joinTargetPath(),
+              VAULTED_PUBLIC_SERVER_HOST: join.host,
+              VAULTED_PUBLIC_SERVER_PORT: String(join.port),
+            }
+          : {}),
+      },
+    })
+  } catch (error) {
+    restoreEnvironment()
+    throw error
+  }
+  restoreEnvironmentWhenClientExits(launched.pid, restoreEnvironment)
 
   const startedAt = Date.now()
   const entry = {
@@ -3880,6 +4769,7 @@ function registerIpc() {
   })
 
   ipcMain.handle('arc:download-build', (_event, payload) => downloadBuild(payload))
+  ipcMain.handle('arc:sync-provider-build', (_event, payload) => syncProviderBuild(payload))
   ipcMain.handle('arc:list-interrupted-downloads', () => listInterruptedDownloads())
 
   ipcMain.handle('arc:delete-build', async (_event, payload) => {
@@ -4398,6 +5288,12 @@ function runSmokeTest() {
           key: 'smoke-build',
           url: SMOKE_URL,
           sha256: SMOKE_SHA256 || undefined,
+          repair: SMOKE_REPAIR,
+          preferredFolder: SMOKE_PREFERRED_FOLDER || undefined,
+          providerId: SMOKE_PROVIDER_ID || undefined,
+          seasonId: SMOKE_SEASON_ID || undefined,
+          buildId: SMOKE_BUILD_ID || undefined,
+          validateProvider: Boolean(SMOKE_PROVIDER_ID && SMOKE_BUILD_ID),
         })
         smokeLog('DOWNLOAD_OK ' + JSON.stringify(result))
         app.quit()

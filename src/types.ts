@@ -122,6 +122,22 @@ export interface DownloadState {
   url?: string
   fallbackUrl?: string
   sha256?: string | null
+  /** interrupted provider-manifest sync, resumed against the live build */
+  providerBuild?: { providerId: string; seasonId: string; buildId?: string }
+  /** this archive replaces an installed build that failed Era's file check */
+  repair?: boolean
+  /** after this download, launch through the provider exchange instead of a community server */
+  launchAfter?: boolean
+  forceProviderId?: string
+  /** archive top-level folder to detect first, e.g. 6.21 */
+  preferredFolder?: string
+  /** exact version to attach to the downloaded client */
+  buildVersion?: string
+  /** provider build used for full-manifest archive validation */
+  providerId?: string
+  seasonId?: string
+  buildId?: string
+  validateProvider?: boolean
 }
 
 export interface ToastAction {

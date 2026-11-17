@@ -98,6 +98,22 @@ export interface DownloadResult {
   executable: string | null
   folder: string
   reason?: 'mobile' | 'no-executable' | null
+  /** archive was checked against every expected provider manifest file */
+  manifestVerified?: boolean
+  manifestFiles?: number
+  manifestBytes?: number
+}
+
+export interface ProviderSyncResult {
+  folder: string
+  executable: string
+  buildId: string
+  buildName: string
+  buildVersion: string
+  files: number
+  totalBytes: number
+  downloadedBytes: number
+  reusedBytes: number
 }
 
 /**
@@ -143,7 +159,24 @@ export interface LauncherBridge {
     url: string
     sha256?: string
     fallbackUrl?: string
+    /** allow replacing an installed season folder with a provider repair archive */
+    repair?: boolean
+    /** folder name to prefer when an old nested build is also present */
+    preferredFolder?: string
+    /** validate every extracted file against this provider build manifest */
+    providerId?: string
+    seasonId?: string
+    buildId?: string
+    validateProvider?: boolean
   }): Promise<DownloadResult>
+  /** download/repair a season from its provider's live chunk manifest */
+  syncProviderBuild?(payload: {
+    id: string
+    key: string
+    providerId: string
+    seasonId: string
+    buildId?: string
+  }): Promise<ProviderSyncResult>
   deleteBuild?(payload: { id: string; path: string }): Promise<{ deleted: boolean; managed: boolean; running?: boolean }>
   verifyBuild?(payload: { id: string; path: string; executable: string }): Promise<BuildVerifyReport>
   cancelDownload?(payload: { id: string }): Promise<{ cancelled: boolean }>
@@ -400,19 +433,56 @@ export async function launchOnlineProvider(
   }
 }
 
+export async function syncProviderBuild(payload: {
+  id: string
+  key: string
+  providerId: string
+  seasonId: string
+  buildId?: string
+}): Promise<ProviderSyncResult> {
+  if (!window.arc?.syncProviderBuild) {
+    throw new Error('Provider build updates need the desktop app — run "npm run app".')
+  }
+  try {
+    return await window.arc.syncProviderBuild(payload)
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
 export async function startDownload(
   id: string,
   key: string,
   url: string,
   sha256?: string,
   fallbackUrl?: string,
+  options: {
+    repair?: boolean
+    preferredFolder?: string
+    providerId?: string
+    seasonId?: string
+    buildId?: string
+    validateProvider?: boolean
+  } = {},
 ): Promise<DownloadResult> {
   if (!window.arc?.downloadBuild) {
     throw new Error('Downloads need the desktop app — run "npm run app".')
   }
 
   try {
-    return await window.arc.downloadBuild({ id, key, url, sha256, fallbackUrl })
+    return await window.arc.downloadBuild({
+      id,
+      key,
+      url,
+      sha256,
+      fallbackUrl,
+      ...(options.repair ? { repair: true } : {}),
+      ...(options.preferredFolder ? { preferredFolder: options.preferredFolder } : {}),
+      ...(options.providerId ? { providerId: options.providerId } : {}),
+      ...(options.seasonId ? { seasonId: options.seasonId } : {}),
+      ...(options.buildId ? { buildId: options.buildId } : {}),
+      ...(options.validateProvider ? { validateProvider: true } : {}),
+    })
   } catch (error) {
     throw cleanIpcError(error)
   }

@@ -21,6 +21,8 @@ export interface SeasonManifestEntry {
   sizeBytes: number
   /** direct archive endpoint used by the one-click download */
   downloadUrl: string
+  /** live provider build used for the build.verify/exchange repair path */
+  providerBuild?: { providerId: string; seasonId: string; buildId?: string }
   /** alternate bucket filename, e.g. {base}/{buildVersion}.zip */
   fallbackDownloadUrl?: string
   /** which bundled runtime the Play button should use */
@@ -77,7 +79,21 @@ export function buildSeasonManifest(
   for (const [key, source] of Object.entries(manifest?.seasons ?? {})) {
     if (!source || typeof source !== 'object') continue
     const downloadUrl = String(source.downloadUrl || source.url || '').trim()
-    if (!downloadUrl) continue
+    const providerSource = source.providerBuild
+    const providerBuild =
+      providerSource && typeof providerSource.providerId === 'string' && providerSource.providerId.trim()
+        ? {
+            providerId: providerSource.providerId.trim(),
+            seasonId:
+              typeof providerSource.seasonId === 'string' && providerSource.seasonId.trim()
+                ? providerSource.seasonId.trim()
+                : key,
+            ...(typeof providerSource.buildId === 'string' && providerSource.buildId.trim()
+              ? { buildId: providerSource.buildId.trim() }
+              : {}),
+          }
+        : undefined
+    if (!downloadUrl && !providerBuild) continue
 
     const catalogueSeason = CATALOGUE.get(key)
     const chapter = Number.isFinite(source.chapter) ? Number(source.chapter) : (catalogueSeason?.chapter ?? 0)
@@ -100,6 +116,7 @@ export function buildSeasonManifest(
       sizeGB,
       sizeBytes,
       downloadUrl,
+      providerBuild,
       fallbackDownloadUrl: source.fallbackDownloadUrl,
       runtimeProfile,
       defaultInstallDir: `${root}\\${key}`,

@@ -35,6 +35,19 @@ function parseHttpUrl(value, originOnly = false) {
   }
 }
 
+function parseWssUrl(value) {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw || raw.length > 2048) return null
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'wss:' || url.username || url.password || url.hash || url.search) return null
+    if (url.pathname && url.pathname !== '/') return null
+    return url
+  } catch {
+    return null
+  }
+}
+
 function safeApiPath(value, fallback) {
   const candidate = typeof value === 'string' ? value.trim() : ''
   return /^\/[A-Za-z0-9/_-]{1,200}$/.test(candidate) ? candidate : fallback
@@ -164,6 +177,7 @@ function catalogData() {
       mode,
       oauth,
       apiBaseUrl: apiBaseUrl ? apiBaseUrl.origin : '',
+      realtimeUrl: parseWssUrl(entry.realtimeUrl)?.origin || '',
       buildsPath: safeApiPath(entry.buildsPath, '/launcher/v1/builds'),
       exchangeCodePath: safeApiPath(entry.exchangeCodePath, '/launcher/v1/game/exchange-code'),
       profilePath: safeApiPath(entry.profilePath, ''),
@@ -331,6 +345,7 @@ function providerProfile(id) {
       (raw?.mode === 'global_live' && raw?.auth === 'oauth' ? 'global_live' : 'download'),
     oauth: catalogEntry?.oauth || parseOAuth(raw?.oauth),
     apiBaseUrl: catalogEntry?.apiBaseUrl || parseHttpUrl(raw?.apiBaseUrl, true)?.origin || '',
+    realtimeUrl: parseWssUrl(raw?.realtimeUrl)?.origin || catalogEntry?.realtimeUrl || '',
     buildsPath: catalogEntry?.buildsPath || safeApiPath(raw?.buildsPath, '/launcher/v1/builds'),
     exchangeCodePath:
       catalogEntry?.exchangeCodePath ||

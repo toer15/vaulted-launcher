@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Threading;
 using System.Runtime.InteropServices;
@@ -8,6 +10,8 @@ internal static class VaultedInjector
 {
     private const uint CREATE_SUSPENDED = 0x00000004;
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+    private const uint THREAD_SUSPEND_RESUME = 0x0002;
+    private const uint TH32CS_SNAPTHREAD = 0x00000004;
     private const uint MEM_COMMIT = 0x00001000;
     private const uint MEM_RESERVE = 0x00002000;
     private const uint MEM_RELEASE = 0x00008000;
@@ -46,6 +50,18 @@ internal static class VaultedInjector
         public IntPtr hThread;
         public int dwProcessId;
         public int dwThreadId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct THREADENTRY32
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ThreadID;
+        public uint th32OwnerProcessID;
+        public int tpBasePri;
+        public int tpDeltaPri;
+        public uint dwFlags;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -119,6 +135,9 @@ internal static class VaultedInjector
     private static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
 
     [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetExitCodeThread(IntPtr hThread, out uint lpExitCode);
 
     [DllImport("kernel32.dll", SetLastError = true)]
@@ -141,6 +160,59 @@ internal static class VaultedInjector
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern IntPtr OpenProcess(uint access, bool inherit, int processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool Thread32First(IntPtr snapshot, ref THREADENTRY32 entry);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool Thread32Next(IntPtr snapshot, ref THREADENTRY32 entry);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenThread(uint access, bool inherit, uint threadId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern int SuspendThread(IntPtr thread);
+
+    /**
+     * Suspending a process at CreateProcess time skips the launcher's UAC/app
+     * environment handshake. Start it, let it initialize that handshake, then
+     * freeze every thread before it can start its own copy of the game.
+     */
+    private static int SuspendProcessThreads(int processId)
+    {
+        IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snapshot == new IntPtr(-1)) return -1;
+        int suspended = 0;
+        try
+        {
+            var entry = new THREADENTRY32();
+            entry.dwSize = (uint)Marshal.SizeOf(typeof(THREADENTRY32));
+            if (!Thread32First(snapshot, ref entry)) return 0;
+            do
+            {
+                if (entry.th32OwnerProcessID != (uint)processId) continue;
+                IntPtr thread = OpenThread(THREAD_SUSPEND_RESUME, false, entry.th32ThreadID);
+                if (thread == IntPtr.Zero) continue;
+                try
+                {
+                    if (SuspendThread(thread) != -1) suspended++;
+                }
+                finally
+                {
+                    CloseHandle(thread);
+                }
+            }
+            while (Thread32Next(snapshot, ref entry));
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+        return suspended;
+    }
 
     private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
@@ -172,6 +244,139 @@ internal static class VaultedInjector
             EnumWindows(callback, IntPtr.Zero);
             Thread.Sleep(250);
         }
+    }
+
+    private static string FortniteLogPath(string workingDirectory)
+    {
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var candidates = new[]
+        {
+            Path.Combine(localAppData, "FortniteGame", "Saved", "Logs", "FortniteGame.log"),
+            Path.Combine(workingDirectory, "FortniteGame", "Saved", "Logs", "FortniteGame.log"),
+            Path.Combine(Path.GetFullPath(Path.Combine(workingDirectory, "..", "..", "..")), "FortniteGame", "Saved", "Logs", "FortniteGame.log")
+        };
+        foreach (string candidate in candidates)
+            if (File.Exists(candidate)) return candidate;
+        return candidates[0];
+    }
+
+    private static long LogLength(string path)
+    {
+        try
+        {
+            return new FileInfo(path).Length;
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    private const int LogFingerprintBytes = 256;
+
+    private static string LogFingerprint(string path)
+    {
+        try
+        {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                var buffer = new byte[LogFingerprintBytes];
+                int read = stream.Read(buffer, 0, buffer.Length);
+                return Convert.ToBase64String(buffer, 0, read);
+            }
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static string ReadLogSince(string path, long baseline, string fingerprint, DateTime processStartedUtc)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists || info.LastWriteTimeUtc < processStartedUtc) return null;
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                byte[] expected = Convert.FromBase64String(fingerprint);
+                byte[] actual = new byte[expected.Length];
+                int read = stream.Read(actual, 0, actual.Length);
+                bool sameSession = expected.Length > 0 && read == expected.Length && Convert.ToBase64String(actual, 0, read) == fingerprint;
+                long offset = sameSession ? baseline : 0;
+                stream.Seek(offset <= stream.Length ? offset : 0, SeekOrigin.Begin);
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                    return reader.ReadToEnd();
+            }
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool HasReadyMarker(string log)
+    {
+        // The packed image is unpacked before the engine starts initializing.
+        // This line is written right after the loader hands control to the
+        // engine, so it is the earliest marker that is both post-unpack and
+        // ahead of the exchange-code/OAuth request. Waiting for
+        // "Game Engine Initialized" left Tellurium installing its hooks after
+        // the client had already tried to authenticate.
+        return log.Contains("LogInit: Display: Limiting process virtual memory size to") ||
+               log.Contains("LogInit: Display: Game Engine Initialized.") ||
+               log.Contains("LogInit: Display: Starting Game.");
+    }
+
+    /**
+     * Bootstrappers only need the Epic portal flags. Never duplicate the
+     * one-time exchange code or the Tellurium backend argument onto processes
+     * that are never injected.
+     */
+    private static IEnumerable<string> AuxiliaryArguments(IEnumerable<string> gameArguments)
+    {
+        foreach (string argument in gameArguments)
+        {
+            if (argument.StartsWith("-AUTH_LOGIN=", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("-AUTH_PASSWORD=", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("-AUTH_TYPE=", StringComparison.OrdinalIgnoreCase) ||
+                argument.StartsWith("-backend=", StringComparison.OrdinalIgnoreCase))
+                continue;
+            yield return argument;
+        }
+    }
+
+    /**
+     * Wait for the client's own log to prove that its packed image has finished
+     * loading. A visible splash/window is too early: the packer still owns the
+     * main image, so injecting at that point can leave Tellurium scanning the
+     * wrong bytes. The engine-initialized lines are written after unpacking and
+     * before the first version-check/OAuth request.
+     */
+    private static bool WaitForGameReady(PROCESS_INFORMATION process, string logPath, long logBaseline, string logFingerprint, DateTime processStartedUtc, out string detail)
+    {
+        const int timeoutMs = 25000;
+        var started = Stopwatch.StartNew();
+        while (started.ElapsedMilliseconds < timeoutMs)
+        {
+            if (WaitForSingleObject(process.hProcess, 0) == 0)
+            {
+                detail = "process-exited";
+                return false;
+            }
+
+            string fresh = ReadLogSince(logPath, logBaseline, logFingerprint, processStartedUtc);
+            if (fresh != null && HasReadyMarker(fresh))
+            {
+                detail = "unpacked log marker after " + started.ElapsedMilliseconds + "ms";
+                return true;
+            }
+
+            Thread.Sleep(25);
+        }
+
+        detail = "timeout after " + started.ElapsedMilliseconds + "ms";
+        return false;
     }
 
     private const uint PROCESS_CREATE_THREAD = 0x0002;
@@ -224,6 +429,11 @@ internal static class VaultedInjector
 
     private static string Quote(string value)
     {
+        // Epic's client parses -AUTH_PASSWORD with FParse::Value, which keeps a
+        // trailing quote. Only quote arguments that actually need it so the
+        // exchange code reaches the OAuth request intact.
+        if (value.Length > 0 && value.IndexOfAny(new[] { ' ', '\t', '\"' }) < 0)
+            return value;
         return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
     }
 
@@ -275,6 +485,10 @@ internal static class VaultedInjector
         string executable = args[0];
         string dllPath = args[1];
         string workingDirectory = args[2];
+        string logPath = FortniteLogPath(workingDirectory);
+        long logBaseline = LogLength(logPath);
+        string logFingerprint = LogFingerprint(logPath);
+        DateTime processStartedUtc = DateTime.UtcNow;
 
         var auxiliaries = new List<string>();
         var gameArguments = new List<string>();
@@ -320,6 +534,15 @@ internal static class VaultedInjector
                 auxiliaryStartup.cb = Marshal.SizeOf(typeof(STARTUPINFO));
                 var auxiliaryCommand = new StringBuilder();
                 auxiliaryCommand.Append(Quote(auxiliary));
+                // Project Reboot/Eon start their launcher and anti-cheat stubs
+                // with the same Epic portal flags as the client. The stubs stay
+                // suspended, but the client checks their command lines while it
+                // boots.
+                foreach (string argument in AuxiliaryArguments(gameArguments))
+                {
+                    auxiliaryCommand.Append(' ');
+                    auxiliaryCommand.Append(Quote(argument));
+                }
 
                 PROCESS_INFORMATION auxiliaryProcess;
                 if (!CreateProcess(
@@ -341,6 +564,13 @@ internal static class VaultedInjector
                 auxiliaryProcesses.Add(auxiliaryProcess);
                 if (job != IntPtr.Zero) AssignProcessToJobObject(job, auxiliaryProcess.hProcess);
                 Console.WriteLine("AUX=" + auxiliaryProcess.dwProcessId);
+
+                // Let the bootstrapper initialize its UAC/app-environment
+                // handshake, then freeze it so it cannot start a second game.
+                ResumeThread(auxiliaryProcess.hThread);
+                Thread.Sleep(350);
+                int suspended = SuspendProcessThreads(auxiliaryProcess.dwProcessId);
+                Console.WriteLine("AUX_SUSPENDED=" + auxiliaryProcess.dwProcessId + ":" + suspended);
             }
 
             var startup = new STARTUPINFO();
@@ -352,7 +582,7 @@ internal static class VaultedInjector
                 IntPtr.Zero,
                 IntPtr.Zero,
                 false,
-                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+                CREATE_UNICODE_ENVIRONMENT,
                 IntPtr.Zero,
                 workingDirectory,
                 ref startup,
@@ -365,6 +595,26 @@ internal static class VaultedInjector
             IntPtr thread = IntPtr.Zero;
             try
             {
+                // Fortnite 6.21 ships a packed main image. Scanning or hooking
+                // it before the loader has finished unpacking makes Tellurium
+                // install hooks against encrypted code, and the client dies
+                // with 0xc0000005. Wait for the client's own post-load log
+                // marker instead of assuming every machine unpacks in the same
+                // two seconds.
+                string readiness;
+                if (!WaitForGameReady(process, logPath, logBaseline, logFingerprint, processStartedUtc, out readiness))
+                {
+                    uint exited;
+                    if (WaitForSingleObject(process.hProcess, 0) == 0 && GetExitCodeProcess(process.hProcess, out exited))
+                    {
+                        return Fail("Fortnite exited before the redirect DLL could attach: 0x" + exited.ToString("X8"));
+                    }
+                    TerminateProcess(process.hProcess, 1);
+                    return Fail("Fortnite did not become ready for the redirect DLL (" + readiness + ").");
+                }
+                Console.WriteLine("READY=" + readiness);
+                Console.Out.Flush();
+
                 byte[] bytes = Encoding.Unicode.GetBytes(dllPath + "\0");
                 remote = VirtualAllocEx(process.hProcess, IntPtr.Zero, (UIntPtr)bytes.Length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
                 if (remote == IntPtr.Zero)
@@ -409,15 +659,10 @@ internal static class VaultedInjector
                     return Fail("LoadLibraryW failed inside Fortnite.");
                 }
 
-                // Tellurium scans the client and installs its hooks from DllMain's
-                // worker thread. Give it a moment before the game starts.
-                Thread.Sleep(1200);
-
-                if (ResumeThread(process.hThread) == 0xFFFFFFFF)
-                {
-                    TerminateProcess(process.hProcess, 1);
-                    return Fail("ResumeThread failed: " + Marshal.GetLastWin32Error());
-                }
+                // Tellurium scans the client and installs its hooks from
+                // DllMain's worker thread. Give it a moment to finish before
+                // the launcher considers the client ready.
+                Thread.Sleep(500);
 
                 if (hideWindow)
                 {
@@ -431,7 +676,15 @@ internal static class VaultedInjector
                 Console.Out.Flush();
 
                 WaitForSingleObject(process.hProcess, INFINITE);
-                return 0;
+                uint exitCode;
+                if (!GetExitCodeProcess(process.hProcess, out exitCode))
+                {
+                    Console.Error.WriteLine("CLIENT_EXIT=unknown");
+                    return 0;
+                }
+                Console.WriteLine("CLIENT_EXIT=0x" + exitCode.ToString("X8"));
+                Console.Out.Flush();
+                return unchecked((int)exitCode);
             }
             finally
             {

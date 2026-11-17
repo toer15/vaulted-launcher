@@ -1,5 +1,5 @@
 {
-  "_format": "Every season card is self-contained. id/title/chapter/season identify it; buildVersion and sizeGB drive the labels; downloadUrl is the one-click archive; runtimeProfile picks the bundled runtime; defaultInstallDir resolves to {AppDefaultBuildsDir}\\{id}. Legacy url/version/sizeBytes are kept for older launchers.",
+  "_format": "Every season card is self-contained. id/title/chapter/season identify it; buildVersion and sizeGB drive the labels; downloadUrl is the one-click archive; providerBuild identifies the live build Era verifies and repairs to; runtimeProfile picks the bundled runtime; defaultInstallDir resolves to {AppDefaultBuildsDir}\\{id}. Legacy url/version/sizeBytes are kept for older launchers.",
   "updatedAt": "2026-11-16T13:37:27.706Z",
   "seasons": {
     "ch1-s1": {
@@ -152,13 +152,19 @@
       "title": "Chapter 1 Season 6",
       "chapter": 1,
       "season": 6,
-      "buildVersion": "6.31",
-      "sizeGB": 14.72,
-      "downloadUrl": "https://archive.org/download/Fortnite-6.31-CL-4573279.rar/6.31-CL-4573279.rar",
+      "buildVersion": "6.21",
+      "sizeGB": 10.83,
+      "downloadUrl": "https://archive.org/download/fortnite_6.21/6.21.rar",
+      "fallbackDownloadUrl": "https://ia800803.us.archive.org/20/items/fortnite_6.21/6.21.rar",
+      "providerBuild": {
+        "providerId": "era",
+        "seasonId": "ch1-s6",
+        "buildId": "928551d8-c2b6-457e-9201-90144cc519d3"
+      },
       "runtimeProfile": "legacy",
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s6",
-      "url": "https://archive.org/download/Fortnite-6.31-CL-4573279.rar/6.31-CL-4573279.rar",
-      "version": "6.31",
+      "url": "https://archive.org/download/fortnite_6.21/6.21.rar",
+      "version": "6.21",
       "servers": [
         {
           "name": "Reboot",
@@ -169,7 +175,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 14723153985,
+      "sizeBytes": 10830177578,
       "onlineProvider": {
         "id": "era",
         "name": "Project Era",

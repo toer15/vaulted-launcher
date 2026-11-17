@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('arc', {
   closeBuild: (payload) => ipcRenderer.invoke('arc:close-build', payload),
   checkBuilds: (builds) => ipcRenderer.invoke('arc:check-builds', builds),
   downloadBuild: (payload) => ipcRenderer.invoke('arc:download-build', payload),
+  syncProviderBuild: (payload) => ipcRenderer.invoke('arc:sync-provider-build', payload),
   deleteBuild: (payload) => ipcRenderer.invoke('arc:delete-build', payload),
   verifyBuild: (payload) => ipcRenderer.invoke('arc:verify-build', payload),
   cancelDownload: (payload) => ipcRenderer.invoke('arc:cancel-download', payload),

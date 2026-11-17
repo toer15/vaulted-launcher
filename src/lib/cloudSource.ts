@@ -140,12 +140,31 @@ function mergeWithBundled(remote: BuildManifest): BuildManifest {
       continue
     }
     const downloadUrl = incoming.downloadUrl || incoming.url || bundled.downloadUrl || bundled.url
+    // Era's live-build mapping is version-sensitive: a stale cloud manifest
+    // must not point this card back at the old 6.31 archive or at a community
+    // pack that cannot pass Era's build.verify. Keep the bundled provider
+    // archive authoritative while still accepting metadata for other seasons.
+    const providerDownloadUrl = bundled.downloadUrl || bundled.url || ''
+    const providerUrl = bundled.url || providerDownloadUrl
+    const providerOverride = bundled.providerBuild
+      ? {
+          downloadUrl: providerDownloadUrl,
+          url: providerUrl,
+          fallbackDownloadUrl: bundled.fallbackDownloadUrl,
+          providerBuild: bundled.providerBuild,
+          buildVersion: bundled.buildVersion,
+          version: bundled.version,
+          sizeBytes: bundled.sizeBytes,
+          sizeGB: bundled.sizeGB,
+        }
+      : {}
     seasons[key] = {
       ...bundled,
       ...incoming,
+      ...providerOverride,
       id: incoming.id || key,
-      downloadUrl,
-      url: incoming.url || downloadUrl,
+      downloadUrl: bundled.providerBuild ? providerDownloadUrl : downloadUrl,
+      url: bundled.providerBuild ? providerUrl : incoming.url || downloadUrl,
     }
   }
   for (const [key, source] of Object.entries(remote.seasons)) {
@@ -166,12 +185,20 @@ function bucketManifest(base: string): BuildManifest {
   for (const [key, source] of Object.entries(BUNDLED.seasons)) {
     const primary = bucketUrl(base, `${key}.zip`)
     const version = String(source.buildVersion || source.version || '').trim()
+    // Provider-mapped seasons keep their exact live-build archive even when
+    // the player points the rest of the catalogue at a raw storage bucket.
+    const providerDownloadUrl = source.providerBuild ? source.downloadUrl || source.url : ''
+    const providerUrl = source.url || providerDownloadUrl
     seasons[key] = {
       ...source,
       id: key,
-      downloadUrl: primary,
-      url: primary,
-      fallbackDownloadUrl: version ? bucketUrl(base, `${encodeURIComponent(version)}.zip`) : undefined,
+      downloadUrl: providerDownloadUrl || primary,
+      url: providerDownloadUrl ? providerUrl : primary,
+      fallbackDownloadUrl: source.providerBuild
+        ? source.fallbackDownloadUrl
+        : version
+          ? bucketUrl(base, `${encodeURIComponent(version)}.zip`)
+          : undefined,
     }
   }
   return { updatedAt: new Date().toISOString(), seasons }

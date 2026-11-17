@@ -557,6 +557,8 @@ export interface BuildSource {
   buildVersion?: string
   /** direct archive endpoint for the one-click download */
   downloadUrl?: string
+  /** live provider build used to verify and repair that season */
+  providerBuild?: { providerId: string; seasonId?: string; buildId?: string }
   /** bucket fallback, e.g. {base}/{buildVersion}.zip when {id}.zip is absent */
   fallbackDownloadUrl?: string
   /** decimal gigabytes, precomputed for the card labels */
