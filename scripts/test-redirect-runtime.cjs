@@ -43,6 +43,10 @@ const tellurium = read('runtime/Tellurium.dll')
 assert.ok(tellurium.includes(Buffer.from('-backend=', 'utf16le')), 'Tellurium has no -backend= support')
 assert.ok(tellurium.includes(Buffer.from('HOOK_READY')), 'Tellurium has no hook-ready marker')
 
+const cobalt = read('resources/providers/runtime/Cobalt.dll')
+assert.ok(cobalt.includes(Buffer.from('-backend=', 'utf16le')), 'Cobalt has no -backend= support')
+assert.ok(cobalt.includes(Buffer.from('HOOK_READY')), 'Cobalt has no hook-ready marker')
+
 const injectorFile = 'runtime/VaultedInjector.exe'
 const providerInjectorFile = 'resources/providers/runtime/VaultedInjector.exe'
 assert.equal(

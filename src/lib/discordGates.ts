@@ -60,5 +60,5 @@ export function nextDiscordGate(
   verifications: Record<string, DiscordGateVerification>,
 ): DiscordGate | null {
   const list = Array.isArray(gates) ? gates : []
-  return list.find((gate) => !isDiscordGateVerified(verifications, gate)) ?? null
+  return list.find((gate) => !gate.statusOnly && !isDiscordGateVerified(verifications, gate)) ?? null
 }

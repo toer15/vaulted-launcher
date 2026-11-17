@@ -1,8 +1,8 @@
 {
   "version": 1,
   "injector": "VaultedInjector.exe",
-  "dlls": ["Tellurium.dll", "Memory.dll"],
-  "licenses": ["Tellurium-LICENSE.txt", "THIRD-PARTY-NOTICES.txt"],
+  "dlls": ["Tellurium.dll", "Cobalt.dll", "Memory.dll"],
+  "licenses": ["Tellurium-LICENSE.txt", "Cobalt-LICENSE.txt", "THIRD-PARTY-NOTICES.txt"],
   "botFill": {
     "supported": false,
     "mode": "auto_hosting_preferences",

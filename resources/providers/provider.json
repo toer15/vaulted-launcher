@@ -235,8 +235,20 @@
       "auth": "none",
       "external": true,
       "global": true,
+      "statusUrl": "https://retrac.site/api/status",
+      "population": {
+        "kind": "discord",
+        "invite": "retrac",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/retrac",
+        "guildId": "1175919536839610512",
+        "label": "Retrac Discord",
+        "statusOnly": true
+      },
       "seasons": [
-        "ch2-s4-1460"
+        "ch2-s4"
       ],
       "runtime": {
         "kind": "msi",

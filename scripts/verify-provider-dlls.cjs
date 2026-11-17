@@ -92,6 +92,29 @@ for (const id of expectedIds) {
   }
 }
 
+// The shared legacy redirect must ship beside Tellurium; v1.x-v3.x launches
+// select it by version at runtime.
+const cobaltPath = path.join(root, 'runtime', 'Cobalt.dll')
+try {
+  const data = fs.readFileSync(cobaltPath)
+  if (data.length === 0 || data[0] !== 0x4d || data[1] !== 0x5a) {
+    problems.push('runtime/Cobalt.dll is not a non-empty PE binary')
+  } else if (!data.includes(Buffer.from('-backend=', 'utf16le'))) {
+    problems.push('runtime/Cobalt.dll has no -backend= support')
+  } else if (!data.includes(Buffer.from('HOOK_READY'))) {
+    problems.push('runtime/Cobalt.dll has no hook-ready marker')
+  } else {
+    rows.push({
+      id: 'legacy',
+      dllName: 'Cobalt.dll',
+      bytes: data.length,
+      sha256: crypto.createHash('sha256').update(data).digest('hex'),
+    })
+  }
+} catch {
+  problems.push('runtime/Cobalt.dll is missing')
+}
+
 for (const row of rows) {
   console.log(`${row.id.padEnd(12)} ${String(row.bytes).padStart(6)} bytes  ${row.sha256}  ${row.dllName}`)
 }

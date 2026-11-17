@@ -42,6 +42,16 @@ for (const [id, seasonId] of Object.entries(expected)) {
   assert.equal(profile.discordGate?.providerId, id, `${id} profile lost its Discord gate`)
 }
 
+// Retrac's Discord is the official community badge, not a Play gate.
+const retrac = byId.get('retrac-official')
+assert.ok(retrac?.discordGate, 'Retrac has no official Discord badge')
+assert.equal(retrac.discordGate.statusOnly, true, 'Retrac Discord must stay status-only')
+assert.equal(retrac.discordGate.inviteUrl, 'https://discord.gg/retrac')
+assert.equal(retrac.discordGate.guildId, '1175919536839610512')
+assert.ok(retrac.supportedSeasons.includes('ch2-s4'), 'Retrac is not mapped to the merged 14.60 card')
+assert.equal(retrac.statusUrl, 'https://retrac.site/api/status')
+assert.deepEqual(retrac.population, { kind: 'discord', invite: 'retrac', label: 'Discord' })
+
 assert.equal(inviteCode('http://discord.gg/unsafe'), '')
 assert.equal(inviteCode('https://discord.com/invite/safe-code'), 'safe-code')
 

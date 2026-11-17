@@ -51,17 +51,17 @@ function verifyRuntime(root) {
   // Provider builds also need -backend= support for per-season routing.
   const normalizedRoot = root.replace(/\\/g, '/')
   const requireBackend = normalizedRoot.includes('/providers/runtime') || process.argv.includes('--require-backend')
-  const tellurium = path.join(root, 'Tellurium.dll')
-  try {
-    const contents = fs.readFileSync(tellurium)
+  const redirectDlls = ['Tellurium.dll', 'Cobalt.dll']
+  for (const name of redirectDlls) {
+    const redirect = path.join(root, name)
+    if (!fs.existsSync(redirect)) continue
+    const contents = fs.readFileSync(redirect)
     if (!contents.includes(Buffer.from('HOOK_READY'))) {
-      problems.push('Tellurium.dll has no hook-readiness marker (rebuild the bundled redirect DLL)')
+      problems.push(`${name} has no hook-readiness marker (rebuild the bundled redirect DLL)`)
     }
     if (requireBackend && !contents.includes(Buffer.from('-backend=', 'utf16le'))) {
-      problems.push('Tellurium.dll does not support the -backend= launch option (rebuild with UseBackendParam=true)')
+      problems.push(`${name} does not support the -backend= launch option`)
     }
-  } catch {
-    /* the required-file check above already reports a missing DLL */
   }
 
   const injector = path.join(root, 'VaultedInjector.exe')

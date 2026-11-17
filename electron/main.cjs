@@ -12,10 +12,12 @@ const {
   ensureProviderRedirects,
   providerCatalog,
   providerDllPath,
+  legacyRedirectDllPath,
   providerForId,
   providerProfile,
   providerRuntime,
   providerRuntimeMetadata,
+  providerUsesLegacyRedirect,
   redirectDllMatchesProfile,
   redirectSupportsBackendParameter,
 } = require('./onlineProviders.cjs')
@@ -1531,7 +1533,10 @@ function fortniteLaunchArgs(payload, options = {}) {
 function launchInjectedGame(payload, options = {}) {
   return new Promise((resolve, reject) => {
     const injector = options.injector || path.join(runtimeRoot(), 'VaultedInjector.exe')
-    const dll = options.dll || path.join(runtimeRoot(), 'Tellurium.dll')
+    const legacy = providerUsesLegacyRedirect(payload?.version, payload?.seasonId)
+    const dll =
+      options.dll ||
+      (legacy ? legacyRedirectDllPath() : path.join(runtimeRoot(), 'Tellurium.dll'))
     if (!fs.existsSync(injector)) return reject(new Error('The injector is missing from this installation. Reinstall VAULTED.'))
     if (!fs.existsSync(dll)) return reject(new Error('The redirect DLL is missing from this installation. Reinstall VAULTED.'))
 
@@ -4797,7 +4802,10 @@ async function launchOnlineProvider(payload) {
       `${profile.label} uses its ${externalName}. Open ${profile.website || profile.label} to get that build.`,
     )
   }
-  const runtime = providerRuntime(profile)
+  const seasonId = typeof payload?.seasonId === 'string' ? payload.seasonId : id
+  const version = typeof payload?.version === 'string' ? payload.version : ''
+  const legacy = providerUsesLegacyRedirect(version, seasonId)
+  const runtime = providerRuntime(profile, { legacy })
   const redirectDll = runtime.dll
   let redirectReady = false
   try {
@@ -4823,12 +4831,10 @@ async function launchOnlineProvider(payload) {
   if (!redirectSupportsBackendParameter(redirectDll)) {
     throw new Error(
       `The ${profile.label} redirect DLL cannot be pointed at ${profile.backendUrl}.\n\n` +
-        `${path.basename(redirectDll)} does not support the -backend= launch option. Reinstall VAULTED or update the bundled Tellurium build.`,
+        `${path.basename(redirectDll)} does not support the -backend= launch option. Reinstall VAULTED or update the bundled redirect build.`,
     )
   }
 
-  const seasonId = typeof payload?.seasonId === 'string' ? payload.seasonId : id
-  const version = typeof payload?.version === 'string' ? payload.version : ''
   const launchPayload = { ...payload, path: folder, executable }
   assertBuild(launchPayload)
 

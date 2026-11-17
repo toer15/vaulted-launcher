@@ -226,8 +226,16 @@ export function BuildList({
                     </span>
                     {discordGate && (
                       <span
-                        title={`${discordGate.label}: join the community Discord to unlock online play`}
-                        aria-label={`${discordGate.label} gate: online play unlocks through Discord`}
+                        title={
+                          discordGate.statusOnly
+                            ? `${discordGate.label}: official community status`
+                            : `${discordGate.label}: join the community Discord to unlock online play`
+                        }
+                        aria-label={
+                          discordGate.statusOnly
+                            ? `${discordGate.label}: official community status`
+                            : `${discordGate.label} gate: online play unlocks through Discord`
+                        }
                         className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#5865F2]/45 bg-[#5865F2]/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] text-[#c7ccff]"
                       >
                         <MessageCircle className="h-2.5 w-2.5" />

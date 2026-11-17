@@ -501,34 +501,9 @@
     },
     "ch2-s4": {
       "id": "ch2-s4",
-      "title": "Chapter 2 Season 4 (14.50 archive)",
-      "chapter": 2,
-      "season": 4,
-      "buildVersion": "14.50",
-      "sizeGB": 28.77,
-      "downloadUrl": "https://archive.org/download/fortnite-release-14.50-cl-14643651.7z/%2B%2BFortnite%2BRelease-14.50-CL-14643651.7z",
-      "runtimeProfile": "modern",
-      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s4",
-      "url": "https://archive.org/download/fortnite-release-14.50-cl-14643651.7z/%2B%2BFortnite%2BRelease-14.50-CL-14643651.7z",
-      "version": "14.50",
-      "servers": [
-        {
-          "name": "Reboot",
-          "url": "https://rebootmp.com/"
-        },
-        {
-          "name": "Carbon",
-          "url": "https://builds.cbn.lol/"
-        }
-      ],
-      "sizeBytes": 28769341535,
-      "archived": true
-    },
-    "ch2-s4-1460": {
-      "id": "ch2-s4-1460",
-      "title": "Chapter 2 Season 4 · 14.60",
-      "label": "Chapter 2 Season 4 · 14.60",
-      "short": "CH2 · S4 · 14.60",
+      "title": "Chapter 2 Season 4",
+      "label": "Chapter 2 Season 4",
+      "short": "CH2 · S4",
       "era": "2020 · nexus war on Retrac's signed 14.60 client",
       "artKey": "ch2-s4",
       "chapter": 2,

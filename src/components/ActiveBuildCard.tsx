@@ -382,6 +382,7 @@ export function ActiveBuildCard({
   const discordLocked = Boolean(
     !archived &&
       discordGate &&
+      discordGate.statusOnly !== true &&
       !discordGateVerified &&
       isInstalled &&
       ['ready', 'error'].includes(state) &&
@@ -461,7 +462,7 @@ export function ActiveBuildCard({
   const defaultStatePrimary = {
     missing: officialExternal
       ? {
-          label: 'Open Retrac 14.60',
+          label: 'Download 14.60',
           icon: Globe2,
           background: 'linear-gradient(120deg, #7c8cff, #4752c4)',
           glow: 'rgba(124,140,255,0.55)',
@@ -637,7 +638,7 @@ export function ActiveBuildCard({
         : 'Could not start the client. Check the build path and try again.',
   }
   const effectiveStatusText = archived
-    ? 'Archive-only 14.50 build. Online play uses the separate 14.60 card and Retrac’s official launcher.'
+    ? 'Archive-only build. This season is no longer available online.'
     : statusText[state]
 
   return (
@@ -702,7 +703,11 @@ export function ActiveBuildCard({
             )}
             {discordGate && (
               <span
-                title={`${discordGate.label}: online play unlocks through the community Discord.`}
+                title={
+                  discordGate.statusOnly
+                    ? `${discordGate.label}: official community status. Play opens Retrac directly.`
+                    : `${discordGate.label}: online play unlocks through the community Discord.`
+                }
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[#5865F2]/40 bg-[#5865F2]/15 px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-[0.1em] text-[#c7ccff] backdrop-blur"
               >
                 <MessageCircle className="h-3 w-3" />

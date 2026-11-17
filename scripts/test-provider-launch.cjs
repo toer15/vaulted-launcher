@@ -24,7 +24,13 @@ const {
   providerLaunchDiagnostic,
 } = require('../electron/providerLaunchArgs.cjs')
 const { createProviderAuth, retracCodeFromMessage } = require('../electron/providerAuth.cjs')
-const { providerCatalog, providerProfile, providerRuntimeMetadata } = require('../electron/onlineProviders.cjs')
+const {
+  providerCatalog,
+  providerProfile,
+  providerRuntime,
+  providerRuntimeMetadata,
+  providerUsesLegacyRedirect,
+} = require('../electron/onlineProviders.cjs')
 const { launchArguments } = require('../electron/providerRuntime.cjs')
 const seasonManifest = require('../src/assets/builds.json').seasons
 
@@ -108,12 +114,14 @@ function testLiveProviderMappings() {
       `${seasonId} must not offer a local fallback beside a live provider`,
     )
   }
-  // Retrac's current 14.60 client uses its signed Alea launcher. The archived
-  // 14.50 card must not offer Retrac, and the 14.60 card hands off to the
-  // official launcher instead of faking -alea-auth in Tellurium.
-  assert.equal(seasonManifest['ch2-s4']?.onlineProvider, undefined)
-  assert.equal(seasonManifest['ch2-s4']?.onlineProviders, undefined)
-  assert.equal(seasonManifest['ch2-s4']?.archived, true)
+  // Chapter 2 Season 4 is one clean 14.60 card that hands off to Retrac's
+  // signed launcher, instead of the old archived 14.50 duplicate.
+  assert.equal(seasonManifest['ch2-s4']?.title, 'Chapter 2 Season 4')
+  assert.equal(seasonManifest['ch2-s4']?.buildVersion, '14.60')
+  assert.equal(seasonManifest['ch2-s4']?.defaultInstallDir, '{AppDefaultBuildsDir}\\ch2-s4-1460')
+  assert.equal(seasonManifest['ch2-s4']?.onlineProvider?.id, 'retrac-official')
+  assert.equal(seasonManifest['ch2-s4']?.archived, undefined)
+  assert.equal(seasonManifest['ch2-s4-1460'], undefined)
   assert.equal(
     seasonManifest['ch2-s2']?.onlineProviders?.some((provider) => provider.id === 'slurp'),
     true,
@@ -130,12 +138,14 @@ function testLiveProviderMappings() {
     seasonManifest['ch2-s1']?.onlineProviders?.some((provider) => provider.id === 'ambient'),
     true,
   )
-  assert.equal(seasonManifest['ch2-s4-1460']?.buildVersion, '14.60')
-  assert.equal(seasonManifest['ch2-s4-1460']?.onlineProvider?.id, 'retrac-official')
   const official = providerCatalog().find((provider) => provider.id === 'retrac-official')
   assert.equal(official?.mode, 'external')
   assert.equal(official?.auth, 'none')
   assert.equal(official?.launchKind, 'official')
+  assert.equal(official?.statusUrl, 'https://retrac.site/api/status')
+  assert.deepEqual(official?.supportedSeasons, ['ch2-s4'])
+  assert.equal(official?.discordGate?.statusOnly, true)
+  assert.equal(official?.discordGate?.inviteUrl, 'https://discord.gg/retrac')
   for (const id of ['slurp', 'ambient', 'reef', 'legacy-mp', 'horizon', 'sunset', 'blue-og', 'glow']) {
     const provider = providerCatalog().find((entry) => entry.id === id)
     assert.equal(provider?.mode, 'external', `${id} must stay an external community route`)
@@ -170,8 +180,21 @@ function testLiveProviderMappings() {
   ])
   assert.equal(providerRuntimeMetadata('slurp'), null)
   assert.deepEqual(official?.runtime, { required: true, label: 'Retrac Launcher' })
+  // v1.x-v3.x predate the Curl signatures Tellurium waits for. They must
+  // select Cobalt while every modern build keeps Tellurium.
+  assert.equal(providerUsesLegacyRedirect('3.0', 'ch1-s3'), true)
+  assert.equal(providerUsesLegacyRedirect('', 'ch1-s2'), true)
+  assert.equal(providerUsesLegacyRedirect('4.10', 'ch1-s4'), false)
+  assert.equal(providerUsesLegacyRedirect('14.60', 'ch2-s4'), false)
+  assert.match(providerRuntime(providerProfile('neo'), { legacy: true }).dll, /Cobalt\.dll$/)
+  assert.match(providerRuntime(providerProfile('neo')).dll, /Tellurium\.dll$/)
   const authSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'providerAuth.cjs'), 'utf8')
   assert.match(authSource, /authorisation_code/)
+  assert.match(
+    fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'discordGates.ts'), 'utf8'),
+    /!gate\.statusOnly/,
+    'a status-only Discord badge must never gate Play',
+  )
   assert.match(authSource, /anticheat_token/)
   assert.match(
     authSource,

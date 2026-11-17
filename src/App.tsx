@@ -983,8 +983,19 @@ export default function App() {
 
     setBuilds((prev) => {
       const present = new Set(prev.map((build) => build.id))
+      // One card per chapter/season: a manifest alias must never create a
+      // second card beside the build already in the library.
+      const presentSeasons = new Set(
+        prev
+          .filter((build) => build.season?.known)
+          .map((build) => `${build.season.chapter}:${build.season.season}`),
+      )
       const additions = extras
-        .filter((entry) => !present.has(entry.key))
+        .filter(
+          (entry) =>
+            !present.has(entry.key) &&
+            !presentSeasons.has(`${entry.season.chapter}:${entry.season.season}`),
+        )
         .map((entry) => buildForSeason(entry.season, entry.version, entry.key, entry.key, entry.key))
       return additions.length > 0 ? sortBuilds([...prev, ...additions]) : prev
     })

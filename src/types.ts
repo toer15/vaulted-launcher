@@ -52,6 +52,8 @@ export interface DiscordGate {
   inviteUrl: string
   /** Discord guild id, when the invite is a server-discovery link */
   guildId?: string
+  /** show the community badge without requiring a join before Play */
+  statusOnly?: boolean
 }
 
 /** A locally remembered Discord unlock. The provider id is the stable key. */

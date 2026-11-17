@@ -14,13 +14,17 @@ const crypto = require('node:crypto')
  * A provider may still ship its own DLL beside provider.json; otherwise the
  * shared runtime's Tellurium build is used. Every redirect DLL must support
  * the -backend= launch option so its target comes from provider.json rather
- * than a compile-time URL.
+ * than a compile-time URL. Chapter 1 builds before the Curl HTTP stack used
+ * by modern clients need the Cobalt legacy redirect instead.
  */
 const BUNDLED_MANIFEST = require('../src/assets/builds.json')
 const SAFE_PROVIDER_ID = /^[a-z0-9][a-z0-9-]*$/i
 const SAFE_DLL_NAME = /^[^\\/:*?"<>|]+\.dll$/i
 const SAFE_EXE_NAME = /^[^\\/:*?"<>|]+\.exe$/i
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const LEGACY_REDIRECT_DLL = 'Cobalt.dll'
+const LEGACY_REDIRECT_SHA256 = '21b5e00f886ad4732a0a6eb989c192cd1583524be170c4068c1ef865c1ca6e3f'
+const LEGACY_SEASON = /^ch1-s(?:1|2|3)$/i
 
 function parseHttpUrl(value, originOnly = false) {
   const raw = typeof value === 'string' ? value.trim() : ''
@@ -244,6 +248,7 @@ function parseDiscordGate(raw) {
   return {
     inviteUrl: inviteUrl.toString(),
     ...(guildId ? { guildId } : {}),
+    ...(raw.statusOnly === true ? { statusOnly: true } : {}),
     label:
       typeof raw.label === 'string' && raw.label.trim()
         ? raw.label.trim().slice(0, 48)
@@ -830,12 +835,42 @@ function ensureProviderRedirects() {
   return providerRepairPromise
 }
 
+/** Cobalt replaces Tellurium for Chapter 1 builds that predate its signatures. */
+function legacyRedirectProfile(profile) {
+  return {
+    ...profile,
+    redirectDllName: LEGACY_REDIRECT_DLL,
+    redirectDllSha256: LEGACY_REDIRECT_SHA256,
+  }
+}
+
+function legacyRedirectDllPath() {
+  return providerDllPath(
+    legacyRedirectProfile({
+      id: 'legacy',
+      root: sharedRuntimeRoot(),
+    }),
+  )
+}
+
+/**
+ * v1.x-v3.x clients hook through Cobalt. The version is authoritative; the
+ * season id covers a freshly downloaded card whose version has not been
+ * written back to the library yet.
+ */
+function providerUsesLegacyRedirect(version, seasonId = '') {
+  const major = Number.parseInt(String(version || '').split('.')[0], 10)
+  if (Number.isInteger(major) && major > 0) return major <= 3
+  return LEGACY_SEASON.test(String(seasonId || '').trim())
+}
+
 /** The injector plus redirect DLL used for one bundled provider launch. */
-function providerRuntime(profile) {
+function providerRuntime(profile, options = {}) {
   const shared = sharedRuntimeConfig()
+  const selected = options.legacy === true ? legacyRedirectProfile(profile) : profile
   return {
     injector: path.join(shared.root, shared.injector),
-    dll: providerDllPath(profile),
+    dll: providerDllPath(selected),
     root: shared.root,
     configPath: shared.configPath,
   }
@@ -844,12 +879,14 @@ function providerRuntime(profile) {
 module.exports = {
   providerRuntimeMetadata,
   ensureProviderRedirects,
+  legacyRedirectDllPath,
   providerCatalog,
   providerDllPath,
   providerForId,
   providerProfile,
   providerRoot,
   providerRuntime,
+  providerUsesLegacyRedirect,
   redirectDllMatchesProfile,
   redirectSupportsBackendParameter,
   runtimeConfig,
