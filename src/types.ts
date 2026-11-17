@@ -30,16 +30,33 @@ export interface OnlineProviderConfig {
   name: string
   /** compact badge label, e.g. Neo */
   label: string
+  /** signed in, but the provider's game-code handshake is not wired yet */
+  launchHandshakePending?: boolean
+}
+
+/** Public community-presence fallback configured on a provider. */
+export interface ProviderPopulationConfig {
+  kind: 'discord'
+  invite: string
+  /** short label shown beside the sampled count, e.g. "Discord" */
+  label: string
 }
 
 /** A live health/population sample for one configured global backend. */
 export interface ProviderLiveStatus {
   providerId: string
   online: boolean
+  /** players reported by the backend itself or the community directory */
   players?: number
+  /** public Discord presence, used only when the backend reports no players */
+  communityPlayers?: number
+  populationSource?: 'provider' | 'discord' | 'directory'
+  populationLabel?: string
   /** Reachable backend count; at least 1 when a global backend is online. */
   servers: number
   pingMs?: number
+  /** why a down probe failed, or the reachable HTTP status */
+  reason?: string
   checkedAt: string
 }
 
@@ -48,9 +65,15 @@ export interface GlobalBackend extends OnlineProviderConfig {
   backendUrl: string
   website?: string
   signInUrl?: string
-  auth: 'none' | 'exchangeCode' | 'oauth'
+  auth: 'none' | 'exchangeCode' | 'oauth' | 'deeplink' | 'embedded_web'
   /** global_live means VAULTED signs in and fetches game codes natively */
   mode?: 'download' | 'global_live'
+  /** signed in, but the provider's game-code handshake is not wired yet */
+  launchHandshakePending?: boolean
+  /** preferred health endpoint, resolved in main */
+  statusUrl?: string
+  /** public fallback population source when the health endpoint omits players */
+  population?: ProviderPopulationConfig
   global: boolean
   /** discover additional live seasons from the provider account at runtime */
   dynamicSeasons?: boolean
@@ -92,6 +115,8 @@ export interface Build {
   providerLabel?: string
   /** bundled provider that hosts this season directly */
   onlineProvider?: OnlineProviderConfig
+  /** every provider that can host this season; primary is onlineProvider */
+  onlineProviders?: OnlineProviderConfig[]
   season: SeasonInfo
   addedAt: number
   /** true until a real build folder is linked or downloaded */

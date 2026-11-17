@@ -74,7 +74,9 @@ export function seasonServerCount(mode: SeasonPlayMode | null | undefined): numb
 export function onlineStatusLabel(players: number, servers = 0): string {
   const total = Math.max(0, Math.floor(players))
   if (total <= 0) {
-    return servers > 0 ? `ONLINE · 0 PLAYING · ${servers} server${servers === 1 ? '' : 's'}` : 'ONLINE READY'
+    // An unreported population is not zero players. Keep the server signal
+    // without turning a missing count into a fabricated 0.
+    return servers > 0 ? `ONLINE · ${servers} server${servers === 1 ? '' : 's'}` : 'ONLINE READY'
   }
   const serverText =
     servers > 0 ? ` · ${servers} server${servers === 1 ? '' : 's'}` : ''
@@ -217,13 +219,18 @@ export function routeExternalServer(
   servers: CommunityServer[],
 ): ExternalServerRoute {
   const seasonKey = artKeyFor(build.season)
-  const providerId = build.onlineProvider?.id
+  const providerIds = [
+    build.onlineProvider?.id,
+    ...(build.onlineProviders ?? []).map((provider) => provider.id),
+  ].filter((id): id is string => Boolean(id))
+  const matchesBuildProvider = (serverProviderId: string | undefined) =>
+    providerIds.length === 0 || providerIds.some((id) => providerMatches(serverProviderId, id))
   const allLive = rankLobbies((servers || []).filter(isLiveLobby)) as CommunityServer[]
   const live = allLive.filter(isLiveExternalServer)
-  const providerServers = live.filter((server) => providerMatches(server.providerId, providerId))
+  const providerServers = live.filter((server) => matchesBuildProvider(server.providerId))
   const exactProvider = seasonKey
     ? allLive.filter(
-        (server) => server.seasonId === seasonKey && providerMatches(server.providerId, providerId),
+        (server) => server.seasonId === seasonKey && matchesBuildProvider(server.providerId),
       )
     : []
   const exactAnywhere = seasonKey ? allLive.filter((server) => server.seasonId === seasonKey) : []
@@ -245,7 +252,7 @@ export function routeExternalServer(
     ...live.filter(
       (server) =>
         !exactAddresses.has(server.address.toLowerCase()) &&
-        !providerMatches(server.providerId, providerId),
+        !matchesBuildProvider(server.providerId),
     ),
   ]
   const options = [...exactOptions, ...fallbackOptions]

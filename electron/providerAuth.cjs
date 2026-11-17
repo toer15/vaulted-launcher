@@ -30,6 +30,9 @@ const GAME_VERIFY_EXT = /\.(?:pak|sig|utoc|ucas)$/i
 const BUILD_MANIFEST_FORMAT = 'era-chunks-v3'
 const BUILD_CHUNK_HASH = /^[0-9a-f]{32}$/i
 const BUILD_RELATIVE_PATH_MAX = 320
+const RETRAC_LAUNCHER_SOCKET = 'wss://launcher-service-prod.retr.ac/websocket/launcher'
+const RETRAC_LAUNCHER_VERSION = '3.0.13'
+const PROVIDER_CODE_TIMEOUT_MS = 20_000
 
 function safeText(value, limit = 300) {
   return typeof value === 'string' ? value.trim().slice(0, limit) : ''
@@ -363,27 +366,8 @@ function createProviderAuth({
     } catch {
       profile = null
     }
-    if (!profile || profile.auth !== 'oauth') {
+    if (!profile || !['oauth', 'deeplink', 'embedded_web'].includes(profile.auth)) {
       throw new Error('That provider does not support an in-app account sign-in.')
-    }
-
-    const oauth = profile.oauth
-    if (!oauth || typeof oauth !== 'object') {
-      throw new Error(`${profile.label} is missing its OAuth configuration. Reinstall VAULTED.`)
-    }
-
-    let authorizeUrl
-    let tokenUrl
-    try {
-      authorizeUrl = new URL(oauth.authorizeUrl)
-      tokenUrl = new URL(oauth.tokenUrl)
-    } catch {
-      throw new Error(`${profile.label} has an invalid OAuth endpoint. Reinstall VAULTED.`)
-    }
-    for (const endpoint of [authorizeUrl, tokenUrl]) {
-      if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.hash) {
-        throw new Error(`${profile.label} OAuth endpoints must use https without credentials.`)
-      }
     }
 
     let apiBaseUrl
@@ -396,18 +380,120 @@ function createProviderAuth({
       throw new Error(`${profile.label} has an invalid account API. Reinstall VAULTED.`)
     }
 
-    const clientId = safeText(oauth.clientId, 128)
-    if (!/^[A-Za-z0-9._-]{1,128}$/.test(clientId)) {
-      throw new Error(`${profile.label} has an invalid OAuth client ID. Reinstall VAULTED.`)
-    }
-
     const safePath = (value, fallback) => {
       const candidate = typeof value === 'string' ? value.trim() : ''
       return /^\/[A-Za-z0-9/_-]{1,200}$/.test(candidate) ? candidate : fallback
     }
 
+    let oauth = null
+    if (profile.auth === 'oauth') {
+      const source = profile.oauth
+      if (!source || typeof source !== 'object') {
+        throw new Error(`${profile.label} is missing its OAuth configuration. Reinstall VAULTED.`)
+      }
+      let authorizeUrl
+      let tokenUrl
+      try {
+        authorizeUrl = new URL(source.authorizeUrl)
+        tokenUrl = new URL(source.tokenUrl)
+      } catch {
+        throw new Error(`${profile.label} has an invalid OAuth endpoint. Reinstall VAULTED.`)
+      }
+      for (const endpoint of [authorizeUrl, tokenUrl]) {
+        if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.hash) {
+          throw new Error(`${profile.label} OAuth endpoints must use https without credentials.`)
+        }
+      }
+      const clientId = safeText(source.clientId, 128)
+      if (!/^[A-Za-z0-9._-]{1,128}$/.test(clientId)) {
+        throw new Error(`${profile.label} has an invalid OAuth client ID. Reinstall VAULTED.`)
+      }
+      const fixedRedirect = source.fixedRedirect === true
+      let redirectUri = source.redirectUri ? httpsUrl(source.redirectUri) : ''
+      // Retrac's current launcher client uses its registered desktop scheme
+      // (retrac://callback), not a web redirect. Accept that only for a
+      // fixed-redirect client so a bundled profile cannot invent a callback.
+      if (!redirectUri && fixedRedirect && typeof source.redirectUri === 'string') {
+        try {
+          const candidate = new URL(source.redirectUri.trim())
+          if (
+            /^[a-z][a-z0-9+.-]*:$/.test(candidate.protocol) &&
+            candidate.hostname === 'callback' &&
+            !candidate.username &&
+            !candidate.password &&
+            !candidate.search &&
+            !candidate.hash
+          ) {
+            redirectUri = candidate.toString()
+          }
+        } catch {
+          redirectUri = ''
+        }
+      }
+      if (source.redirectUri && !redirectUri) {
+        throw new Error(`${profile.label} has an invalid OAuth callback. Reinstall VAULTED.`)
+      }
+      oauth = {
+        authorizeUrl: authorizeUrl.toString(),
+        tokenUrl: tokenUrl.toString(),
+        clientId,
+        scope: safeText(source.scope, 256),
+        redirectUri: redirectUri || '',
+        fixedRedirect,
+        // Retrac's current launcher posts its token grant as JSON. Era and the
+        // other providers use the standard form body.
+        tokenFormat: source.tokenFormat === 'json' ? 'json' : 'form',
+        methods: {},
+      }
+      if (source.methods && typeof source.methods === 'object' && !Array.isArray(source.methods)) {
+        for (const method of ['discord', 'google']) {
+          const endpoint = source.methods[method]
+          if (typeof endpoint !== 'string') continue
+          const candidate = endpoint.trim()
+          if (/^\/[A-Za-z0-9/_-]{1,200}$/.test(candidate)) oauth.methods[method] = candidate
+        }
+      }
+    }
+
+    let deeplink = null
+    if (profile.auth === 'deeplink') {
+      const source = profile.deeplink
+      const scheme = safeText(source?.scheme, 40).toLowerCase()
+      const authorizeUrl = httpsUrl(source?.authorizeUrl)
+      const tokenParam = safeText(source?.tokenParam, 40)
+      const refreshParam = safeText(source?.refreshParam, 40)
+      if (!/^[a-z][a-z0-9+.-]*:$/.test(scheme) || !authorizeUrl) {
+        throw new Error(`${profile.label} is missing its deep-link sign-in configuration. Reinstall VAULTED.`)
+      }
+      if (!/^[A-Za-z0-9._-]{1,40}$/.test(tokenParam)) {
+        throw new Error(`${profile.label} has an invalid deep-link token parameter.`)
+      }
+      deeplink = { scheme, authorizeUrl, tokenParam, refreshParam }
+    }
+
+    let embeddedWeb = null
+    if (profile.auth === 'embedded_web') {
+      const source = profile.embeddedWeb
+      const loginUrl = httpsUrl(source?.loginUrl)
+      let callbackUrl = null
+      try {
+        const candidate = new URL(String(source?.callbackUrl || ''))
+        if (['http:', 'https:'].includes(candidate.protocol) && !candidate.username && !candidate.password) {
+          callbackUrl = candidate.toString()
+        }
+      } catch {
+        callbackUrl = null
+      }
+      const tokenParam = safeText(source?.tokenParam, 40)
+      const refreshParam = safeText(source?.refreshParam, 40)
+      if (!loginUrl || !callbackUrl || !/^[A-Za-z0-9._-]{1,40}$/.test(tokenParam)) {
+        throw new Error(`${profile.label} is missing its embedded sign-in configuration. Reinstall VAULTED.`)
+      }
+      embeddedWeb = { loginUrl, callbackUrl, tokenParam, refreshParam }
+    }
+
     const buildIds = {}
-    if (oauth.buildIds && typeof oauth.buildIds === 'object' && !Array.isArray(oauth.buildIds)) {
+    if (oauth?.buildIds && typeof oauth.buildIds === 'object' && !Array.isArray(oauth.buildIds)) {
       for (const [season, buildId] of Object.entries(oauth.buildIds)) {
         if (/^ch\d{1,2}(?:-s\d{1,2}|-remix|-mini\d+)$/.test(season) && UUID.test(String(buildId))) {
           buildIds[season] = String(buildId)
@@ -415,26 +501,14 @@ function createProviderAuth({
       }
     }
 
-    const methods = {}
-    if (oauth.methods && typeof oauth.methods === 'object' && !Array.isArray(oauth.methods)) {
-      for (const method of ['discord', 'google']) {
-        const endpoint = oauth.methods[method]
-        if (typeof endpoint !== 'string') continue
-        const candidate = endpoint.trim()
-        if (/^\/[A-Za-z0-9/_-]{1,200}$/.test(candidate)) methods[method] = candidate
-      }
-    }
-
     return {
       id: profile.id,
       label: profile.label || profile.name || profile.id,
-      oauth: {
-        authorizeUrl: authorizeUrl.toString(),
-        tokenUrl: tokenUrl.toString(),
-        clientId,
-        scope: safeText(oauth.scope, 256) || 'launcher.all',
-        methods,
-      },
+      auth: profile.auth,
+      oauth,
+      deeplink,
+      embeddedWeb,
+      launchHandshakePending: profile.launchHandshakePending === true,
       apiBaseUrl: apiBaseUrl.origin,
       // Era's game-file integrity check is a realtime-gateway operation, not an
       // HTTP route. Keep the gateway origin beside the API origin so the
@@ -444,6 +518,7 @@ function createProviderAuth({
       buildsPath: safePath(profile.buildsPath, '/launcher/v1/builds'),
       exchangeCodePath: safePath(profile.exchangeCodePath, '/launcher/v1/game/exchange-code'),
       profilePath: safeText(profile.profilePath, 220),
+      statusUrl: httpsUrl(profile.statusUrl) || '',
       // Era's game host is used for the silent token/profile refresh. It is
       // never opened as a browser or embedded invite page.
       gameBaseUrl:
@@ -490,7 +565,7 @@ function createProviderAuth({
   function statuses() {
     const result = {}
     for (const provider of listProviders()) {
-      if (!provider || provider.auth !== 'oauth') continue
+      if (!provider || !['oauth', 'deeplink', 'embedded_web'].includes(provider.auth)) continue
       result[provider.id] = tokenStatus(provider.id)
     }
     return result
@@ -647,21 +722,22 @@ function createProviderAuth({
   }
 
   async function tokenRequest(config, params) {
+    if (!config.oauth?.tokenUrl) {
+      throw new Error(`${config.label} uses a direct session and cannot refresh it here. Sign in again.`)
+    }
     const url = new URL(config.oauth.tokenUrl)
-    url.searchParams.set('client_id', config.oauth.clientId)
-    const body = new URLSearchParams({
-      ...params,
-      client_id: config.oauth.clientId,
-    })
+    const json = config.oauth.tokenFormat === 'json'
+    if (!json) url.searchParams.set('client_id', config.oauth.clientId)
+    const fields = { ...params, client_id: config.oauth.clientId }
     return requestJson(
       url,
       {
         method: 'POST',
         headers: {
           Accept: 'application/json',
-          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Type': json ? 'application/json' : 'application/x-www-form-urlencoded',
         },
-        body: body.toString(),
+        body: json ? JSON.stringify(fields) : new URLSearchParams(fields).toString(),
       },
       `${config.label} could not complete the account sign-in.`,
     )
@@ -693,6 +769,24 @@ function createProviderAuth({
       // Persist account-wide verified state so later Play clicks never force
       // the Discord/account-link step again.
       verificationCompleted: previous.verificationCompleted === true,
+      updated_at: Date.now(),
+    }
+  }
+
+  /** Token handed directly to the embedded page (Stellar/EZFN). */
+  function directTokenRecord(config, accessToken, refreshToken, previous = {}) {
+    const access = safeText(accessToken, 8192)
+    if (!access) throw new Error(`${config.label} did not return a session token.`)
+    return {
+      access_token: access,
+      refresh_token: safeText(refreshToken, 4096) || safeText(previous.refresh_token, 4096),
+      refresh_expires_at: null,
+      expires_at: null,
+      display_name: safeText(previous.display_name, 120) || null,
+      avatar_url: httpsUrl(previous.avatar_url),
+      account_id: safeText(previous.account_id, 120) || null,
+      auth_method: safeText(previous.auth_method, 20) || null,
+      verificationCompleted: false,
       updated_at: Date.now(),
     }
   }
@@ -858,6 +952,11 @@ function createProviderAuth({
 
     const refresh = safeText(record.refresh_token, 4096)
     if (!refresh) {
+      clearToken(config.id)
+      throw new Error(`Your ${config.label} session expired. Sign in again from the season card.`)
+    }
+
+    if (!config.oauth?.tokenUrl) {
       clearToken(config.id)
       throw new Error(`Your ${config.label} session expired. Sign in again from the season card.`)
     }
@@ -2502,12 +2601,143 @@ function createProviderAuth({
     }
   }
 
+  /**
+   * Retrac's current launcher authenticates its WebSocket with the OAuth
+   * access token and asks for a one-time game code. The reply carries the code
+   * under `id: 'code'`; provider-specific state never crosses IPC.
+   */
+  function retracGameCode(config, token) {
+    return new Promise((resolve, reject) => {
+      let socket = null
+      let settled = false
+      const timer = setTimeout(() => {
+        finish(new Error(`${config.label} did not answer with a game code in time. Try Play again.`))
+      }, PROVIDER_CODE_TIMEOUT_MS)
+
+      const finish = (error, result) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        try {
+          socket?.removeAllListeners()
+          socket?.close()
+        } catch {
+          /* already closed */
+        }
+        if (error) reject(error)
+        else resolve(result)
+      }
+
+      try {
+        const encoded = Buffer.from(token, 'utf8').toString('base64')
+        socket = new WebSocket(
+          `${RETRAC_LAUNCHER_SOCKET}?token=${encodeURIComponent(encoded)}`,
+          { handshakeTimeout: PROVIDER_CODE_TIMEOUT_MS },
+        )
+      } catch (error) {
+        finish(new Error(`${config.label} could not open its launcher socket: ${error instanceof Error ? error.message : String(error)}`))
+        return
+      }
+
+      socket.once('open', () => {
+        try {
+          socket.send(JSON.stringify({ id: 'request_code', version: RETRAC_LAUNCHER_VERSION }))
+        } catch (error) {
+          finish(new Error(`${config.label} could not request a game code: ${error instanceof Error ? error.message : String(error)}`))
+        }
+      })
+      socket.on('message', (raw) => {
+        let message
+        try {
+          message = JSON.parse(raw.toString())
+        } catch {
+          return
+        }
+        if (!message || typeof message !== 'object') return
+        if (message.id === 'error' || message.error) {
+          finish(new Error(`${config.label} rejected the game-code request: ${safeText(message.error || message.message, 300) || 'unknown error'}`))
+          return
+        }
+        if (message.id !== 'code') return
+        const code = safeText(message.code, 4096)
+        if (!code) {
+          finish(new Error(`${config.label} returned an empty game code.`))
+          return
+        }
+        finish(null, code)
+      })
+      socket.once('error', (error) => {
+        finish(new Error(`${config.label} launcher socket failed: ${error instanceof Error ? error.message : String(error)}`))
+      })
+      socket.once('close', (code, reason) => {
+        if (settled) return
+        const detail = `${code || 'unknown'}${reason?.length ? ` ${reason.toString()}` : ''}`
+        finish(new Error(`${config.label} closed the launcher socket before returning a game code (${detail}).`))
+      })
+    })
+  }
+
+  /**
+   * EZFN exposes the standard Epic OAuth exchange route on its game host. The
+   * embedded sign-in already returned the account access token, so the launch
+   * code is the same exchange code the shipped client would request.
+   */
+  async function ezfnGameCode(config, token) {
+    const exchange = await requestJsonWithMeta(
+      new URL('/account/api/oauth/exchange', config.apiBaseUrl),
+      {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+          'User-Agent': providerUserAgent,
+        },
+      },
+      `${config.label} could not create a game login code.`,
+    )
+    const payload = exchange.json?.data ?? exchange.json
+    const code = safeText(payload?.code, 4096)
+    if (!code) {
+      throw new Error(`${config.label} returned an invalid one-time login code. Try Play again.`)
+    }
+    return {
+      code,
+      expiresIn: Number(payload?.expiresIn || payload?.expires_in) > 0
+        ? Number(payload.expiresIn || payload.expires_in)
+        : 300,
+    }
+  }
+
   async function exchangeCode(providerId, options = {}) {
     const config = providerConfig(providerId)
     const token = await accessToken(config)
     const seasonId = safeText(options.seasonId, 40)
     const version = safeText(options.version, 40)
     const buildPath = safeText(options.buildPath, 2048)
+
+    // These two providers have a launcher-side code exchange rather than
+    // Era's build-list and realtime build.verify flow. Keep their handshakes
+    // isolated so the proven Era path above is unchanged.
+    if (config.id === 'retrac') {
+      const code = await retracGameCode(config, token)
+      const result = {
+        code,
+        expiresIn: 300,
+        buildId: '',
+        buildName: safeText(`${seasonId || 'Retrac'} ${version || ''}`, 120),
+      }
+      Object.defineProperty(result, 'authToken', {
+        value: token,
+        enumerable: false,
+        configurable: true,
+      })
+      return result
+    }
+    if (config.id === 'ezfn') {
+      const result = await ezfnGameCode(config, token)
+      result.buildId = ''
+      result.buildName = safeText(`${seasonId || 'EZFN'} ${version || ''}`, 120)
+      return result
+    }
 
     const buildsJson = await requestJson(
       new URL(config.buildsPath, config.apiBaseUrl),
@@ -2652,14 +2882,369 @@ function createProviderAuth({
     }
   }
 
+  /**
+   * Shared branded sign-in shell for provider flows that redirect to a custom
+   * scheme or a fixed loopback callback instead of an OAuth local server.
+   */
+  function openAuthShell(config, { loginUrl, match, onCallback }) {
+    return new Promise((resolve, reject) => {
+      let settled = false
+      let win = null
+      let authView = null
+      let viewReady = false
+      let timer = null
+
+      const settle = (error, result) => {
+        if (settled) return
+        settled = true
+        if (timer) clearTimeout(timer)
+        try {
+          if (authView) {
+            try {
+              if (win && !win.isDestroyed()) win.contentView.removeChildView(authView)
+            } catch {
+              /* the window is already gone */
+            }
+            authView.webContents.close()
+          }
+        } catch {
+          /* already closed */
+        }
+        authView = null
+        try {
+          if (win && !win.isDestroyed()) win.destroy()
+        } catch {
+          /* already gone */
+        }
+        if (error) reject(error)
+        else resolve(result)
+      }
+
+      const callbackFor = (rawUrl) => {
+        try {
+          return match(new URL(String(rawUrl || '')))
+        } catch {
+          return false
+        }
+      }
+
+      const handleNavigation = (event, rawUrl) => {
+        if (!callbackFor(rawUrl) || settled) return
+        if (event && typeof event.preventDefault === 'function') event.preventDefault()
+        let callback
+        try {
+          callback = new URL(String(rawUrl || ''))
+        } catch {
+          settle(new Error(`${config.label} returned an unreadable sign-in callback.`))
+          return
+        }
+        Promise.resolve()
+          .then(() => onCallback(callback))
+          .then((result) => settle(null, result))
+          .catch((error) =>
+            settle(error instanceof Error ? error : new Error(`${config.label} sign-in failed.`)),
+          )
+      }
+
+      const parent = typeof getParentWindow === 'function' ? getParentWindow() : null
+      const hasParent = Boolean(parent && !parent.isDestroyed())
+      const width = 560
+      const height = 760
+      const bounds = hasParent ? parent.getBounds() : null
+      try {
+        win = new BrowserWindow({
+          width,
+          height,
+          minWidth: 420,
+          minHeight: 580,
+          show: false,
+          frame: false,
+          autoHideMenuBar: true,
+          backgroundColor: '#0B0F14',
+          title: 'VAULTED · SECURE ACCOUNT LINK',
+          parent: hasParent ? parent : undefined,
+          modal: hasParent,
+          center: !hasParent,
+          ...(bounds
+            ? {
+                x: Math.max(0, Math.round(bounds.x + (bounds.width - width) / 2)),
+                y: Math.max(0, Math.round(bounds.y + (bounds.height - height) / 2)),
+              }
+            : {}),
+          roundedCorners: true,
+          hasShadow: true,
+          webPreferences: {
+            preload: path.join(__dirname, 'providerAuthShell.cjs'),
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+          },
+        })
+      } catch (error) {
+        reject(
+          new Error(
+            `VAULTED could not open the ${config.label} sign-in window: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          ),
+        )
+        return
+      }
+
+      win.setMenuBarVisibility(false)
+      win.once('ready-to-show', () => {
+        if (!settled && win && !win.isDestroyed()) win.show()
+      })
+      win.on('closed', () => {
+        if (!settled) settle(new Error(`${config.label} sign-in was canceled.`))
+      })
+      win.webContents.on('before-input-event', (event, input) => {
+        if (input.type === 'keyDown' && input.key === 'Escape' && !settled) {
+          event.preventDefault()
+          win.close()
+        }
+      })
+
+      if (typeof WebContentsView === 'function') {
+        const layout = () => {
+          if (!authView || settled || !win || win.isDestroyed()) return
+          const [contentWidth, contentHeight] = win.getContentSize()
+          authView.setBounds({
+            x: 0,
+            y: 54,
+            width: Math.max(0, contentWidth),
+            height: Math.max(0, contentHeight - 54),
+          })
+        }
+        const attachView = () => {
+          if (settled || viewReady) return
+          viewReady = true
+          try {
+            win.contentView.addChildView(authView)
+            layout()
+          } catch (error) {
+            settle(
+              new Error(
+                `VAULTED could not show the ${config.label} sign-in page: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              ),
+            )
+          }
+        }
+        authView = new WebContentsView({
+          webPreferences: {
+            partition: `persist:provider-auth-${config.id}`,
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+          },
+        })
+        authView.setBackgroundColor?.('#0B0F14')
+        const contents = authView.webContents
+        win.on('resize', layout)
+        contents.setWindowOpenHandler(({ url }) => {
+          if (callbackFor(url)) handleNavigation(null, url)
+          else if (/^https?:\/\//i.test(url)) void contents.loadURL(url).catch(() => {})
+          return { action: 'deny' }
+        })
+        contents.on('will-navigate', handleNavigation)
+        contents.on('will-redirect', handleNavigation)
+        contents.on('did-finish-load', attachView)
+        contents.on('did-fail-load', (_event, codeValue, description, _url, isMainFrame) => {
+          if (isMainFrame && codeValue !== -3 && !settled) {
+            settle(
+              new Error(
+                `${config.label} sign-in page could not load (${description || codeValue}). Check your connection and try again.`,
+              ),
+            )
+          }
+        })
+        contents.on('before-input-event', (_event, input) => {
+          if (input.type === 'keyDown' && input.key === 'Escape' && !settled) win.close()
+        })
+        void win
+          .loadFile(path.join(__dirname, 'providerAuthShell.html'), {
+            query: { provider: config.label },
+          })
+          .catch((error) => {
+            settle(
+              new Error(
+                `VAULTED could not open its sign-in window: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              ),
+            )
+          })
+        void contents.loadURL(loginUrl).catch((error) => {
+          settle(
+            new Error(
+              `${config.label} sign-in page could not load: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            ),
+          )
+        })
+      } else {
+        win.webContents.setWindowOpenHandler(({ url }) => {
+          if (callbackFor(url)) handleNavigation(null, url)
+          else if (/^https?:\/\//i.test(url)) void win.loadURL(url).catch(() => {})
+          return { action: 'deny' }
+        })
+        win.webContents.on('will-navigate', handleNavigation)
+        win.webContents.on('will-redirect', handleNavigation)
+        win.webContents.on('did-fail-load', (_event, codeValue, description, _url, isMainFrame) => {
+          if (isMainFrame && codeValue !== -3 && !settled) {
+            settle(
+              new Error(
+                `${config.label} sign-in page could not load (${description || codeValue}). Check your connection and try again.`,
+              ),
+            )
+          }
+        })
+        void win.loadURL(loginUrl).catch((error) => {
+          settle(
+            new Error(
+              `${config.label} sign-in page could not load: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            ),
+          )
+        })
+      }
+
+      timer = setTimeout(() => {
+        settle(new Error(`${config.label} sign-in timed out. Try again.`))
+      }, loginTimeoutMs)
+    })
+  }
+
+  function registerLogin(id, promise) {
+    activeLogins.set(id, promise)
+    promise.finally(() => activeLogins.delete(id)).catch(() => {})
+    return promise
+  }
+
+  function loginAdapter(id, config, method) {
+    if (activeLogins.has(id)) {
+      return Promise.reject(new Error('A provider sign-in window is already open. Finish it first.'))
+    }
+    const loginUrl =
+      config.auth === 'deeplink' ? config.deeplink.authorizeUrl : config.embeddedWeb.loginUrl
+    const match = (url) => {
+      if (config.auth === 'deeplink') return url.protocol === config.deeplink.scheme
+      const expected = new URL(config.embeddedWeb.callbackUrl)
+      return url.origin === expected.origin && url.pathname === expected.pathname
+    }
+    const promise = openAuthShell(config, {
+      loginUrl,
+      match,
+      onCallback: async (callback) => {
+        const tokenParam =
+          config.auth === 'deeplink' ? config.deeplink.tokenParam : config.embeddedWeb.tokenParam
+        const refreshParam =
+          config.auth === 'deeplink' ? config.deeplink.refreshParam : config.embeddedWeb.refreshParam
+        // EZFN's account page has used both query and fragment callbacks. Read
+        // whichever form actually carries the configured token parameter.
+        const hashParams = new URLSearchParams(callback.hash.replace(/^#/, ''))
+        const params = callback.searchParams.has(tokenParam)
+          ? callback.searchParams
+          : hashParams
+        const error = params.get('error') || callback.searchParams.get('error')
+        if (error) {
+          throw new Error(
+            `${config.label} sign-in failed: ${params.get('error_description') || callback.searchParams.get('error_description') || error}`,
+          )
+        }
+        const accessToken = safeText(params.get(tokenParam), 8192)
+        if (!accessToken) {
+          throw new Error(`${config.label} did not return a session token. Try again.`)
+        }
+        const refreshToken = refreshParam
+          ? safeText(params.get(refreshParam), 4096)
+          : ''
+        const previous = readStore()[id]
+        const record = directTokenRecord(config, accessToken, refreshToken, previous)
+        record.auth_method = ['discord', 'google'].includes(method) ? method : 'discord'
+        writeStore({ ...readStore(), [id]: record })
+        const identity = await fetchProfile(config, accessToken)
+        const current = readStore()[id]
+        if (current) {
+          writeStore({
+            ...readStore(),
+            [id]: {
+              ...current,
+              display_name: identity.displayName || current.display_name || null,
+              avatar_url: identity.avatarUrl || current.avatar_url || null,
+              account_id: identity.accountId || current.account_id || null,
+              updated_at: Date.now(),
+            },
+          })
+        }
+        return tokenStatus(id)
+      },
+    })
+    return registerLogin(id, promise)
+  }
+
+  function loginFixedOAuth(id, config, method) {
+    if (activeLogins.has(id)) {
+      return Promise.reject(new Error('A provider sign-in window is already open. Finish it first.'))
+    }
+    const redirectUri = config.oauth.redirectUri
+    if (!redirectUri) {
+      return Promise.reject(new Error(`${config.label} has no fixed OAuth callback. Reinstall VAULTED.`))
+    }
+    const authorize = new URL(config.oauth.authorizeUrl)
+    authorize.searchParams.set('response_type', 'code')
+    authorize.searchParams.set('client_id', config.oauth.clientId)
+    authorize.searchParams.set('redirect_uri', redirectUri)
+    if (config.oauth.scope) authorize.searchParams.set('scope', config.oauth.scope)
+    const expected = new URL(redirectUri)
+    const customScheme = !['http:', 'https:'].includes(expected.protocol)
+    const promise = openAuthShell(config, {
+      loginUrl: authorize.toString(),
+      match: (url) =>
+        customScheme
+          ? url.protocol === expected.protocol && url.hostname === expected.hostname
+          : url.origin === expected.origin && url.pathname === expected.pathname,
+      onCallback: async (callback) => {
+        const oauthError = callback.searchParams.get('error')
+        if (oauthError) {
+          throw new Error(
+            `${config.label} sign-in failed: ${callback.searchParams.get('error_description') || oauthError}`,
+          )
+        }
+        const code = safeText(callback.searchParams.get('code'), 4096)
+        if (!code) throw new Error(`${config.label} did not return an authorization code.`)
+        const token = await tokenRequest(config, {
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+        })
+        const record = tokenRecord(config, token)
+        const identity = await fetchProfile(config, record.access_token)
+        record.display_name = identity.displayName || null
+        record.avatar_url = identity.avatarUrl || null
+        record.account_id = identity.accountId || null
+        record.auth_method = ['discord', 'google'].includes(method) ? method : 'discord'
+        writeStore({ ...readStore(), [id]: record })
+        return tokenStatus(id)
+      },
+    })
+    return registerLogin(id, promise)
+  }
+
   function login(providerId, options = {}) {
     const id = normalizeProviderId(providerId)
     const method = safeText(options?.method, 20)
+    const config = providerConfig(id)
+    if (config.auth !== 'oauth') return loginAdapter(id, config, method)
+    if (config.oauth.fixedRedirect) return loginFixedOAuth(id, config, method)
     if (activeLogins.has(id)) {
       return Promise.reject(new Error('A provider sign-in window is already open. Finish it first.'))
     }
 
-    const config = providerConfig(id)
     for (const key of verificationCodes.keys()) {
       if (key.startsWith(`${id}|`)) verificationCodes.delete(key)
     }

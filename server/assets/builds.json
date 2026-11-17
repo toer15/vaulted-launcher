@@ -348,7 +348,19 @@
         "id": "ezfn",
         "name": "EZFN",
         "label": "EZFN"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "ezfn",
+          "name": "EZFN",
+          "label": "EZFN"
+        },
+        {
+          "id": "stellar",
+          "name": "Stellar",
+          "label": "Stellar"
+        }
+      ]
     },
     "ch2-s3": {
       "id": "ch2-s3",
@@ -402,12 +414,25 @@
         }
       ],
       "sizeBytes": 28769341535,
-      "onlineProvider": {
+            "onlineProvider": {
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        },
+        {
+          "id": "retrac",
+          "name": "Retrac",
+          "label": "Retrac"
+        }
+      ]
     },
+
     "ch2-s5": {
       "id": "ch2-s5",
       "title": "Chapter 2 Season 5",

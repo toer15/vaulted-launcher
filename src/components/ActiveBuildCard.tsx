@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeftRight,
   Ban,
@@ -62,8 +62,12 @@ interface ActiveBuildCardProps {
   selectedGlobalBackend?: GlobalBackend | null
   /** true when the selected/auto backend already has a launch code this session */
   providerSignedIn?: boolean
+  /** signed in, but the provider game-code handshake is not connected yet */
+  providerPending?: boolean
   /** manually selected external server address, null = Auto */
   selectedServer?: string | null
+  /** force the 10-second live health probe to run as soon as the picker opens */
+  onRefreshServers?: () => void
   onSelectServer?: (address: string | null) => void
   /** probe and persist a public community ip:port for this season */
   onAddManualServer?: (address: string) => Promise<string | null>
@@ -140,17 +144,6 @@ function serverPingLabel(server: CommunityServer): string {
     : 'ping —'
 }
 
-function serverOptionLabel(server: CommunityServer): string {
-  const players = lobbyPlayers(server)
-  if (server.providerId === 'vaulted' || server.source === 'vaulted-relay') {
-    return `${server.username || 'VAULTED'} · VAULTED ONLINE · ${players} PLAYING · ${serverPingLabel(server)}`
-  }
-  if (server.providerId === 'manual' || server.source === 'manual') {
-    return `${server.name} · ${server.address} · SAVED IP · ${players > 0 ? `${players} playing` : 'players unknown'} · ${serverPingLabel(server)}`
-  }
-  return `${server.name} · ${server.providerLabel || server.providerId} · ${serverPlayerLabel(server)} · ${serverPingLabel(server)}`
-}
-
 function globalBadge(provider: GlobalBackend): string {
   return provider.mode === 'global_live' ? 'GLOBAL LIVE' : 'GLOBAL ONLINE'
 }
@@ -163,37 +156,160 @@ function playerCountLabel(players: number): string {
   return `${Math.max(0, Math.floor(players))} ${players === 1 ? 'player' : 'players'}`
 }
 
+function compactCount(value: number): string {
+  const count = Math.max(0, Math.floor(value))
+  return count >= 1000
+    ? new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(count)
+    : String(count)
+}
+
+function communityCountLabel(players: number, label?: string): string {
+  return `${compactCount(players)} ${label || 'Discord'}`
+}
+
 function backendCounts(provider: GlobalBackend | null | undefined): {
   servers: number
-  players: number
+  players?: number
+  communityPlayers?: number
+  populationLabel?: string
   state: 'live' | 'offline' | 'checking' | 'none'
 } {
-  if (!provider) return { servers: 0, players: 0, state: 'none' }
+  if (!provider) return { servers: 0, state: 'none' }
   const live = provider.live
-  if (!live) return { servers: 1, players: 0, state: 'checking' }
-  if (!live.online) return { servers: 0, players: 0, state: 'offline' }
+  if (!live) return { servers: 1, state: 'checking' }
+  if (!live.online) return { servers: 0, state: 'offline' }
   return {
     servers: Math.max(1, Math.floor(live.servers || 1)),
-    players: Math.max(0, Math.floor(live.players ?? 0)),
+    players: live.players,
+    communityPlayers: live.communityPlayers,
+    populationLabel: live.populationLabel,
     state: 'live',
   }
+}
+
+function backendPopulationLabel(counts: ReturnType<typeof backendCounts>): string {
+  if (counts.players !== undefined) return playerCountLabel(counts.players)
+  if (counts.communityPlayers !== undefined) {
+    return communityCountLabel(counts.communityPlayers, counts.populationLabel)
+  }
+  return ''
+}
+
+type ServerHealthState = 'up' | 'down' | 'checking'
+
+interface ServerHealth {
+  state: ServerHealthState
+  players?: number
+  communityPlayers?: number
+  populationSource?: 'provider' | 'discord' | 'directory'
+  populationLabel?: string
+  servers?: number
+  pingMs?: number
+  reason?: string
+  checkedAt?: string
+}
+
+function healthForBackend(provider: GlobalBackend | null | undefined): ServerHealth {
+  if (!provider?.live) return { state: 'checking' }
+  return {
+    state: provider.live.online ? 'up' : 'down',
+    players: provider.live.players,
+    communityPlayers: provider.live.communityPlayers,
+    populationSource: provider.live.populationSource,
+    populationLabel: provider.live.populationLabel,
+    servers: provider.live.servers,
+    pingMs: provider.live.pingMs,
+    reason: provider.live.reason,
+    checkedAt: provider.live.checkedAt,
+  }
+}
+
+function healthForServer(server: CommunityServer | null | undefined): ServerHealth {
+  if (!server) return { state: 'checking' }
+  const savedOnline = (server as CommunityServer & { online?: boolean }).online
+  return {
+    state: savedOnline === false || server.public === false ? 'down' : 'up',
+    players: lobbyPlayers(server),
+    servers: 1,
+    pingMs: server.pingMs,
+    reason: savedOnline === false ? 'Saved server is marked offline.' : undefined,
+  }
+}
+
+function healthCheckedLabel(health: ServerHealth): string {
+  if (!health.checkedAt) return ''
+  const checked = new Date(health.checkedAt)
+  if (Number.isNaN(checked.getTime())) return ''
+  return `checked ${checked.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })}`
+}
+
+function healthTitle(health: ServerHealth): string {
+  return [
+    health.state === 'up' ? 'Server up' : health.state === 'down' ? 'Server down' : 'Checking server health',
+    health.populationSource === 'discord'
+      ? `Live ${health.populationLabel || 'Discord'} community presence, not in-game players`
+      : undefined,
+    health.reason,
+    healthCheckedLabel(health),
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function ServerHealthBadge({ health }: { health: ServerHealth | null }) {
+  if (!health) return null
+  const up = health.state === 'up'
+  const down = health.state === 'down'
+  const population =
+    health.players !== undefined
+      ? playerCountLabel(health.players)
+      : health.communityPlayers !== undefined
+        ? communityCountLabel(health.communityPlayers, health.populationLabel)
+        : ''
+  const meta =
+    up
+      ? [
+          population,
+          typeof health.pingMs === 'number' && Number.isFinite(health.pingMs)
+            ? `${Math.max(0, Math.round(health.pingMs))} ms`
+            : '',
+        ].filter(Boolean)
+      : []
+  return (
+    <span
+      title={healthTitle(health)}
+      className={cx(
+        'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.08em]',
+        up
+          ? 'border-emerald-300/50 bg-emerald-400/15 text-emerald-200'
+          : down
+            ? 'border-rose-300/55 bg-rose-500/15 text-rose-200'
+            : 'border-amber-300/45 bg-amber-400/10 text-amber-200',
+      )}
+    >
+      <span
+        className={cx(
+          'h-1.5 w-1.5 rounded-full',
+          up
+            ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]'
+            : down
+              ? 'bg-rose-400 shadow-[0_0_8px_rgba(251,113,133,0.85)]'
+              : 'bg-amber-300',
+        )}
+      />
+      {up ? 'SERVER UP' : down ? 'SERVER DOWN' : 'CHECKING'}
+      {meta.length > 0 ? <span className="font-mono tracking-normal">· {meta.join(' · ')}</span> : null}
+    </span>
+  )
 }
 
 function backendPingLabel(provider: GlobalBackend): string {
   const ping = provider.live?.pingMs
   return typeof ping === 'number' && Number.isFinite(ping) ? `${Math.max(0, Math.round(ping))} ms` : 'ping —'
-}
-
-function globalOptionLabel(provider: GlobalBackend): string {
-  const account = provider.auth === 'none' ? '' : ' · sign-in required'
-  const counts = backendCounts(provider)
-  const state =
-    counts.state === 'offline'
-      ? 'OFFLINE'
-      : counts.state === 'checking'
-        ? 'CHECKING LIVE STATUS'
-        : globalBadge(provider)
-  return `${state} · ${provider.label} · ${serverCountLabel(counts.servers)} · ${playerCountLabel(counts.players)} · ${backendPingLabel(provider)}${account}`
 }
 
 const STATE_PILL: Record<BuildState, { label: string; dot: string; text: string }> = {
@@ -220,7 +336,9 @@ export function ActiveBuildCard({
   autoGlobalBackend,
   selectedGlobalBackend,
   providerSignedIn,
+  providerPending,
   selectedServer,
+  onRefreshServers,
   onSelectServer,
   onAddManualServer,
   onProviderSignIn,
@@ -261,6 +379,17 @@ export function ActiveBuildCard({
   const [serverAddress, setServerAddress] = useState('')
   const [serverBusy, setServerBusy] = useState(false)
   const [serverError, setServerError] = useState<string | null>(null)
+  const [serverMenuOpen, setServerMenuOpen] = useState(false)
+  const serverMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!serverMenuOpen) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!serverMenuRef.current?.contains(event.target as Node)) setServerMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer)
+  }, [serverMenuOpen])
 
   if (!build) {
     return (
@@ -323,6 +452,9 @@ export function ActiveBuildCard({
   const onlinePlayers = onlinePlayerCount(playMode)
   const onlineServers = seasonServerCount(playMode)
   const activeGlobalBadge = activeGlobalBackend ? globalBadge(activeGlobalBackend) : 'GLOBAL ONLINE'
+  const launchPending = Boolean(
+    providerPending && activeGlobalBackend?.launchHandshakePending && state === 'ready',
+  )
   const exactOptions = exactServerOptions ?? serverOptions ?? []
   const otherOptions = fallbackServerOptions ?? []
   const globalOptions = globalBackends ?? []
@@ -333,15 +465,23 @@ export function ActiveBuildCard({
   const selectedBackend = selectedGlobalBackend ?? autoGlobalBackend
   const selectedBackendCounts = backendCounts(selectedBackend)
   const autoRouteBackendCounts = backendCounts(autoGlobalBackend)
-  const autoOptionGlobalBackend = autoServer ? null : autoGlobalBackend ?? selectedGlobalBackend
-  const autoOptionBackendCounts = autoGlobalBackend ? autoRouteBackendCounts : selectedBackendCounts
+  const autoRouteGlobalBackend = autoServer
+    ? null
+    : globalOptions.find(
+          (provider) => provider.live?.online === true && provider.id === build.onlineProvider?.id,
+        ) ??
+      globalOptions.find((provider) => provider.live?.online === true) ??
+      globalOptions.find((provider) => provider.id === build.onlineProvider?.id) ??
+      globalOptions[0] ??
+      null
+  const autoOptionBackendCounts = backendCounts(autoRouteGlobalBackend)
   // The hero pill follows the exact row currently selected. Auto follows the
   // real route Auto would take; only a true season-wide Auto shows the sum.
   let liveServers = onlineServers
   let livePlayers = onlinePlayers
   if (selectedGlobalBackend) {
     liveServers = selectedBackendCounts.servers
-    livePlayers = selectedBackendCounts.players
+    livePlayers = selectedBackendCounts.players ?? 0
   } else if (selectedServer) {
     liveServers = selectedIpServer ? 1 : 0
     livePlayers = selectedIpServer ? lobbyPlayers(selectedIpServer) : 0
@@ -350,15 +490,107 @@ export function ActiveBuildCard({
     livePlayers = lobbyPlayers(autoServer)
   } else if (activeGlobalBackend) {
     liveServers = autoRouteBackendCounts.servers
-    livePlayers = autoRouteBackendCounts.players
+    livePlayers = autoRouteBackendCounts.players ?? 0
   } else if (fallbackServer) {
     liveServers = 1
     livePlayers = lobbyPlayers(fallbackServer)
   }
-  const activeBackendOffline = activeGlobalBackend?.live?.online === false
-  const onlineStatus = activeBackendOffline
-    ? `${activeGlobalBadge} · ${activeGlobalBackend.label} · OFFLINE`
+  const activeBackendHealth = healthForBackend(activeGlobalBackend)
+  const activeBackendOffline = activeBackendHealth.state === 'down'
+  const autoHealth: ServerHealth | null = autoServer
+    ? healthForServer(autoServer)
+    : autoRouteGlobalBackend
+      ? healthForBackend(autoRouteGlobalBackend)
+      : fallbackServer
+        ? healthForServer(fallbackServer)
+        : null
+  const selectedChoiceHealth: ServerHealth | null = selectedGlobalBackend
+    ? healthForBackend(selectedGlobalBackend)
+    : selectedServer
+      ? selectedIpServer
+        ? healthForServer(selectedIpServer)
+        : { state: 'down', reason: 'Selected server is no longer listed as live.' }
+      : autoHealth
+  const heroHealth: ServerHealth | null = selectedGlobalBackend
+    ? healthForBackend(selectedGlobalBackend)
+    : selectedServer
+      ? selectedIpServer
+        ? healthForServer(selectedIpServer)
+        : { state: 'down', reason: 'Selected server is no longer listed as live.' }
+      : autoServer
+        ? healthForServer(autoServer)
+        : activeGlobalBackend
+          ? activeBackendHealth
+          : fallbackServer
+            ? healthForServer(fallbackServer)
+            : null
+  const heroPlayers =
+    livePlayers > 0 || heroHealth?.players !== undefined
+      ? playerCountLabel(livePlayers)
+      : heroHealth?.communityPlayers !== undefined
+        ? communityCountLabel(heroHealth.communityPlayers, heroHealth.populationLabel)
+        : ''
+  const activePopulationLabel =
+    livePlayers > 0
+      ? playerCountLabel(livePlayers)
+      : selectedGlobalBackend
+        ? backendPopulationLabel(selectedBackendCounts)
+        : activeGlobalBackend
+          ? backendPopulationLabel(autoRouteBackendCounts)
+          : heroHealth?.communityPlayers !== undefined
+            ? communityCountLabel(heroHealth.communityPlayers, heroHealth.populationLabel)
+            : ''
+  const activePopulationDetail = activePopulationLabel ? ` · ${activePopulationLabel}` : ''
+  const heroMeta = [
+    heroHealth?.state === 'up' ? heroPlayers : '',
+    heroHealth?.state === 'up' && liveServers > 0 ? serverCountLabel(liveServers) : '',
+    heroHealth?.state === 'up' && typeof heroHealth.pingMs === 'number'
+      ? `${Math.max(0, Math.round(heroHealth.pingMs))} ms`
+      : '',
+  ].filter(Boolean)
+  const onlineStatus = heroHealth
+    ? heroHealth.state === 'up'
+      ? ['SERVER UP', ...heroMeta].join(' · ')
+      : heroHealth.state === 'down'
+        ? 'SERVER DOWN'
+        : 'SERVER CHECKING'
     : onlineStatusLabel(livePlayers, liveServers)
+  const heroStatusTitle = heroHealth
+    ? healthTitle(heroHealth)
+    : `${onlineStatus}${onlineProviderLabel ? ` · ${onlineProviderLabel}` : ''}`
+  const autoMenuTitle = autoServer
+    ? `Auto: Best Live Server · ${autoServer.name}`
+    : autoRouteGlobalBackend
+      ? `Auto: Global Matchmaking · ${autoRouteGlobalBackend.label}`
+      : fallbackServer
+        ? `Auto: Best Fallback · ${fallbackServer.name}`
+        : 'Auto: Start a VAULTED public lobby'
+  const autoMenuDetail = autoServer
+    ? `${autoServer.address} · ${serverPlayerLabel(autoServer)} · ${serverPingLabel(autoServer)}`
+    : autoRouteGlobalBackend
+      ? [
+          globalBadge(autoRouteGlobalBackend),
+          serverCountLabel(autoOptionBackendCounts.servers),
+          backendPopulationLabel(autoOptionBackendCounts),
+          backendPingLabel(autoRouteGlobalBackend),
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : fallbackServer
+        ? `${fallbackServer.address} · ${seasonLabelForId(fallbackServer.seasonId)}`
+        : 'No live server right now; Play starts a local public lobby.'
+  const selectedMenuTitle = selectedGlobalBackend
+    ? `Global Matchmaking · ${selectedGlobalBackend.label}`
+    : selectedIpServer
+      ? `${selectedIpServer.name} · ${selectedIpServer.address}`
+      : selectedServer
+        ? `Selected server · ${selectedServer}`
+        : autoMenuTitle
+  const serverPickerDisabled = globalOptions.length === 0 && exactOptions.length === 0 && otherOptions.length === 0
+  const chooseServer = (address: string | null) => {
+    onSelectServer?.(address)
+    setServerMenuOpen(false)
+  }
   const lobbyCount = playMode?.lobbyCount ?? (hostedLobby?.public ? 1 : 0)
   const playerCount = playMode?.playerCount ?? (hostedLobby?.public ? Math.max(0, hostedLobby.players ?? 0) : 0)
   const communityPlayers = playMode?.communityPlayerCount ?? 0
@@ -476,9 +708,17 @@ export function ActiveBuildCard({
         background: 'linear-gradient(120deg, #4b5563, #374151)',
         glow: 'rgba(75,85,99,0.35)',
       }
+    : launchPending
+      ? {
+          label: 'Launch handshake pending',
+          icon: ShieldCheck,
+          background: 'linear-gradient(120deg, #64748b, #334155)',
+          glow: 'rgba(100,116,139,0.45)',
+        }
     : statePrimary
   const primaryBusy = busy && !requiresSignIn
-  const primaryDisabled = !requiresSignIn && (busy || (state === 'missing' && !hasDownloadSource))
+  const primaryDisabled =
+    launchPending || (!requiresSignIn && (busy || (state === 'missing' && !hasDownloadSource)))
 
   const PrimaryIcon = primary.icon
 
@@ -499,12 +739,16 @@ export function ActiveBuildCard({
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
     ready: onlineProviderLabel
-      ? activeGlobalBackend && (selectedGlobalBackend || (!autoServer && !selectedIpServer))
+      ? launchPending
+        ? `Signed in — ${activeGlobalBackend?.label} launch handshake pending. Play unlocks when the official game-code exchange is connected.`
+        : selectedServer && !selectedIpServer
+        ? `Ready — ${selectedServer} is offline. Pick another server or use Auto.`
+        : activeGlobalBackend && (selectedGlobalBackend || (!autoServer && !selectedIpServer))
         ? activeBackendOffline
           ? `Ready — ${activeGlobalBackend.label} is offline. Pick another backend or server and try again.`
-          : `Ready — ${activeGlobalBadge} on ${activeGlobalBackend.label}. ${serverCountLabel(liveServers)} · ${playerCountLabel(livePlayers)} live. Play queues you with real players worldwide.`
+          : `Ready — ${activeGlobalBadge} on ${activeGlobalBackend.label}. ${serverCountLabel(liveServers)}${activePopulationDetail}. Play queues you with real players worldwide.`
         : liveServers > 0
-          ? `Ready — ${serverCountLabel(liveServers)} · ${playerCountLabel(livePlayers)} live.${autoServer ? ` Auto joins ${autoServer.name}.` : ''}`
+          ? `Ready — ${serverCountLabel(liveServers)}${activePopulationDetail}.${autoServer ? ` Auto joins ${autoServer.name}.` : ''}`
           : fallbackServer
             ? `Ready — no live ${build.season.label} server. Play falls back to ${fallbackServer.name} (${seasonLabelForId(fallbackServer.seasonId)}).`
             : 'Ready — no real players are on live external servers for this season right now.'
@@ -557,21 +801,26 @@ export function ActiveBuildCard({
               </span>
             )}
             <span
-              title={
-                `${onlineStatus}${onlineProviderLabel ? ` · ${onlineProviderLabel}` : ''}.${communityDetail ? ` ${communityDetail}` : ''}`
-              }
-              aria-label={`Online status: ${onlineStatus}`}
+              title={`${heroStatusTitle}.${communityDetail ? ` ${communityDetail}` : ''}`}
+              aria-label={`Server status: ${onlineStatus}`}
               className={cx(
-                'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] text-emerald-200 backdrop-blur',
-                livePlayers > 0
-                  ? 'border-emerald-300/50 bg-emerald-400/[0.18] shadow-[0_0_26px_rgba(16,185,129,0.22)]'
-                  : 'border-emerald-400/35 bg-emerald-400/[0.12] shadow-[0_0_22px_rgba(16,185,129,0.14)]',
+                'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] backdrop-blur',
+                heroHealth?.state === 'down'
+                  ? 'border-rose-400/55 bg-rose-500/[0.18] text-rose-200 shadow-[0_0_26px_rgba(244,63,94,0.22)]'
+                  : heroHealth?.state === 'checking'
+                    ? 'border-amber-400/40 bg-amber-400/[0.1] text-amber-200'
+                    : 'border-emerald-300/50 bg-emerald-400/[0.15] text-emerald-200 shadow-[0_0_26px_rgba(16,185,129,0.2)]',
               )}
             >
               <span
                 className={cx(
-                  'h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.95)]',
-                  livePlayers > 0 && 'animate-pulse',
+                  'h-2 w-2 rounded-full',
+                  heroHealth?.state === 'down'
+                    ? 'bg-rose-400 shadow-[0_0_10px_rgba(251,113,133,0.95)]'
+                    : heroHealth?.state === 'checking'
+                      ? 'bg-amber-300'
+                      : 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.95)]',
+                  heroHealth?.state === 'up' && livePlayers > 0 && 'animate-pulse',
                 )}
               />
               {onlineStatus}
@@ -589,7 +838,7 @@ export function ActiveBuildCard({
 
           <div className="flex flex-wrap items-center gap-2">
             {activeGlobalBackend &&
-              activeGlobalBackend.auth === 'oauth' &&
+              activeGlobalBackend.auth !== 'none' &&
               !providerSignedIn &&
               onProviderSignIn && (
                 <button
@@ -621,6 +870,11 @@ export function ActiveBuildCard({
               <span className={cx('h-1.5 w-1.5 rounded-full', pill.dot, busy && 'animate-pulse')} />
               {pill.label}
             </span>
+            {launchPending && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-400/35 bg-amber-400/10 px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.1em] text-amber-200 backdrop-blur">
+                <ShieldCheck className="h-3.5 w-3.5" /> Signed in · launch handshake pending
+              </span>
+            )}
           </div>
         </div>
 
@@ -661,80 +915,197 @@ export function ActiveBuildCard({
                   className="inline-flex items-center gap-1.5 text-[10px] font-medium text-emerald-300/90"
                 >
                   <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)]" />
-                  {liveServers} {liveServers === 1 ? 'server' : 'servers'} · {livePlayers}{' '}
-                  {livePlayers === 1 ? 'player' : 'players'}
+                  {liveServers} {liveServers === 1 ? 'server' : 'servers'}
+                  {activePopulationLabel ? ` · ${activePopulationLabel}` : ''}
                 </span>
               </div>
-              <div className="relative mt-1.5">
-                <select
+              <div ref={serverMenuRef} className="relative mt-1.5">
+                <button
                   id={`server-select-${build.id}`}
-                  value={selectedServer ?? ''}
-                  onChange={(event) => onSelectServer(event.target.value || null)}
-                  disabled={globalOptions.length === 0 && (!serverOptions || serverOptions.length === 0)}
-                  className="w-full appearance-none rounded-xl border border-white/10 bg-[#0b131c]/90 py-2 pl-3 pr-9 text-[12px] font-medium text-mist outline-none transition-colors duration-200 hover:border-emerald-400/40 focus:border-emerald-400/60 disabled:cursor-not-allowed disabled:opacity-70"
+                  type="button"
+                  aria-haspopup="listbox"
+                  aria-expanded={serverMenuOpen}
+                  disabled={serverPickerDisabled}
+                  onClick={() => {
+                    const nextOpen = !serverMenuOpen
+                    setServerMenuOpen(nextOpen)
+                    if (nextOpen) onRefreshServers?.()
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') setServerMenuOpen(false)
+                  }}
+                  className="flex w-full items-center gap-2 rounded-xl border border-white/10 bg-[#0b131c]/90 py-2 pl-3 pr-3 text-[12px] font-medium text-mist outline-none transition-colors duration-200 hover:border-emerald-400/40 focus:border-emerald-400/60 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  <option value="" className="bg-ink text-mist">
-                    {autoServer
-                      ? `Auto: Best Live Server (${autoServer.name} · ${autoServer.providerLabel || autoServer.providerId} · ${serverCountLabel(1)} · ${serverPlayerLabel(autoServer)} · ${serverPingLabel(autoServer)})`
-                      : autoOptionGlobalBackend
-                        ? `Auto: Global Matchmaking (${autoOptionGlobalBackend.label} · ${serverCountLabel(autoOptionBackendCounts.servers)} · ${playerCountLabel(autoOptionBackendCounts.players)} · ${backendPingLabel(autoOptionGlobalBackend)})`
-                        : fallbackServer
-                          ? `Auto: Best Fallback (${fallbackServer.name} · ${fallbackServer.providerLabel || fallbackServer.providerId} · ${seasonLabelForId(fallbackServer.seasonId)} · ${serverPlayerLabel(fallbackServer)} · ${serverPingLabel(fallbackServer)})`
-                          : 'Auto: Start a VAULTED public lobby'}
-                  </option>
-                  {globalOptions.length > 0 && (
-                    <optgroup label="Live global backends">
-                      {globalOptions.map((provider) => (
-                        <option
-                          key={`global-${provider.id}`}
-                          value={`global:${provider.id}`}
-                          className="bg-ink text-mist"
-                        >
-                          {globalOptionLabel(provider)}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {exactOptions.length > 0 && (
-                    <optgroup label="Live servers · selected season">
-                      {exactOptions.map((server) => (
-                        <option
-                          key={`${server.address}-${server.id}`}
-                          value={server.address}
-                          className="bg-ink text-mist"
-                        >
-                          {serverOptionLabel(server)}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {otherOptions.length > 0 && (
-                    <optgroup label="Other live servers · different season">
-                      {otherOptions.map((server) => (
-                        <option
-                          key={`${server.address}-${server.id}`}
-                          value={server.address}
-                          className="bg-ink text-mist"
-                        >
-                          {server.name} · {server.providerLabel || server.providerId} ·{' '}
-                          {seasonLabelForId(server.seasonId)} · {serverPlayerLabel(server)} ·{' '}
-                          {serverPingLabel(server)}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fog" />
+                  <span className="min-w-0 flex-1 truncate text-left">{selectedMenuTitle}</span>
+                  <ServerHealthBadge health={selectedChoiceHealth} />
+                  <ChevronDown
+                    className={cx(
+                      'h-4 w-4 shrink-0 text-fog transition-transform duration-200',
+                      serverMenuOpen && 'rotate-180',
+                    )}
+                  />
+                </button>
+                {serverMenuOpen && (
+                  <div
+                    role="listbox"
+                    aria-label="Server"
+                    className="absolute left-0 right-0 z-40 mt-2 max-h-80 overflow-y-auto rounded-xl border border-line bg-[#0b131c] p-1.5 shadow-2xl shadow-black/70"
+                  >
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={!selectedServer}
+                      onClick={() => chooseServer(null)}
+                      className={cx(
+                        'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                        !selectedServer ? 'bg-emerald-400/[0.09]' : 'hover:bg-white/[0.05]',
+                      )}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[11.5px] font-semibold text-mist">{autoMenuTitle}</span>
+                        <span className="mt-0.5 block truncate text-[9.5px] text-fog/80">{autoMenuDetail}</span>
+                      </span>
+                      <ServerHealthBadge health={autoHealth} />
+                    </button>
+
+                    {globalOptions.length > 0 && (
+                      <>
+                        <p className="px-2.5 pb-1 pt-2 text-[8.5px] font-bold uppercase tracking-[0.16em] text-fog/60">
+                          Live global backends
+                        </p>
+                        {globalOptions.map((provider) => {
+                          const health = healthForBackend(provider)
+                          const counts = backendCounts(provider)
+                          const selected = selectedGlobalBackend?.id === provider.id
+                          const detail =
+                            health.state === 'down'
+                              ? `${health.reason || 'Unreachable.'}${healthCheckedLabel(health) ? ` · ${healthCheckedLabel(health)}` : ''}`
+                              : [
+                                  globalBadge(provider),
+                                  serverCountLabel(counts.servers),
+                                  backendPopulationLabel(counts),
+                                ]
+                                  .filter(Boolean)
+                                  .join(' · ')
+                          return (
+                            <button
+                              key={`global-${provider.id}`}
+                              type="button"
+                              role="option"
+                              aria-selected={selected}
+                              onClick={() => chooseServer(`global:${provider.id}`)}
+                              className={cx(
+                                'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                                selected ? 'bg-emerald-400/[0.09]' : 'hover:bg-white/[0.05]',
+                              )}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[11.5px] font-semibold text-mist">
+                                  {provider.label}
+                                </span>
+                                <span
+                                  className={cx(
+                                    'mt-0.5 block truncate text-[9.5px]',
+                                    health.state === 'down' ? 'text-rose-300/80' : 'text-fog/80',
+                                  )}
+                                >
+                                  {detail}
+                                </span>
+                              </span>
+                              <ServerHealthBadge health={health} />
+                            </button>
+                          )
+                        })}
+                      </>
+                    )}
+
+                    {exactOptions.length > 0 && (
+                      <>
+                        <p className="px-2.5 pb-1 pt-2 text-[8.5px] font-bold uppercase tracking-[0.16em] text-fog/60">
+                          Live servers · selected season
+                        </p>
+                        {exactOptions.map((server) => {
+                          const health = healthForServer(server)
+                          const selected = selectedServer === server.address
+                          return (
+                            <button
+                              key={`${server.address}-${server.id}`}
+                              type="button"
+                              role="option"
+                              aria-selected={selected}
+                              onClick={() => chooseServer(server.address)}
+                              className={cx(
+                                'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                                selected ? 'bg-emerald-400/[0.09]' : 'hover:bg-white/[0.05]',
+                              )}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[11.5px] font-semibold text-mist">
+                                  {server.name} · {server.providerLabel || server.providerId}
+                                </span>
+                                <span className="mt-0.5 block truncate text-[9.5px] text-fog/80">
+                                  {server.address} · {seasonLabelForId(server.seasonId)}
+                                </span>
+                              </span>
+                              <ServerHealthBadge health={health} />
+                            </button>
+                          )
+                        })}
+                      </>
+                    )}
+
+                    {otherOptions.length > 0 && (
+                      <>
+                        <p className="px-2.5 pb-1 pt-2 text-[8.5px] font-bold uppercase tracking-[0.16em] text-fog/60">
+                          Other live servers · different season
+                        </p>
+                        {otherOptions.map((server) => {
+                          const health = healthForServer(server)
+                          const selected = selectedServer === server.address
+                          return (
+                            <button
+                              key={`${server.address}-${server.id}`}
+                              type="button"
+                              role="option"
+                              aria-selected={selected}
+                              onClick={() => chooseServer(server.address)}
+                              className={cx(
+                                'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                                selected ? 'bg-emerald-400/[0.09]' : 'hover:bg-white/[0.05]',
+                              )}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-[11.5px] font-semibold text-mist">
+                                  {server.name} · {server.providerLabel || server.providerId}
+                                </span>
+                                <span className="mt-0.5 block truncate text-[9.5px] text-fog/80">
+                                  {seasonLabelForId(server.seasonId)} · {server.address}
+                                </span>
+                              </span>
+                              <ServerHealthBadge health={health} />
+                            </button>
+                          )
+                        })}
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
               <p className="mt-1.5 text-[10px] leading-relaxed text-fog/75">
                 {selectedGlobalBackend
                   ? `Play connects to ${selectedGlobalBackend.name}'s live global backend. ${
-                      selectedGlobalBackend.auth === 'oauth'
-                        ? 'Sign in once; VAULTED requests a fresh game code automatically on every Play.'
-                        : 'No account link is required.'
+                      selectedGlobalBackend.auth === 'none'
+                        ? 'No account link is required.'
+                        : selectedGlobalBackend.launchHandshakePending
+                          ? providerSignedIn
+                            ? 'Signed in securely. Launch handshake pending — Play unlocks when the official game-code exchange is connected.'
+                            : 'Sign in once. Launch handshake pending — Play unlocks when the official game-code exchange is connected.'
+                          : 'Sign in once; VAULTED requests a fresh game code automatically on every Play.'
                     }`
                   : selectedServer
-                    ? `Play joins ${selectedServer} directly. The same address is saved for ${season.label}.`
+                    ? selectedIpServer
+                      ? `Play joins ${selectedServer} directly. The same address is saved for ${season.label}.`
+                      : `Selected server ${selectedServer} is down or no longer listed. Pick another server, or choose Auto to use the healthiest route.`
                     : autoServer
                       ? `Play joins ${autoServer.address} with Auto. Friends can pick the same VAULTED lobby to land in the same match.`
                       : activeGlobalBackend
@@ -745,7 +1116,7 @@ export function ActiveBuildCard({
               </p>
 
               {activeGlobalBackend &&
-                activeGlobalBackend.auth === 'oauth' &&
+                activeGlobalBackend.auth !== 'none' &&
                 !providerSignedIn &&
                 onProviderSignIn && (
                   <button

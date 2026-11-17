@@ -33,6 +33,8 @@ export interface SeasonManifestEntry {
   servers?: Array<{ name: string; url: string }>
   /** community provider bundled for this season, so ONLINE PLAY needs no relay */
   onlineProvider?: OnlineProviderConfig
+  /** every provider that can host this season, primary first */
+  onlineProviders?: OnlineProviderConfig[]
 }
 
 /** The fallback used before the desktop shell reports its real builds root. */
@@ -63,6 +65,23 @@ function catalogueIndex(): Map<string, (typeof SEASON_CATALOGUE)[number]['season
 }
 
 const CATALOGUE = catalogueIndex()
+
+/** Keep a season's primary provider first and ignore duplicate ids. */
+function providerList(
+  primary: OnlineProviderConfig | undefined,
+  all: OnlineProviderConfig[] | undefined,
+): OnlineProviderConfig[] | undefined {
+  const providers: OnlineProviderConfig[] = []
+  const seen = new Set<string>()
+  for (const provider of [primary, ...(Array.isArray(all) ? all : [])]) {
+    if (!provider || typeof provider.id !== 'string' || !provider.id.trim()) continue
+    const id = provider.id.trim()
+    if (seen.has(id)) continue
+    seen.add(id)
+    providers.push(provider)
+  }
+  return providers.length > 0 ? providers : undefined
+}
 
 /**
  * Normalises every manifest season into the single self-contained shape the
@@ -123,6 +142,7 @@ export function buildSeasonManifest(
       sha256: source.sha256,
       servers: Array.isArray(source.servers) ? source.servers : undefined,
       onlineProvider: source.onlineProvider,
+      onlineProviders: providerList(source.onlineProvider, source.onlineProviders),
     }
   }
 

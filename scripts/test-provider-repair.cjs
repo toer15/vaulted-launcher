@@ -25,7 +25,11 @@ const {
 } = require('../electron/providerArchive.cjs')
 
 const projectRoot = path.join(__dirname, '..')
-const providerIds = ['reboot', 'neo', 'era', 'ezfn', 'ezfn-hybrid']
+// These providers ship a per-provider profile; Stellar and Retrac are defined
+// only in the central catalog and reuse the shared runtime.
+const localProviderIds = ['reboot', 'neo', 'era', 'ezfn', 'ezfn-hybrid']
+const globalProviderIds = ['stellar', 'retrac']
+const providerIds = [...localProviderIds, ...globalProviderIds]
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-provider-repair-'))
 const packageRoot = path.join(temporaryRoot, 'package')
 const appDataRoot = path.join(temporaryRoot, 'appdata')
@@ -184,7 +188,11 @@ function preparePackagedTree() {
     path.join(projectRoot, 'resources', 'providers', 'runtime', 'VaultedInjector.exe'),
     path.join(packagedRuntime, 'VaultedInjector.exe'),
   )
-  for (const id of providerIds) {
+  fs.copyFileSync(
+    path.join(projectRoot, 'resources', 'providers', 'provider.json'),
+    path.join(packagedProviders, 'provider.json'),
+  )
+  for (const id of localProviderIds) {
     const directory = path.join(packagedProviders, id)
     fs.mkdirSync(directory, { recursive: true })
     fs.copyFileSync(
@@ -262,7 +270,7 @@ async function main() {
   }
 
   console.log(
-    'provider repair end-to-end passed: overlay caps and cached archive reuse checked without network; bundled validated DLL copied for 5/5 providers',
+    `provider repair end-to-end passed: overlay caps and cached archive reuse checked without network; bundled validated DLL copied for ${providerIds.length}/${providerIds.length} providers`,
   )
 }
 

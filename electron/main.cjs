@@ -1474,13 +1474,14 @@ function normalizeProviderAuthCode(value) {
   return /^[A-Za-z0-9._~+/=-]+$/.test(code) ? code : ''
 }
 
-function providerFortniteArgs(backendUrl, authCode = '', providerId = '') {
+function providerFortniteArgs(backendUrl, authCode = '', providerId = '', authToken = '') {
   // Era's official launcher marks the game as a backend client. Its native
   // era.dll uses that launch shape when registering the process for
   // matchmaking; without -frombe the game can load the DLL but Era still
   // answers the athena profile and matchmaking with "The Era client isn't
   // running."
   const era = providerId === 'era'
+  const retrac = providerId === 'retrac'
   const args = [
     '-epicapp=Fortnite',
     '-epicenv=Prod',
@@ -1498,11 +1499,15 @@ function providerFortniteArgs(backendUrl, authCode = '', providerId = '') {
   ]
   if (authCode) {
     args.push(
-      '-AUTH_LOGIN=unused',
+      // Retrac's launcher identifies exchange-code logins with this sentinel.
+      retrac ? '-AUTH_LOGIN=retrac@.' : '-AUTH_LOGIN=unused',
       `-AUTH_PASSWORD=${authCode}`,
       '-AUTH_TYPE=exchangecode',
     )
   }
+  // Retrac's game process expects its OAuth token as the anticheat token. It
+  // stays in the process arguments only, matching the official launcher.
+  if (retrac && authToken) args.push(`-actoken=${authToken}`)
   // Tellurium reads the value after -backend= from the raw command line, so
   // this must remain the final argument. Values without whitespace stay
   // unquoted, which also keeps the exchange code intact for FParse::Value.
@@ -4675,13 +4680,19 @@ async function launchOnlineProvider(payload) {
   const launchPayload = { ...payload, path: folder, executable }
   assertBuild(launchPayload)
 
-  if (profile.auth !== 'oauth') {
+  if (profile.launchHandshakePending) {
+    throw new Error(
+      `${profile.label} is signed in, but its launch handshake is pending. VAULTED has no verified game-code exchange for this provider yet.`,
+    )
+  }
+  if (!['oauth', 'embedded_web', 'deeplink'].includes(profile.auth)) {
     throw new Error(
       `VAULTED requires verified in-app sign-in for ${profile.label}. Manual provider codes are no longer supported.`,
     )
   }
 
   let authCode = ''
+  let authToken = ''
   // The verified Era gateway socket must outlive exchange-code. Keep its
   // main-process handle until the client process exits; never send it to the
   // renderer or close it after build.verify.
@@ -4696,6 +4707,7 @@ async function launchOnlineProvider(payload) {
       buildPath: folder,
     })
     realtimeSession = exchange.realtimeSession || null
+    authToken = typeof exchange.authToken === 'string' ? exchange.authToken : ''
     authCode = normalizeProviderAuthCode(exchange.code)
     if (!authCode) {
       realtimeSession?.close('invalid login code')
@@ -4768,7 +4780,7 @@ async function launchOnlineProvider(payload) {
     launched = await launchInjectedGame(launchPayload, {
       injector: runtime.injector,
       dll: redirectDll,
-      args: providerFortniteArgs(backendUrl, authCode, providerId),
+      args: providerFortniteArgs(backendUrl, authCode, providerId, authToken),
       env: {
         VAULTED_PROVIDER_ID: providerId,
         // Retained for diagnostics; the redirect itself receives -backend= below.

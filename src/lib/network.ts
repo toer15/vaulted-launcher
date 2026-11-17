@@ -511,31 +511,39 @@ export async function fetchProviderLiveStatuses(): Promise<Record<string, Provid
   const statuses: Record<string, ProviderLiveStatus> = {}
   for (const [providerId, value] of Object.entries(result)) {
     const raw = value as Partial<ProviderLiveStatus>
-    if (!providerId || typeof raw !== 'object' || raw === null || raw.online !== true) continue
+    if (!providerId || typeof raw !== 'object' || raw === null) continue
+    const online = raw.online === true
     const players = Number(raw.players)
+    const communityPlayers = Number(raw.communityPlayers)
     const servers = Number(raw.servers)
     const pingMs = Number(raw.pingMs)
+    const populationSource =
+      raw.populationSource === 'provider' ||
+      raw.populationSource === 'discord' ||
+      raw.populationSource === 'directory'
+        ? raw.populationSource
+        : undefined
     statuses[providerId] = {
       providerId,
-      online: true,
-      players: Number.isFinite(players) && players >= 0 ? Math.floor(players) : undefined,
-      servers:
-        Number.isFinite(servers) && servers > 0
+      online,
+      players: online && Number.isFinite(players) && players >= 0 ? Math.floor(players) : undefined,
+      communityPlayers:
+        online && Number.isFinite(communityPlayers) && communityPlayers >= 0
+          ? Math.floor(communityPlayers)
+          : undefined,
+      populationSource,
+      populationLabel:
+        typeof raw.populationLabel === 'string' && raw.populationLabel.trim()
+          ? raw.populationLabel.trim().slice(0, 32)
+          : undefined,
+      servers: online
+        ? Number.isFinite(servers) && servers > 0
           ? Math.floor(servers)
-          : 1,
+          : 1
+        : 0,
       pingMs: Number.isFinite(pingMs) && pingMs >= 0 ? Math.round(pingMs) : undefined,
-      checkedAt: typeof raw.checkedAt === 'string' ? raw.checkedAt : new Date().toISOString(),
-    }
-  }
-  // An explicitly offline backend still needs to clear the previous sample.
-  for (const [providerId, value] of Object.entries(result)) {
-    if (!providerId || statuses[providerId]) continue
-    const raw = value as Partial<ProviderLiveStatus>
-    if (!raw || typeof raw !== 'object' || raw.online !== false) continue
-    statuses[providerId] = {
-      providerId,
-      online: false,
-      servers: 0,
+      reason:
+        typeof raw.reason === 'string' && raw.reason.trim() ? raw.reason.trim().slice(0, 240) : undefined,
       checkedAt: typeof raw.checkedAt === 'string' ? raw.checkedAt : new Date().toISOString(),
     }
   }
@@ -575,6 +583,8 @@ export interface BuildSource {
   servers?: Array<{ name: string; url: string }>
   /** bundled community client that hosts this exact season */
   onlineProvider?: OnlineProviderConfig
+  /** providers selectable for this season in the server dropdown */
+  onlineProviders?: OnlineProviderConfig[]
   /** extra seasons can declare their own chapter/season metadata */
   chapter?: number
   season?: number

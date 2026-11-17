@@ -59,6 +59,28 @@ function parseOAuth(raw) {
   const tokenUrl = parseHttpUrl(raw.tokenUrl)
   const clientId = typeof raw.clientId === 'string' ? raw.clientId.trim() : ''
   if (!authorizeUrl || !tokenUrl || !/^[A-Za-z0-9._-]{1,128}$/.test(clientId)) return null
+  const fixedRedirect = raw.fixedRedirect === true
+  // Retrac's current public client redirects to its desktop scheme. Only
+  // fixed-redirect OAuth clients may use a non-HTTP callback.
+  let redirectUri = parseHttpUrl(raw.redirectUri)
+  if (!redirectUri && fixedRedirect && typeof raw.redirectUri === 'string') {
+    try {
+      const candidate = new URL(raw.redirectUri.trim())
+      if (
+        /^[a-z][a-z0-9+.-]*:$/.test(candidate.protocol) &&
+        candidate.hostname === 'callback' &&
+        !candidate.username &&
+        !candidate.password &&
+        !candidate.search &&
+        !candidate.hash
+      ) {
+        redirectUri = candidate
+      }
+    } catch {
+      redirectUri = null
+    }
+  }
+  if (raw.redirectUri && !redirectUri) return null
   const buildIds = {}
   if (raw.buildIds && typeof raw.buildIds === 'object' && !Array.isArray(raw.buildIds)) {
     for (const [season, buildId] of Object.entries(raw.buildIds)) {
@@ -84,19 +106,57 @@ function parseOAuth(raw) {
     scope: typeof raw.scope === 'string' ? raw.scope.trim().slice(0, 256) : 'launcher.all',
     methods,
     buildIds,
+    redirectUri: redirectUri ? redirectUri.toString() : '',
+    fixedRedirect,
+    tokenFormat: raw.tokenFormat === 'json' ? 'json' : 'form',
+  }
+}
+
+function parseDeepLink(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const scheme = typeof raw.scheme === 'string' ? raw.scheme.trim().toLowerCase() : ''
+  const authorizeUrl = parseHttpUrl(raw.authorizeUrl)
+  const tokenParam = typeof raw.tokenParam === 'string' ? raw.tokenParam.trim() : ''
+  const refreshParam = typeof raw.refreshParam === 'string' ? raw.refreshParam.trim() : ''
+  if (!/^[a-z][a-z0-9+.-]*:$/.test(scheme) || !authorizeUrl) return null
+  if (!/^[A-Za-z0-9._-]{1,40}$/.test(tokenParam)) return null
+  if (refreshParam && !/^[A-Za-z0-9._-]{1,40}$/.test(refreshParam)) return null
+  return {
+    scheme,
+    authorizeUrl: authorizeUrl.toString(),
+    tokenParam,
+    refreshParam,
+  }
+}
+
+function parseEmbeddedWeb(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const loginUrl = parseHttpUrl(raw.loginUrl)
+  const callbackUrl = parseHttpUrl(raw.callbackUrl)
+  const tokenParam = typeof raw.tokenParam === 'string' ? raw.tokenParam.trim() : ''
+  const refreshParam = typeof raw.refreshParam === 'string' ? raw.refreshParam.trim() : ''
+  if (!loginUrl || !callbackUrl) return null
+  if (!/^[A-Za-z0-9._-]{1,40}$/.test(tokenParam)) return null
+  if (refreshParam && !/^[A-Za-z0-9._-]{1,40}$/.test(refreshParam)) return null
+  return {
+    loginUrl: loginUrl.toString(),
+    callbackUrl: callbackUrl.toString(),
+    tokenParam,
+    refreshParam,
   }
 }
 
 const PROVIDERS = new Map()
 for (const season of Object.values(BUNDLED_MANIFEST.seasons || {})) {
-  const provider = season && season.onlineProvider
-  if (!provider || typeof provider.id !== 'string' || !SAFE_PROVIDER_ID.test(provider.id)) continue
-  if (!PROVIDERS.has(provider.id)) {
-    PROVIDERS.set(provider.id, {
-      id: provider.id,
-      name: typeof provider.name === 'string' ? provider.name : provider.id,
-      label: typeof provider.label === 'string' ? provider.label : provider.id,
-    })
+  for (const provider of [season?.onlineProvider, ...(Array.isArray(season?.onlineProviders) ? season.onlineProviders : [])]) {
+    if (!provider || typeof provider.id !== 'string' || !SAFE_PROVIDER_ID.test(provider.id)) continue
+    if (!PROVIDERS.has(provider.id)) {
+      PROVIDERS.set(provider.id, {
+        id: provider.id,
+        name: typeof provider.name === 'string' ? provider.name : provider.id,
+        label: typeof provider.label === 'string' ? provider.label : provider.id,
+      })
+    }
   }
 }
 
@@ -157,14 +217,30 @@ function catalogData() {
         ]
       : []
     const oauth = entry.auth === 'oauth' ? parseOAuth(entry.oauth) : null
-    const auth =
-      entry.auth === 'oauth' && oauth
-        ? 'oauth'
-        : entry.auth === 'exchangeCode'
-          ? 'exchangeCode'
-          : 'none'
-    const mode = auth === 'oauth' && entry.mode === 'global_live' ? 'global_live' : 'download'
+    const deeplink = entry.auth === 'deeplink' ? parseDeepLink(entry.deeplink) : null
+    const embeddedWeb = entry.auth === 'embedded_web' ? parseEmbeddedWeb(entry.embeddedWeb) : null
+    let auth = 'none'
+    if (entry.auth === 'oauth' && oauth) auth = 'oauth'
+    else if (entry.auth === 'deeplink' && deeplink) auth = 'deeplink'
+    else if (entry.auth === 'embedded_web' && embeddedWeb) auth = 'embedded_web'
+    else if (entry.auth === 'exchangeCode') auth = 'exchangeCode'
+    const mode = auth !== 'none' && entry.mode === 'global_live' ? 'global_live' : 'download'
     const apiBaseUrl = parseHttpUrl(entry.apiBaseUrl, true)
+    const statusUrl = parseHttpUrl(entry.statusUrl)
+    const population =
+      entry.population &&
+      entry.population.kind === 'discord' &&
+      typeof entry.population.invite === 'string' &&
+      /^[A-Za-z0-9-]{2,64}$/.test(entry.population.invite.trim())
+        ? {
+            kind: 'discord',
+            invite: entry.population.invite.trim(),
+            label:
+              typeof entry.population.label === 'string' && entry.population.label.trim()
+                ? entry.population.label.trim().slice(0, 32)
+                : 'Discord',
+          }
+        : undefined
 
     providers.push({
       id,
@@ -176,6 +252,11 @@ function catalogData() {
       auth,
       mode,
       oauth,
+      deeplink,
+      embeddedWeb,
+      launchHandshakePending: entry.launchHandshakePending === true,
+      statusUrl: statusUrl ? statusUrl.toString() : '',
+      population,
       apiBaseUrl: apiBaseUrl ? apiBaseUrl.origin : '',
       realtimeUrl: parseWssUrl(entry.realtimeUrl)?.origin || '',
       buildsPath: safeApiPath(entry.buildsPath, '/launcher/v1/builds'),
@@ -219,6 +300,9 @@ function providerCatalog() {
     signInUrl: entry.signInUrl,
     auth: entry.auth,
     mode: entry.mode,
+    launchHandshakePending: entry.launchHandshakePending,
+    statusUrl: entry.statusUrl,
+    population: entry.population,
     global: entry.global,
     dynamicSeasons: entry.dynamicSeasons,
     supportedSeasons: entry.seasons,
@@ -342,10 +426,14 @@ function providerProfile(id) {
     root,
     configPath,
     auth: catalogEntry?.auth || (raw?.auth === 'exchangeCode' ? 'exchangeCode' : 'none'),
+    launchHandshakePending: catalogEntry?.launchHandshakePending === true,
+    statusUrl: catalogEntry?.statusUrl || '',
     mode:
       catalogEntry?.mode ||
       (raw?.mode === 'global_live' && raw?.auth === 'oauth' ? 'global_live' : 'download'),
     oauth: catalogEntry?.oauth || parseOAuth(raw?.oauth),
+    deeplink: catalogEntry?.deeplink || null,
+    embeddedWeb: catalogEntry?.embeddedWeb || null,
     apiBaseUrl: catalogEntry?.apiBaseUrl || parseHttpUrl(raw?.apiBaseUrl, true)?.origin || '',
     realtimeUrl: parseWssUrl(raw?.realtimeUrl)?.origin || catalogEntry?.realtimeUrl || '',
     buildsPath: catalogEntry?.buildsPath || safeApiPath(raw?.buildsPath, '/launcher/v1/builds'),

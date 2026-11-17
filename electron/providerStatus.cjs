@@ -7,10 +7,13 @@
  * this module probes only the backend origins that main already validated from
  * the bundled provider.json. The backend may answer with a health status and an
  * optional population payload; a missing player field is kept undefined rather
- * than fabricated.
+ * than fabricated. When a backend publishes no in-game count, its configured
+ * public Discord presence is sampled separately and labelled, so the UI never
+ * mistakes community presence for players in a match.
  */
 
-const DEFAULT_TIMEOUT_MS = 4500
+const DEFAULT_TIMEOUT_MS = 2500
+const DISCORD_TIMEOUT_MS = 1500
 const PLAYER_KEYS = [
   'players',
   'playerCount',
@@ -22,6 +25,7 @@ const PLAYER_KEYS = [
   'concurrent_players',
 ]
 const SERVER_KEYS = ['servers', 'serverCount', 'server_count', 'onlineServers', 'online_servers']
+const OFFLINE_STATUSES = new Set(['offline', 'down', 'maintenance', 'unhealthy', 'closed'])
 
 function safeHttpUrl(value) {
   const raw = typeof value === 'string' ? value.trim() : ''
@@ -68,6 +72,58 @@ function playerCountFromPayload(payload) {
   return undefined
 }
 
+function offlineReasonFromPayload(payload) {
+  const roots = [
+    payload,
+    objectAt(payload)?.data,
+    objectAt(payload)?.status,
+    objectAt(payload)?.health,
+    objectAt(payload)?.stats,
+  ]
+  for (const root of roots) {
+    if (!root || typeof root !== 'object' || Array.isArray(root)) continue
+    if (root.offline === true) return 'Backend reports offline.'
+    if (root.down === true) return 'Backend reports down.'
+    if (root.maintenance === true) return 'Backend reports maintenance.'
+    if (root.online === false) return 'Backend reports offline.'
+    for (const key of ['status', 'state', 'health', 'overall']) {
+      const value = root[key]
+      if (typeof value === 'string' && OFFLINE_STATUSES.has(value.trim().toLowerCase())) {
+        return `Backend reports ${value.trim().toLowerCase()}.`
+      }
+    }
+  }
+  return null
+}
+
+async function readDiscordPresence(population, options = {}) {
+  const invite =
+    population && population.kind === 'discord' && typeof population.invite === 'string'
+      ? population.invite.trim()
+      : ''
+  if (!/^[A-Za-z0-9-]{2,64}$/.test(invite)) return undefined
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), DISCORD_TIMEOUT_MS)
+  try {
+    const response = await (options.fetchImpl || fetch)(
+      `https://discord.com/api/v10/invites/${encodeURIComponent(invite)}?with_counts=true`,
+      {
+        method: 'GET',
+        headers: { accept: 'application/json', 'user-agent': 'VAULTED-Launcher' },
+        cache: 'no-store',
+        signal: controller.signal,
+      },
+    )
+    if (!response.ok) return undefined
+    const payload = await response.json()
+    return finiteCount(payload?.approximate_presence_count)
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 function serverCountFromPayload(payload) {
   const roots = [
     payload,
@@ -112,7 +168,13 @@ async function probeProviderStatus(provider, options = {}) {
   const url = safeHttpUrl(provider?.statusUrl || provider?.backendUrl)
   const checkedAt = new Date().toISOString()
   if (!providerId || !url) {
-    return { providerId, online: false, servers: 0, checkedAt }
+    return {
+      providerId,
+      online: false,
+      servers: 0,
+      reason: 'No health endpoint is configured.',
+      checkedAt,
+    }
   }
 
   const timeoutMs =
@@ -133,29 +195,66 @@ async function probeProviderStatus(provider, options = {}) {
       signal: controller.signal,
     })
     const pingMs = Math.max(0, Date.now() - startedAt)
-    // A 401/404 still proves the backend is reachable. Only transport failures
-    // and server-side failures make a global backend unavailable.
-    const online = response.status > 0 && response.status < 500
-    if (!online) {
-      return { providerId, online: false, servers: 0, pingMs, checkedAt }
+    // A 401/404 still proves the backend is reachable. Only transport failures,
+    // 5xx responses and an explicit offline flag make a backend unavailable.
+    if (response.status >= 500) {
+      return {
+        providerId,
+        online: false,
+        servers: 0,
+        pingMs,
+        reason: `Health endpoint returned HTTP ${response.status}.`,
+        checkedAt,
+      }
+    }
+    if (response.status <= 0) {
+      return {
+        providerId,
+        online: false,
+        servers: 0,
+        pingMs,
+        reason: 'Health endpoint did not return an HTTP status.',
+        checkedAt,
+      }
     }
     const payload = await readPayload(response)
+    const offlineReason = offlineReasonFromPayload(payload)
+    if (offlineReason) {
+      return { providerId, online: false, servers: 0, pingMs, reason: offlineReason, checkedAt }
+    }
     const players = playerCountFromPayload(payload)
     const reportedServers = serverCountFromPayload(payload)
+    let communityPlayers
+    let populationSource = players !== undefined ? 'provider' : undefined
+    let populationLabel
+    if (players === undefined) {
+      communityPlayers = await readDiscordPresence(provider?.population, options)
+      if (communityPlayers !== undefined) {
+        populationSource = 'discord'
+        populationLabel = provider?.population?.label || 'Discord'
+      }
+    }
     return {
       providerId,
       online: true,
       players,
+      communityPlayers,
+      populationSource,
+      populationLabel,
       servers: reportedServers ?? 1,
       pingMs,
       checkedAt,
     }
-  } catch {
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === 'AbortError'
     return {
       providerId,
       online: false,
       servers: 0,
       pingMs: Math.max(0, Date.now() - startedAt),
+      reason: timedOut
+        ? `Health check timed out after ${timeoutMs} ms.`
+        : `Health check failed: ${error instanceof Error && error.message ? error.message : 'network error'}.`,
       checkedAt,
     }
   } finally {

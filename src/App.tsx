@@ -378,6 +378,7 @@ export default function App() {
   const [communityServers, setCommunityServers] = useState<CommunityServer[]>([])
   const [providerCatalog, setProviderCatalog] = useState<GlobalBackend[]>([])
   const [providerLiveStatus, setProviderLiveStatus] = useState<Record<string, ProviderLiveStatus>>({})
+  const [communityStatuses, setCommunityStatuses] = useState<CommunityProviderStatus[]>([])
   const [providerBuilds, setProviderBuilds] = useState<Record<string, ProviderBuild[]>>({})
   const [manualServers, setManualServers] = useState<Record<string, ManualServerRecord[]>>(() =>
     readManualServers(),
@@ -393,11 +394,46 @@ export default function App() {
     server?: { host: string; port: number; name?: string; seasonId?: string | null }
   } | null>(null)
   const [signInOpen, setSignInOpen] = useState(false)
+  // Directory rows and status-only rows report different servers, so their
+  // players are summed per provider. A real directory count wins over the
+  // public Discord fallback, which is never treated as in-game population.
+  const directoryProviderPopulations = useMemo(() => {
+    const totals = new Map<string, number>()
+    for (const status of communityStatuses) {
+      if (status.online === false || status.players === undefined) continue
+      const providerId = normalizeProviderId(status.providerId)
+      if (!providerId) continue
+      totals.set(providerId, (totals.get(providerId) ?? 0) + status.players)
+    }
+    for (const server of communityServers) {
+      if (server.playersKnown === false || server.players === undefined) continue
+      const providerId = normalizeProviderId(server.providerId)
+      if (!providerId) continue
+      totals.set(providerId, (totals.get(providerId) ?? 0) + server.players)
+    }
+    return totals
+  }, [communityServers, communityStatuses])
+  const providerLiveStatusWithDirectories = useMemo(() => {
+    if (directoryProviderPopulations.size === 0) return providerLiveStatus
+    const next = { ...providerLiveStatus }
+    for (const [providerId, players] of directoryProviderPopulations) {
+      const current = next[providerId]
+      if (!current?.online || players <= 0) continue
+      next[providerId] = {
+        ...current,
+        players,
+        communityPlayers: undefined,
+        populationSource: 'directory',
+        populationLabel: undefined,
+      }
+    }
+    return next
+  }, [directoryProviderPopulations, providerLiveStatus])
   const verifiedOAuthProviders = useMemo(
     () =>
       providerCatalog
         .filter(
-          (provider) => provider.global && provider.auth === 'oauth' && provider.mode === 'global_live',
+          (provider) => provider.global && provider.auth !== 'none' && provider.mode === 'global_live',
         )
         .map((provider) => {
           const discovered =
@@ -407,9 +443,9 @@ export default function App() {
           const supportedSeasons = Array.from(
             new Set([...provider.supportedSeasons, ...discovered.map((build) => build.seasonId)]),
           )
-          return { ...provider, supportedSeasons, live: providerLiveStatus[provider.id] }
+          return { ...provider, supportedSeasons, live: providerLiveStatusWithDirectories[provider.id] }
         }),
-    [providerAuthStatus, providerBuilds, providerCatalog, providerLiveStatus],
+    [providerAuthStatus, providerBuilds, providerCatalog, providerLiveStatusWithDirectories],
   )
   const providerVerified = useMemo(
     () => verifiedOAuthProviders.some((provider) => providerAuthStatus[provider.id]?.signedIn),
@@ -419,7 +455,6 @@ export default function App() {
   // Per-season manual choice from the hero server dropdown. A missing entry
   // means the external router's automatic best live server.
   const [serverSelections, setServerSelections] = useState<Record<string, string>>({})
-  const [communityStatuses, setCommunityStatuses] = useState<CommunityProviderStatus[]>([])
   const [communityDirectories, setCommunityDirectories] = useState<CommunityDirectoryEntry[]>([])
   const [onlineStatus, setOnlineStatus] = useState<OnlineStatus>('checking')
   const [lanIp, setLanIp] = useState<string | null>(null)
@@ -623,11 +658,15 @@ export default function App() {
       let changed = false
       const next = prev.map((build) => {
         const key = artKeyFor(build.season)
-        const provider = key ? seasonManifest[key]?.onlineProvider : undefined
+        const entry = key ? seasonManifest[key] : undefined
+        const provider = entry?.onlineProvider
+        const providers = entry?.onlineProviders ?? (provider ? [provider] : undefined)
         const current = build.onlineProvider
-        if ((current?.id ?? null) === (provider?.id ?? null)) return build
+        const currentIds = (build.onlineProviders ?? (current ? [current] : [])).map((item) => item.id).join('|')
+        const nextIds = (providers ?? (provider ? [provider] : [])).map((item) => item.id).join('|')
+        if ((current?.id ?? null) === (provider?.id ?? null) && currentIds === nextIds) return build
         changed = true
-        return { ...build, onlineProvider: provider }
+        return { ...build, onlineProvider: provider, onlineProviders: providers }
       })
       return changed ? next : prev
     })
@@ -768,18 +807,28 @@ export default function App() {
     ? activeGlobalBackends.find((provider) => provider.id === selectedServerValue.slice('global:'.length)) ?? null
     : null
   const activeServerSelection =
-    activeBuild &&
-    selectedServerValue &&
-    (selectedGlobalBackend ||
-      activeServerRoute?.options.some((server) => server.address === selectedServerValue))
-      ? selectedServerValue
+    activeBuild && selectedServerValue
+      ? selectedServerValue.startsWith('global:')
+        ? selectedGlobalBackend
+          ? selectedServerValue
+          : null
+        : selectedServerValue
       : null
+  const healthyAutoProviders = activeGlobalBackends.filter((provider) => provider.live?.online === true)
   const autoGlobalBackend =
     activeBuild && !selectedServerValue && !activeServerRoute?.exactServer
-      ? activeGlobalBackends.find((provider) => provider.id === activeBuild.onlineProvider?.id) ??
+      ? healthyAutoProviders.find((provider) => provider.id === activeBuild.onlineProvider?.id) ??
+        healthyAutoProviders[0] ??
+        activeGlobalBackends.find((provider) => provider.id === activeBuild.onlineProvider?.id) ??
         activeGlobalBackends[0] ??
         null
       : null
+  const activeGlobalBackend = selectedGlobalBackend ?? autoGlobalBackend
+  const providerPending = Boolean(
+    activeGlobalBackend?.launchHandshakePending &&
+      (providerAuthStatus[activeGlobalBackend.id]?.signedIn ||
+        (activeGlobalBackend.auth === 'oauth' && session?.user.providerId === activeGlobalBackend.id)),
+  )
   const verificationProvider =
     (activeLaunchProviderId
       ? activeGlobalBackends.find((provider) => provider.id === activeLaunchProviderId) ?? null
@@ -2215,7 +2264,7 @@ export default function App() {
         return false
       }
 
-      if (provider.auth !== 'oauth') {
+      if (!['oauth', 'deeplink', 'embedded_web'].includes(provider.auth)) {
         pushToast({
           tone: 'info',
           title: 'Verified sign-in only',
@@ -2241,6 +2290,15 @@ export default function App() {
         setProviderAuthPrompt({ build, provider, server })
         setSignInOpen(true)
         // Handled by the secure account-link modal, not a launch failure.
+        return true
+      }
+
+      if (provider.launchHandshakePending) {
+        pushToast({
+          tone: 'info',
+          title: `${provider.label} is signed in`,
+          description: `Launch handshake pending — ${provider.label} has not published a game-code exchange VAULTED can safely call yet.`,
+        })
         return true
       }
 
@@ -2731,7 +2789,7 @@ export default function App() {
 
   const handleOpenProviderSignIn = useCallback(
     (provider: GlobalBackend) => {
-      if (!activeBuild || provider.auth !== 'oauth') return
+      if (!activeBuild || provider.auth === 'none') return
       setProviderAuthPrompt({ build: activeBuild, provider })
       setSignInOpen(true)
     },
@@ -2757,6 +2815,14 @@ export default function App() {
       providerAuthRef.current = next
       setProviderAuthStatus(next)
       setProviderAuthPrompt(null)
+      if (pending.provider.launchHandshakePending) {
+        pushToast({
+          tone: 'success',
+          title: `Signed in to ${pending.provider.label}`,
+          description: `${pending.build.season.label} is linked. Launch handshake pending — Play unlocks when the official game-code exchange is connected.`,
+        })
+        return
+      }
       if (installed[pending.build.id] !== true) {
         pushToast({
           tone: 'success',
@@ -3636,6 +3702,7 @@ export default function App() {
                 globalBackends={activeGlobalBackends}
                 autoGlobalBackend={autoGlobalBackend}
                 selectedGlobalBackend={selectedGlobalBackend}
+                providerPending={providerPending}
                 providerSignedIn={
                   Boolean(
                     (selectedGlobalBackend &&
@@ -3653,6 +3720,7 @@ export default function App() {
                 signedIn={signedIn}
                 onSignIn={() => setSignInOpen(true)}
                 selectedServer={activeServerSelection}
+                onRefreshServers={() => void refreshProviderLiveStatus()}
                 onSelectServer={(address) => {
                   if (!activeBuild) return
                   setServerSelections((prev) => {
@@ -3759,7 +3827,7 @@ export default function App() {
 
       <SignInModal
         open={signInOpen}
-        providers={verifiedOAuthProviders}
+        providers={providerAuthPrompt ? [providerAuthPrompt.provider] : verifiedOAuthProviders}
         onClose={() => {
           setSignInOpen(false)
           setProviderAuthPrompt(null)

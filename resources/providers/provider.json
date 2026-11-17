@@ -29,10 +29,104 @@
       "buildsPath": "/launcher/v1/builds",
       "exchangeCodePath": "/launcher/v1/game/exchange-code",
       "profilePath": "/launcher/v1/me",
+      "population": {
+        "kind": "discord",
+        "invite": "erafn",
+        "label": "Discord"
+      },
       "global": true,
       "dynamicSeasons": true,
       "seasons": [
         "ch1-s6"
+      ]
+    },
+    {
+      "id": "stellar",
+      "name": "Stellar",
+      "label": "Stellar",
+      "mode": "global_live",
+      "backendUrl": "https://prod-api-v1.stellarfn.dev/",
+      "website": "https://stellarfn.dev/",
+      "signInUrl": "https://discord.com/oauth2/authorize?client_id=1444890408306872466&response_type=code&redirect_uri=https%3A%2F%2Fprod-api-v1.stellarfn.dev%2Fstellar%2Flauncher%2Fv2%2Fdiscord%2Fcallback&scope=identify%20email%20guilds%20guilds.members.read",
+      "auth": "deeplink",
+      "deeplink": {
+        "scheme": "stellarv2:",
+        "authorizeUrl": "https://discord.com/oauth2/authorize?client_id=1444890408306872466&response_type=code&redirect_uri=https%3A%2F%2Fprod-api-v1.stellarfn.dev%2Fstellar%2Flauncher%2Fv2%2Fdiscord%2Fcallback&scope=identify%20email%20guilds%20guilds.members.read",
+        "tokenParam": "t",
+        "refreshParam": "r"
+      },
+      "apiBaseUrl": "https://prod-api-v1.stellarfn.dev",
+      "statusUrl": "https://prod-api-v1.stellarfn.dev/stellar/frontend/v1/public/patchnotes",
+      "population": {
+        "kind": "discord",
+        "invite": "stellarfn",
+        "label": "Discord"
+      },
+      "global": true,
+      "launchHandshakePending": true,
+      "seasons": [
+        "ch2-s2"
+      ]
+    },
+    {
+      "id": "retrac",
+      "name": "Retrac",
+      "label": "Retrac",
+      "mode": "global_live",
+      "backendUrl": "https://retrac.site/",
+      "website": "https://retrac.site/",
+      "signInUrl": "https://retrac.site/",
+      "auth": "oauth",
+      "oauth": {
+        "authorizeUrl": "https://oauth-service-prod.retr.ac/oauth/authorise",
+        "tokenUrl": "https://oauth-service-prod.retr.ac/oauth/token",
+        "clientId": "01K5FQWCFHYHK3PNW357RE9YRZ",
+        "scope": "",
+        "redirectUri": "retrac://callback",
+        "fixedRedirect": true,
+        "tokenFormat": "json"
+      },
+      "apiBaseUrl": "https://retrac.site",
+      "profilePath": "/api/auth/me",
+      "statusUrl": "https://retrac.site/api/status",
+      "population": {
+        "kind": "discord",
+        "invite": "retrac",
+        "label": "Discord"
+      },
+      "global": true,
+      "launchHandshakePending": true,
+      "seasons": [
+        "ch2-s4"
+      ]
+    },
+    {
+      "id": "ezfn",
+      "name": "EZFN",
+      "label": "EZFN",
+      "mode": "global_live",
+      "backendUrl": "https://fortnite-master-server.ezfn.dev/",
+      "website": "https://ezfn.dev/",
+      "signInUrl": "https://ezfn.dev/account/login?redirectUri=http%3A%2F%2F127.0.0.1%3A57446%2Fauth%2Fcallback&clientId=9e929374724246dcb1b8fb7386f5fa73",
+      "auth": "embedded_web",
+      "embeddedWeb": {
+        "loginUrl": "https://ezfn.dev/account/login?redirectUri=http%3A%2F%2F127.0.0.1%3A57446%2Fauth%2Fcallback&clientId=9e929374724246dcb1b8fb7386f5fa73",
+        "callbackUrl": "http://127.0.0.1:57446/auth/callback",
+        "tokenParam": "accessToken",
+        "refreshParam": "refreshToken"
+      },
+      "apiBaseUrl": "https://fortnite-master-server.ezfn.dev",
+      "profilePath": "/account/api/oauth/verify",
+      "statusUrl": "https://fortnite-master-server.ezfn.dev/",
+      "population": {
+        "kind": "discord",
+        "invite": "fortnitemobile",
+        "label": "Discord"
+      },
+      "global": true,
+      "launchHandshakePending": true,
+      "seasons": [
+        "ch2-s2"
       ]
     }
   ]
