@@ -3781,6 +3781,7 @@ export default function App() {
                 activeCounts={activeCounts}
                 activeKey={activeKey}
                 playModes={playModes}
+                downloads={downloads}
                 onSelect={handleSelect}
                 onAdd={() => setDialogOpen(true)}
                 onLinkExisting={() => void handleLinkExistingFolder()}
@@ -3811,6 +3812,7 @@ export default function App() {
         activeCounts={activeCounts}
         activeKey={activeKey}
         playModes={playModes}
+        downloads={downloads}
         onClose={() => setDrawerOpen(false)}
         onSelect={handleSelect}
         onAdd={() => {

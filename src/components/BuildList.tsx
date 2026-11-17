@@ -2,14 +2,14 @@ import { Fragment } from 'react'
 import { Check, FolderOpen, FolderPlus, HardDrive, Trash2 } from 'lucide-react'
 import { artKeyFor, seasonImageFor } from '../lib/art'
 import { cx } from '../lib/cx'
-import { formatDownloadSize } from '../lib/downloadSize'
+import { formatDownloadSize, formatEtaMinutes } from '../lib/downloadSize'
 import {
   DEFAULT_PLAY_MODE,
   onlinePlayerCount,
   seasonStatusLabel,
   type SeasonPlayMode,
 } from '../lib/playMode'
-import type { Build } from '../types'
+import type { Build, DownloadState } from '../types'
 
 interface BuildListProps {
   builds: Build[]
@@ -27,6 +27,8 @@ interface BuildListProps {
   activeKey?: string | null
   /** build id -> shared live online status */
   playModes: Record<string, SeasonPlayMode>
+  /** build id -> active or paused download progress */
+  downloads?: Record<string, DownloadState>
   onSelect: (id: string) => void
   onAdd: () => void
   onOpenFolder?: (build: Build) => void
@@ -41,6 +43,7 @@ export function BuildList({
   sourceSizes,
   diskSizes,
   playModes,
+  downloads,
   onSelect,
   onAdd,
   onOpenFolder,
@@ -94,6 +97,26 @@ export function BuildList({
         // Real-time total across every live server for this season; no local
         // presence heartbeat and no synthetic player placeholder.
         const onlinePlayers = onlinePlayerCount(playMode)
+        const download = downloads?.[build.id]
+        const downloadPercent =
+          typeof download?.percent === 'number'
+            ? Math.max(0, Math.min(100, Math.floor(download.percent)))
+            : null
+        const downloadEta =
+          download?.phase === 'downloading' ? formatEtaMinutes(download.etaSeconds) : null
+        const downloadLabel = download
+          ? download.phase === 'downloading'
+            ? [`Downloading${downloadPercent !== null ? ` ${downloadPercent}%` : ''}`, downloadEta]
+                .filter(Boolean)
+                .join(' · ')
+            : download.phase === 'paused'
+              ? `Paused${downloadPercent !== null ? ` · ${downloadPercent}%` : ''}`
+              : download.phase === 'extracting'
+                ? 'Unpacking…'
+                : download.phase === 'verifying'
+                  ? 'Verifying…'
+                  : null
+          : null
         const isLive = playMode.online || playMode.globalOnline === true
         const isChecking =
           !isLive && playMode.availability === 'global' && playMode.globalOffline !== true
@@ -219,9 +242,15 @@ export function BuildList({
                       />
                       {onlineStatus}
                     </span>
-                    <span className="min-w-0 truncate font-mono text-[11px] text-fog" title={build.path || 'Not downloaded'}>
-                      {onlineProviderLabel ? `via ${onlineProviderLabel}` : build.folderName}
-                      {!build.onlineProvider && !installed?.[build.id] && hasSource && ` · ${sizeLabel ?? 'size unavailable'}`}
+                    <span
+                      className={cx(
+                        'min-w-0 truncate font-mono text-[11px]',
+                        downloadLabel ? 'font-semibold text-amber-200' : 'text-fog',
+                      )}
+                      title={downloadLabel || build.path || 'Not downloaded'}
+                    >
+                      {downloadLabel ?? (onlineProviderLabel ? `via ${onlineProviderLabel}` : build.folderName)}
+                      {!downloadLabel && !build.onlineProvider && !installed?.[build.id] && hasSource && ` · ${sizeLabel ?? 'size unavailable'}`}
                     </span>
                   </span>
                   {directoryLabel && (

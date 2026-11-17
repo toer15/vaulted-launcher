@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Layers, Plus, X } from 'lucide-react'
 import { BuildList } from './BuildList'
 import type { SeasonPlayMode } from '../lib/playMode'
-import type { Build } from '../types'
+import type { Build, DownloadState } from '../types'
 
 interface BuildDrawerProps {
   open: boolean
@@ -15,6 +15,7 @@ interface BuildDrawerProps {
   activeCounts?: Record<string, number>
   activeKey?: string | null
   playModes: Record<string, SeasonPlayMode>
+  downloads?: Record<string, DownloadState>
   onClose: () => void
   onSelect: (id: string) => void
   onAdd: () => void
@@ -33,6 +34,7 @@ export function BuildDrawer({
   activeCounts,
   activeKey,
   playModes,
+  downloads,
   onClose,
   onSelect,
   onAdd,
@@ -92,6 +94,7 @@ export function BuildDrawer({
             activeCounts={activeCounts}
             activeKey={activeKey}
             playModes={playModes}
+            downloads={downloads}
             onSelect={(id) => {
               onSelect(id)
               onClose()

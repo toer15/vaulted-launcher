@@ -4,6 +4,13 @@ export function formatDownloadSize(bytes: number | null | undefined): string {
   return gigabytes >= 10 ? `${gigabytes.toFixed(1)} GB` : `${gigabytes.toFixed(2)} GB`
 }
 
+/** Compact remaining-time label for the small library cards, always in minutes. */
+export function formatEtaMinutes(seconds: number | null | undefined): string | null {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return null
+  if (seconds <= 45) return 'less than a minute left'
+  return `${Math.max(1, Math.ceil(seconds / 60))} min left`
+}
+
 /** Live download rate, e.g. "42.3 MB/s". */
 export function formatSpeed(bytesPerSecond: number | null | undefined): string | null {
   if (typeof bytesPerSecond !== 'number' || !Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {

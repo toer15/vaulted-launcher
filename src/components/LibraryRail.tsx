@@ -3,7 +3,7 @@ import { FolderPlus, HardDrive, Plus, Radio } from 'lucide-react'
 import { BuildList } from './BuildList'
 import { cx } from '../lib/cx'
 import { onlinePlayerCount, type SeasonPlayMode } from '../lib/playMode'
-import type { Build } from '../types'
+import type { Build, DownloadState } from '../types'
 
 type LibraryFilter = 'all' | 'installed' | 'active'
 
@@ -17,6 +17,7 @@ interface LibraryRailProps {
   activeCounts?: Record<string, number>
   activeKey?: string | null
   playModes: Record<string, SeasonPlayMode>
+  downloads?: Record<string, DownloadState>
   onSelect: (id: string) => void
   onAdd: () => void
   onLinkExisting: () => void
@@ -32,6 +33,7 @@ export function LibraryRail({
   sourceSizes,
   diskSizes,
   playModes,
+  downloads,
   onSelect,
   onAdd,
   onLinkExisting,
@@ -185,6 +187,7 @@ export function LibraryRail({
             sourceSizes={sourceSizes}
             diskSizes={diskSizes}
             playModes={playModes}
+            downloads={downloads}
             onSelect={onSelect}
             onAdd={onAdd}
             onOpenFolder={onOpenFolder}
