@@ -44,7 +44,7 @@ assert.ok(tellurium.includes(Buffer.from('-backend=', 'utf16le')), 'Tellurium ha
 assert.ok(tellurium.includes(Buffer.from('HOOK_READY')), 'Tellurium has no hook-ready marker')
 
 const injector = read('runtime/VaultedInjector.exe')
-for (const marker of ['HOOK_VERIFIED', 'MODULE_VERIFIED', 'VAULTED_HOOK_TOKEN']) {
+for (const marker of ['HOOK_VERIFIED', 'MODULE_VERIFIED', 'VAULTED_HOOK_TOKEN', 'FORWARDED=']) {
   assert.ok(
     injector.includes(Buffer.from(marker, 'utf16le')) || injector.includes(Buffer.from(marker)),
     `VaultedInjector.exe is missing ${marker}`,
@@ -53,6 +53,8 @@ for (const marker of ['HOOK_VERIFIED', 'MODULE_VERIFIED', 'VAULTED_HOOK_TOKEN'])
 
 const injectorSource = fs.readFileSync(path.join(root, 'runtime/injector.cs'), 'utf8')
 assert.match(injectorSource, /CREATE_SUSPENDED \| CREATE_UNICODE_ENVIRONMENT/)
+assert.match(injectorSource, /FORWARDED=/)
+assert.match(injectorSource, /AUTH_PASSWORD=.*\[redacted\]/s)
 const injectIndex = injectorSource.indexOf('InjectIntoProcess(process.dwProcessId, dllPath, false)')
 const resumeIndex = injectorSource.indexOf('ResumeThread(process.hThread)', injectIndex)
 assert.ok(injectIndex > 0, 'injector does not inject the game process')

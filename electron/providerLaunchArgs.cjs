@@ -8,11 +8,21 @@
  */
 
 const LEGACY_FLTOKEN = '3db3ba5dcbd2e16703f3978d'
+const LOCAL_AUTH_DOMAIN = 'vaulted.local'
+const LOCAL_AUTH_PASSWORD = 'vaulted'
 const PROVIDER_FLTOKEN = '7a848a93a74ba68876c36C1c'
 const LEGACY_CALDERA =
   'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50X2lkIjoiYmU5ZGE1YzJmYmVhNDQwN2IyZjQwZWJhYWQ4NTlhZDQiLCJnZW5lcmF0ZWQiOjE2Mzg3MTcyNzgsImNhbGRlcmFHdWlkIjoiMzgxMGI4NjMtMmE2NS00NDU3LTliNTgtNGRhYjNiNDgyYTg2IiwiYWNQcm92aWRlciI6IkVhc3lBbnRpQ2hlYXQiLCJub3RlcyI6IiIsImZhbGxiYWNrIjpmYWxzZX0.VAWQB67RTxhiWOxx7DBjnzDnXyyEnX7OljJm-j2d88G_WgwQ9wrE6lwMEHZHjBd1ISJdUO1UVUqkfLdU5nofBQ'
 const LEGACY_CALDERA_EOS =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50X2lkIjoic2FyYWgiLCJnZW5lcmF0ZWQiOjE3NzQxMjEzNzksImNhbGRlcmFHdWlkIjoiZWYzMGE4MjUtMzFlNi00ZWRhLTlmM2EtZTI4YzgwNjYxODkxIiwiYWNQcm92aWRlciI6IkVhc3lBbnRpQ2hlYXRFT1MiLCJub3RlcyI6IiIsImZhbGxiYWNrIjpmYWxzZX0.f7EcDmsjj3XHzdbMl41YHyJE-LlAirjbjaqzcdqBB_Y'
+
+/** Neonite's password grant uses the part before @ as the display name. */
+function localAuthLogin(username) {
+  const safe = String(username || '')
+    .replace(/[^a-z0-9_]/gi, '')
+    .slice(0, 24) || 'Player'
+  return `${safe}@${LOCAL_AUTH_DOMAIN}`
+}
 
 function providerFortniteArgs(backendUrl, authCode = '', providerId = '', authToken = '', options = {}) {
   // Era's official launcher marks the game as a backend client. Its native
@@ -48,12 +58,16 @@ function providerFortniteArgs(backendUrl, authCode = '', providerId = '', authTo
     )
   } else if (options.localAuth === true) {
     // Local profiles (Reboot, Neo, EZFN Hybrid) have no provider-issued
-    // exchange code. Modern clients still require an authenticated launch
-    // shape; without AUTH_TYPE they fall through to the exchange-code path and
-    // exit before the redirect DLL can install its hook. Use the documented
-    // local placeholder so the client reaches engine initialization. The
-    // redirect DLL supplies the real backend identity after it attaches.
-    args.push('-AUTH_LOGIN=unused', '-AUTH_PASSWORD=unused', '-AUTH_TYPE=epic', '-log')
+    // exchange code. The bundled Neonite backend accepts a password grant, but
+    // it needs a non-empty username: the value before @ becomes the lobby name.
+    // Passing `unused` here (or pointing at a public website such as
+    // rebootfn.org) leaves the client on Epic's manual email/password form.
+    args.push(
+      `-AUTH_LOGIN=${localAuthLogin(options.username)}`,
+      `-AUTH_PASSWORD=${LOCAL_AUTH_PASSWORD}`,
+      '-AUTH_TYPE=epic',
+      '-log',
+    )
   }
   // Retrac's game process expects its OAuth token as the anticheat token. It
   // stays in the process arguments only, matching the official launcher.
@@ -130,6 +144,9 @@ module.exports = {
   PROVIDER_FLTOKEN,
   LEGACY_CALDERA,
   LEGACY_CALDERA_EOS,
+  LOCAL_AUTH_DOMAIN,
+  LOCAL_AUTH_PASSWORD,
+  localAuthLogin,
   providerFortniteArgs,
   providerLaunchDiagnostic,
   redactLaunchArg,

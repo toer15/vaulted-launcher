@@ -4788,6 +4788,32 @@ async function launchOnlineProvider(payload) {
   let eraBridge = null
   let eraClientDll = null
   let eraClientTimer = null
+  if (localLauncher) {
+    // Reboot/Neo/EZFN have no hosted token service. Point their Tellurium
+    // redirect at the bundled Neonite backend, which implements the password
+    // grant those clients send. The old profile backendUrl values are public
+    // websites (for example rebootfn.org) and answer the game's form POST with
+    // Cloudflare 403, leaving the player on the manual Epic login screen.
+    try {
+      await ensureLocalBackend(payload.username)
+      backendUrl = BACKEND_URL
+      // Matchmaking is not required to reach the lobby. A stale helper or a
+      // busy port must not turn auto-login into a launch failure.
+      try {
+        await ensureLocalMatchmaker()
+      } catch (error) {
+        console.warn(
+          `[VAULTED] Local matchmaker unavailable: ${error instanceof Error ? error.message : error}`,
+        )
+      }
+    } catch (error) {
+      throw new Error(
+        `VAULTED could not prepare the local ${profile.label} backend.\n\n${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+  }
   if (providerId === 'era') {
     try {
       eraClientDll = await ensureEraClientDll()
@@ -4817,6 +4843,7 @@ async function launchOnlineProvider(payload) {
   const localAuth = localLauncher
   const providerArgs = providerFortniteArgs(backendUrl, authCode, providerId, authToken, {
     localAuth,
+    username: localAuth ? payload.username : '',
   })
   logProviderLaunchDiagnostic(
     providerLaunchDiagnostic({

@@ -16,7 +16,10 @@ const path = require('node:path')
 
 const {
   LEGACY_CALDERA,
+  LOCAL_AUTH_DOMAIN,
+  LOCAL_AUTH_PASSWORD,
   PROVIDER_FLTOKEN,
+  localAuthLogin,
   providerFortniteArgs,
   providerLaunchDiagnostic,
 } = require('../electron/providerLaunchArgs.cjs')
@@ -113,11 +116,18 @@ function testLaunchArguments() {
   assert.equal(retrac.includes('-actoken=retrac-token'), true)
   assert.equal(retrac.at(-1), `-backend=${backendUrl}`)
 
-  const local = providerFortniteArgs(backendUrl, '', 'neo', '', { localAuth: true })
-  assert.equal(local.includes('-AUTH_LOGIN=unused'), true)
-  assert.equal(local.includes('-AUTH_PASSWORD=unused'), true)
+  assert.equal(localAuthLogin('Player 123!'), `Player123@${LOCAL_AUTH_DOMAIN}`)
+  assert.equal(localAuthLogin(''), `Player@${LOCAL_AUTH_DOMAIN}`)
+
+  const local = providerFortniteArgs(backendUrl, '', 'neo', '', {
+    localAuth: true,
+    username: 'Player 123!',
+  })
+  assert.equal(local.includes(`-AUTH_LOGIN=Player123@${LOCAL_AUTH_DOMAIN}`), true)
+  assert.equal(local.includes(`-AUTH_PASSWORD=${LOCAL_AUTH_PASSWORD}`), true)
   assert.equal(local.includes('-AUTH_TYPE=epic'), true)
   assert.equal(local.includes('-log'), true)
+  assert.equal(local.includes('-AUTH_LOGIN=unused'), false)
   assert.equal(local.at(-1), `-backend=${backendUrl}`)
 
   const unauth = providerFortniteArgs('', '', 'stellar')

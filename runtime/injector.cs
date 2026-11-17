@@ -546,6 +546,29 @@ internal static class VaultedInjector
         }
     }
 
+    private static string RedactArgument(string argument)
+    {
+        if (argument.StartsWith("-AUTH_PASSWORD=", StringComparison.OrdinalIgnoreCase) ||
+            argument.StartsWith("-actoken=", StringComparison.OrdinalIgnoreCase) ||
+            argument.StartsWith("-caldera=", StringComparison.OrdinalIgnoreCase))
+        {
+            return argument.Substring(0, argument.IndexOf('=') + 1) + "[redacted]";
+        }
+        return argument;
+    }
+
+    private static string DiagnosticCommandLine(string executable, IEnumerable<string> arguments)
+    {
+        var rendered = new StringBuilder();
+        rendered.Append(Quote(executable));
+        foreach (string argument in arguments)
+        {
+            rendered.Append(' ');
+            rendered.Append(Quote(RedactArgument(argument)));
+        }
+        return rendered.ToString();
+    }
+
     private static string Quote(string value)
     {
         // Epic's client parses -AUTH_PASSWORD with FParse::Value, which keeps a
@@ -638,6 +661,13 @@ internal static class VaultedInjector
             commandLine.Append(' ');
             commandLine.Append(Quote(argument));
         }
+
+        // This is the exact argument list passed to CreateProcess below. Keep
+        // it in injector.log so a launch can prove whether -AUTH_LOGIN,
+        // -AUTH_TYPE and -AUTH_PASSWORD reached the game, without exposing the
+        // password or one-time exchange code.
+        Console.WriteLine("FORWARDED=" + DiagnosticCommandLine(executable, gameArguments));
+        Console.Out.Flush();
 
         IntPtr job = CreateKillOnCloseJob();
         var auxiliaryProcesses = new List<PROCESS_INFORMATION>();
