@@ -31,7 +31,7 @@ export interface SeasonManifestEntry {
   defaultInstallDir: string
   sha256?: string
   servers?: Array<{ name: string; url: string }>
-  /** community provider bundled for this season, so ONLINE PLAY needs no relay */
+  /** bundled provider profile; online status still depends on a live hosted backend */
   onlineProvider?: OnlineProviderConfig
   /** every provider that can host this season, primary first */
   onlineProviders?: OnlineProviderConfig[]

@@ -15,7 +15,7 @@ interface TopBarProps {
   buildCount: number
   native: boolean
   onlineStatus: OnlineStatus
-  /** seasons pre-mapped to a community provider, independent of the relay */
+  /** seasons with a hosted global backend that is currently online */
   communityOnline?: number
   /** provider-only identity: global play works, VAULTED socials are gated */
   providerOnly?: boolean
@@ -104,7 +104,7 @@ export function TopBar({
                 : onlineStatus === 'connected'
                 ? `Matchmaking service connected${native ? ' · desktop bridge ready' : ' · desktop bridge unavailable'}`
                 : (communityOnline ?? 0) > 0
-                  ? `${communityOnline} seasons mapped to community providers${native ? ' · desktop bridge ready' : ''}`
+                  ? `${communityOnline} seasons have a live hosted backend${native ? ' · desktop bridge ready' : ''}`
                   : onlineStatus === 'checking'
                     ? 'Checking the configured online server…'
                     : `Online server unreachable — local play only${native ? ' · desktop bridge ready' : ''}`
@@ -118,7 +118,7 @@ export function TopBar({
               : onlineStatus === 'connected'
               ? 'Bridge connected'
               : (communityOnline ?? 0) > 0
-                ? 'Community online'
+                ? 'Global live'
                 : onlineStatus === 'checking'
                   ? 'Checking bridge…'
                   : 'Offline — Local Play only'}

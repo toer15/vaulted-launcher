@@ -3,7 +3,18 @@ import { lobbyIsFresh, lobbyPlayers, type LobbyInfo } from './friends'
 import type { CommunityDirectoryEntry, CommunityProviderStatus, CommunityServer } from './network'
 import type { Build, GlobalBackend } from '../types'
 
-export type PlayModeLabel = 'ONLINE READY' | 'ONLINE PLAY'
+export type PlayModeLabel =
+  | 'ONLINE PLAY'
+  | 'GLOBAL LIVE'
+  | 'SERVER CHECKING'
+  | 'SERVER DOWN'
+  | 'SELF-HOSTED'
+  | 'DIRECTORY ONLY'
+  | 'UNSUPPORTED'
+  | 'OFFLINE'
+
+/** How a season can actually be played today. */
+export type SeasonAvailability = 'global' | 'self-hosted' | 'directory' | 'unsupported'
 
 export interface SeasonPlayMode {
   online: boolean
@@ -28,14 +39,21 @@ export interface SeasonPlayMode {
   globalOnline?: boolean
   /** compact label(s) for the global backend(s), e.g. "Era / Stellar" */
   globalProviderLabel?: string
+  /** no health sample yet for a supported global backend */
+  globalChecking?: boolean
+  /** every supported global backend has answered and is down */
+  globalOffline?: boolean
+  /** whether this season has a hosted backend, a self-hosted provider, or no live route */
+  availability?: SeasonAvailability
 }
 
-/** Shared neutral state so every one of the 43 cards renders an online badge. */
+/** Shared neutral state for a season with no live route. */
 export const DEFAULT_PLAY_MODE: SeasonPlayMode = {
   online: false,
-  label: 'ONLINE READY',
+  label: 'OFFLINE',
   lobbyCount: 0,
   playerCount: 0,
+  availability: 'unsupported',
 }
 
 /**
@@ -76,11 +94,30 @@ export function onlineStatusLabel(players: number, servers = 0): string {
   if (total <= 0) {
     // An unreported population is not zero players. Keep the server signal
     // without turning a missing count into a fabricated 0.
-    return servers > 0 ? `ONLINE · ${servers} server${servers === 1 ? '' : 's'}` : 'ONLINE READY'
+    return servers > 0 ? `ONLINE · ${servers} server${servers === 1 ? '' : 's'}` : 'OFFLINE'
   }
   const serverText =
     servers > 0 ? ` · ${servers} server${servers === 1 ? '' : 's'}` : ''
   return `ONLINE · ${total} playing${serverText}`
+}
+
+/**
+ * One label for the season badge. Only a reachable global backend or a live
+ * relay/directory server may produce an online label; a bundled provider
+ * profile alone is not evidence that the season is online.
+ */
+export function seasonStatusLabel(mode: SeasonPlayMode | null | undefined): string {
+  if (mode?.globalOnline) {
+    return `GLOBAL LIVE${mode.globalProviderLabel ? ` · ${mode.globalProviderLabel}` : ''}`
+  }
+  if (mode?.online) return onlineStatusLabel(onlinePlayerCount(mode), seasonServerCount(mode))
+  if (mode?.availability === 'global') {
+    return mode.globalOffline ? 'SERVER DOWN' : 'SERVER CHECKING'
+  }
+  if (mode?.availability === 'self-hosted') return 'SELF-HOSTED · NO HOSTED SERVER'
+  if (mode?.availability === 'directory') return 'DIRECTORY ONLY'
+  if (mode?.availability === 'unsupported') return 'UNSUPPORTED'
+  return 'OFFLINE'
 }
 
 /** Human label for a directory season id, used to describe fallback targets. */
@@ -410,20 +447,45 @@ export function playModesForBuilds(
   communityDirectories: CommunityDirectoryEntry[] = [],
   globalBackends: GlobalBackend[] = [],
 ): Record<string, SeasonPlayMode> {
+  const globalBySeason = new Map<string, GlobalBackend[]>()
+  for (const backend of globalBackends) {
+    if (!backend.global || backend.mode !== 'global_live') continue
+    for (const seasonId of backend.supportedSeasons) {
+      const current = globalBySeason.get(seasonId) ?? []
+      current.push(backend)
+      globalBySeason.set(seasonId, current)
+    }
+  }
+
   const modes: Record<string, SeasonPlayMode> = {}
   for (const build of builds) {
-    // A provider bundled in the manifest is authoritative: the season is online
-    // even when no VAULTED relay lobby is listed. The provider is launched
-    // directly, so no matchmaking URL is required.
-    modes[build.id] = build.onlineProvider
-      ? {
-          online: true,
-          label: 'ONLINE PLAY',
-          lobbyCount: 0,
-          playerCount: 0,
-          providerLabel: build.onlineProvider.label || build.onlineProvider.name,
-        }
-      : DEFAULT_PLAY_MODE
+    // A bundled provider profile only describes where the build came from. It
+    // is not a live server. Only a configured global backend or a live relay /
+    // directory row can put a season online.
+    const seasonKey = artKeyFor(build.season)
+    const hasGlobal = Boolean(seasonKey && globalBySeason.has(seasonKey))
+    const providerId = build.onlineProvider?.id
+    const availability: SeasonAvailability = hasGlobal
+      ? 'global'
+      : providerId === 'reboot'
+        ? 'self-hosted'
+        : 'unsupported'
+    modes[build.id] = {
+      online: false,
+      label: hasGlobal
+        ? 'SERVER CHECKING'
+        : availability === 'self-hosted'
+          ? 'SELF-HOSTED'
+          : build.onlineProvider
+            ? 'UNSUPPORTED'
+            : 'OFFLINE',
+      lobbyCount: 0,
+      playerCount: 0,
+      ...(build.onlineProvider
+        ? { providerLabel: build.onlineProvider.label || build.onlineProvider.name }
+        : {}),
+      availability,
+    }
   }
 
   const hostedAddress = hostedLobby ? `${hostedLobby.address}:${hostedLobby.port}`.trim().toLowerCase() : null
@@ -465,20 +527,19 @@ export function playModesForBuilds(
     }
   }
 
-  // A configured global backend is a real live destination. Its reachability
-  // and population come from the 10-second main-process probe; a missing probe
-  // is treated as online (still checking) so the UI never flashes "offline"
-  // during startup. A reachable backend always contributes one server.
+  // A configured global backend is a real live destination only after its
+  // health probe says it is online. A missing sample is "checking", never a
+  // synthetic online state.
   for (const build of builds) {
     const seasonKey = artKeyFor(build.season)
     if (!seasonKey) continue
-    const backends = globalBackends.filter(
-      (backend) => backend.global && backend.supportedSeasons.includes(seasonKey),
-    )
+    const backends = globalBySeason.get(seasonKey) ?? []
     if (backends.length > 0) {
+      const existing = modes[build.id] ?? DEFAULT_PLAY_MODE
       const known = backends.filter((backend) => backend.live)
-      const onlineBackends = backends.filter((backend) => backend.live?.online !== false)
+      const onlineBackends = backends.filter((backend) => backend.live?.online === true)
       const globalOnline = onlineBackends.length > 0
+      const globalOffline = known.length > 0 && onlineBackends.length === 0
       const backendPlayers = onlineBackends.reduce(
         (total, backend) => total + Math.max(0, Math.floor(backend.live?.players ?? 0)),
         0,
@@ -488,10 +549,21 @@ export function playModesForBuilds(
         0,
       )
       modes[build.id] = {
-        ...(modes[build.id] ?? DEFAULT_PLAY_MODE),
+        ...existing,
+        online: existing.online || globalOnline,
+        label: globalOnline
+          ? 'GLOBAL LIVE'
+          : existing.online
+            ? existing.label
+            : globalOffline
+              ? 'SERVER DOWN'
+              : 'SERVER CHECKING',
+        availability: 'global',
         globalOnline,
+        globalChecking: known.length === 0,
+        globalOffline,
         globalProviderLabel: backends.map((backend) => backend.label).join(' / '),
-        ...(globalOnline && (known.length > 0 || backendServers > 0)
+        ...(globalOnline
           ? { backendPlayerCount: backendPlayers, backendServerCount: backendServers }
           : {}),
       }
@@ -521,15 +593,26 @@ export function playModesForBuilds(
     ]
 
     if (statusServers > 0 || statusPlayers > 0 || directoryLabels.length > 0) {
+      const existing = modes[build.id] ?? DEFAULT_PLAY_MODE
+      const hasLiveStatus = statusServers > 0 || statusPlayers > 0
+      const availability =
+        existing.availability === 'global' || existing.availability === 'self-hosted'
+          ? existing.availability
+          : directoryLabels.length > 0
+            ? 'directory'
+            : existing.availability
       modes[build.id] = {
-        ...(modes[build.id] ?? DEFAULT_PLAY_MODE),
-        ...(statusServers > 0 || statusPlayers > 0
+        ...existing,
+        ...(hasLiveStatus
           ? {
+              online: true,
+              label: existing.online ? existing.label : 'ONLINE PLAY',
               communityPlayerCount: statusPlayers,
               communityServerCount: statusServers,
               communityProviderLabel: statusLabels.join(' / '),
             }
           : {}),
+        availability,
         ...(directoryLabels.length > 0 ? { directoryProviders: directoryLabels } : {}),
       }
     }

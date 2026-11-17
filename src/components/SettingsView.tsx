@@ -157,12 +157,12 @@ export function SettingsView({
             <div className="min-w-0">
               <p className="text-[12px] font-semibold text-mist">Global defaults</p>
               <p className="mt-1 text-[11px] leading-relaxed text-fog">
-                Online seasons download here, then Play launches the client straight into the bundled provider backend. Local seasons use this builds root.
+                Seasons with a live hosted backend download here, then Play launches into that provider. Other builds use this root and launch locally.
               </p>
             </div>
             <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.06] px-2.5 py-1 text-[10px] font-semibold text-emerald-300">
               <ShieldCheck className="h-3 w-3" />
-              {detectedBuildCount} / 43 seasons ready
+              {detectedBuildCount} / 43 seasons installed
             </span>
           </div>
 
@@ -275,7 +275,7 @@ export function SettingsView({
               </button>
               <p className="text-[11px] leading-relaxed text-fog">
                 {build.onlineProvider ? (
-                  `Play joins the healthiest public server through the bundled runtime, or starts a local lobby if none are up — no installer or external launcher.`
+                  `Provider profile bundled for this season. Live server availability is shown on the season card; without a hosted backend, Play starts a local lobby.`
                 ) : (
                   <>
                     VAULTED launches{' '}

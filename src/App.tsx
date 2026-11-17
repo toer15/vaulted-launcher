@@ -673,20 +673,18 @@ export default function App() {
   }, [seasonManifest])
 
   const sourceKeys = useMemo(() => new Set(Object.keys(seasonManifest)), [seasonManifest])
-  const onlineSeasonCount = useMemo(
-    () => Object.values(seasonManifest).filter((entry) => Boolean(entry.onlineProvider)).length,
-    [seasonManifest],
+  const onlineSeasonCount = useMemo(() => {
+    const seasons = new Set<string>()
+    for (const provider of verifiedOAuthProviders) {
+      if (provider.live?.online !== true) continue
+      for (const season of provider.supportedSeasons) seasons.add(season)
+    }
+    return seasons.size
+  }, [verifiedOAuthProviders])
+  const readySeasonCount = useMemo(
+    () => Object.values(profiles.builds).filter((profile) => profile.isInstalled).length,
+    [profiles.builds],
   )
-  const readySeasonCount = useMemo(() => {
-    const ready = new Set<string>()
-    for (const [key, profile] of Object.entries(profiles.builds)) {
-      if (profile.isInstalled) ready.add(key)
-    }
-    for (const [key, entry] of Object.entries(seasonManifest)) {
-      if (entry.onlineProvider) ready.add(key)
-    }
-    return ready.size
-  }, [profiles.builds, seasonManifest])
 
   const sourceSizes = useMemo(
     () =>

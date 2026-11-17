@@ -198,8 +198,10 @@ export function LibraryRail({
           <HardDrive className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             Every chapter and season. <span className="text-emerald-300">Installed</span> = on this PC and ready to
-            play. <span className="text-emerald-300">ONLINE READY</span> = no live relay lobby, global
-            backend, or external server is reporting players for that season right now.
+            play. <span className="text-emerald-300">GLOBAL LIVE</span> = a hosted Era, EZFN, Stellar or Retrac
+            backend is online. <span className="text-sky-200">SELF-HOSTED</span> and{' '}
+            <span className="text-sky-200">DIRECTORY ONLY</span> seasons have no hosted server;{' '}
+            <span className="text-rose-200">UNSUPPORTED</span> seasons have no live backend at all.
           </span>
         </p>
       </footer>

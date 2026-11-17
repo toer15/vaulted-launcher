@@ -30,9 +30,9 @@ import { formatDownloadSize, formatSpeed } from '../lib/downloadSize'
 import { lobbyPlayers } from '../lib/friends'
 import {
   onlinePlayerCount,
-  onlineStatusLabel,
   seasonLabelForId,
   seasonServerCount,
+  seasonStatusLabel,
   type SeasonPlayMode,
 } from '../lib/playMode'
 import type { CommunityServer } from '../lib/network'
@@ -144,8 +144,19 @@ function serverPingLabel(server: CommunityServer): string {
     : 'ping —'
 }
 
-function globalBadge(provider: GlobalBackend): string {
-  return provider.mode === 'global_live' ? 'GLOBAL LIVE' : 'GLOBAL ONLINE'
+function globalBadge(_provider: GlobalBackend): string {
+  return 'GLOBAL LIVE'
+}
+
+function statusToneFor(
+  health: ServerHealth | null,
+  playMode: SeasonPlayMode | undefined,
+): 'up' | 'down' | 'checking' | 'muted' {
+  if (health?.state === 'down') return 'down'
+  if (health?.state === 'checking') return 'checking'
+  if (health?.state === 'up' || playMode?.online || playMode?.globalOnline) return 'up'
+  if (playMode?.availability === 'self-hosted' || playMode?.availability === 'directory') return 'muted'
+  return 'down'
 }
 
 function serverCountLabel(servers: number): string {
@@ -187,12 +198,14 @@ function backendCounts(provider: GlobalBackend | null | undefined): {
   }
 }
 
-function backendPopulationLabel(counts: ReturnType<typeof backendCounts>): string {
-  if (counts.players !== undefined) return playerCountLabel(counts.players)
-  if (counts.communityPlayers !== undefined) {
-    return communityCountLabel(counts.communityPlayers, counts.populationLabel)
-  }
-  return ''
+function backendPlayerLabel(counts: ReturnType<typeof backendCounts>): string {
+  return counts.players !== undefined ? playerCountLabel(counts.players) : ''
+}
+
+function backendCommunityLabel(counts: ReturnType<typeof backendCounts>): string {
+  return counts.communityPlayers !== undefined
+    ? `Community ${communityCountLabel(counts.communityPlayers, counts.populationLabel)}`
+    : ''
 }
 
 type ServerHealthState = 'up' | 'down' | 'checking'
@@ -229,7 +242,7 @@ function healthForServer(server: CommunityServer | null | undefined): ServerHeal
   const savedOnline = (server as CommunityServer & { online?: boolean }).online
   return {
     state: savedOnline === false || server.public === false ? 'down' : 'up',
-    players: lobbyPlayers(server),
+    players: server.playersKnown === false ? undefined : lobbyPlayers(server),
     servers: 1,
     pingMs: server.pingMs,
     reason: savedOnline === false ? 'Saved server is marked offline.' : undefined,
@@ -250,8 +263,8 @@ function healthCheckedLabel(health: ServerHealth): string {
 function healthTitle(health: ServerHealth): string {
   return [
     health.state === 'up' ? 'Server up' : health.state === 'down' ? 'Server down' : 'Checking server health',
-    health.populationSource === 'discord'
-      ? `Live ${health.populationLabel || 'Discord'} community presence, not in-game players`
+    health.populationSource === 'discord' && health.communityPlayers !== undefined
+      ? `Community ${communityCountLabel(health.communityPlayers, health.populationLabel)} — not in-game players`
       : undefined,
     health.reason,
     healthCheckedLabel(health),
@@ -264,12 +277,7 @@ function ServerHealthBadge({ health }: { health: ServerHealth | null }) {
   if (!health) return null
   const up = health.state === 'up'
   const down = health.state === 'down'
-  const population =
-    health.players !== undefined
-      ? playerCountLabel(health.players)
-      : health.communityPlayers !== undefined
-        ? communityCountLabel(health.communityPlayers, health.populationLabel)
-        : ''
+  const population = health.players !== undefined ? playerCountLabel(health.players) : ''
   const meta =
     up
       ? [
@@ -451,7 +459,7 @@ export function ActiveBuildCard({
     build.providerLabel
   const onlinePlayers = onlinePlayerCount(playMode)
   const onlineServers = seasonServerCount(playMode)
-  const activeGlobalBadge = activeGlobalBackend ? globalBadge(activeGlobalBackend) : 'GLOBAL ONLINE'
+  const activeGlobalBadge = activeGlobalBackend ? globalBadge(activeGlobalBackend) : 'GLOBAL LIVE'
   const launchPending = Boolean(
     providerPending && activeGlobalBackend?.launchHandshakePending && state === 'ready',
   )
@@ -525,21 +533,23 @@ export function ActiveBuildCard({
             ? healthForServer(fallbackServer)
             : null
   const heroPlayers =
-    livePlayers > 0 || heroHealth?.players !== undefined
+    livePlayers > 0
       ? playerCountLabel(livePlayers)
-      : heroHealth?.communityPlayers !== undefined
-        ? communityCountLabel(heroHealth.communityPlayers, heroHealth.populationLabel)
+      : heroHealth?.players !== undefined
+        ? playerCountLabel(heroHealth.players)
         : ''
+  const heroCommunity =
+    heroHealth?.communityPlayers !== undefined
+      ? communityCountLabel(heroHealth.communityPlayers, heroHealth.populationLabel)
+      : ''
   const activePopulationLabel =
     livePlayers > 0
       ? playerCountLabel(livePlayers)
       : selectedGlobalBackend
-        ? backendPopulationLabel(selectedBackendCounts)
+        ? backendPlayerLabel(selectedBackendCounts)
         : activeGlobalBackend
-          ? backendPopulationLabel(autoRouteBackendCounts)
-          : heroHealth?.communityPlayers !== undefined
-            ? communityCountLabel(heroHealth.communityPlayers, heroHealth.populationLabel)
-            : ''
+          ? backendPlayerLabel(autoRouteBackendCounts)
+          : ''
   const activePopulationDetail = activePopulationLabel ? ` · ${activePopulationLabel}` : ''
   const heroMeta = [
     heroHealth?.state === 'up' ? heroPlayers : '',
@@ -554,7 +564,8 @@ export function ActiveBuildCard({
       : heroHealth.state === 'down'
         ? 'SERVER DOWN'
         : 'SERVER CHECKING'
-    : onlineStatusLabel(livePlayers, liveServers)
+    : seasonStatusLabel(playMode)
+  const statusTone = statusToneFor(heroHealth, playMode)
   const heroStatusTitle = heroHealth
     ? healthTitle(heroHealth)
     : `${onlineStatus}${onlineProviderLabel ? ` · ${onlineProviderLabel}` : ''}`
@@ -571,7 +582,8 @@ export function ActiveBuildCard({
       ? [
           globalBadge(autoRouteGlobalBackend),
           serverCountLabel(autoOptionBackendCounts.servers),
-          backendPopulationLabel(autoOptionBackendCounts),
+          backendPlayerLabel(autoOptionBackendCounts),
+          backendCommunityLabel(autoOptionBackendCounts),
           backendPingLabel(autoRouteGlobalBackend),
         ]
           .filter(Boolean)
@@ -738,13 +750,21 @@ export function ActiveBuildCard({
         : download?.phase === 'verifying'
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
-    ready: onlineProviderLabel
+    ready: playMode?.availability === 'self-hosted'
+      ? `Ready — ${onlineProviderLabel || 'This build'} is self-hosted; start or join a lobby. No hosted global server is reporting for this season.`
+      : playMode?.availability === 'unsupported' && !playMode?.online
+        ? `Ready — ${onlineProviderLabel || 'This build'} has no live hosted backend. Play starts a local lobby instead.`
+        : playMode?.availability === 'directory' && !playMode?.online
+          ? 'Ready — community directories list this season, but no live hosted backend is reporting.'
+          : onlineProviderLabel
       ? launchPending
         ? `Signed in — ${activeGlobalBackend?.label} launch handshake pending. Play unlocks when the official game-code exchange is connected.`
         : selectedServer && !selectedIpServer
         ? `Ready — ${selectedServer} is offline. Pick another server or use Auto.`
         : activeGlobalBackend && (selectedGlobalBackend || (!autoServer && !selectedIpServer))
-        ? activeBackendOffline
+        ? activeBackendHealth.state === 'checking'
+          ? `Ready — checking ${activeGlobalBackend.label} health before launch.`
+          : activeBackendOffline
           ? `Ready — ${activeGlobalBackend.label} is offline. Pick another backend or server and try again.`
           : `Ready — ${activeGlobalBadge} on ${activeGlobalBackend.label}. ${serverCountLabel(liveServers)}${activePopulationDetail}. Play queues you with real players worldwide.`
         : liveServers > 0
@@ -805,26 +825,39 @@ export function ActiveBuildCard({
               aria-label={`Server status: ${onlineStatus}`}
               className={cx(
                 'inline-flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.14em] backdrop-blur',
-                heroHealth?.state === 'down'
+                statusTone === 'down'
                   ? 'border-rose-400/55 bg-rose-500/[0.18] text-rose-200 shadow-[0_0_26px_rgba(244,63,94,0.22)]'
-                  : heroHealth?.state === 'checking'
+                  : statusTone === 'checking'
                     ? 'border-amber-400/40 bg-amber-400/[0.1] text-amber-200'
-                    : 'border-emerald-300/50 bg-emerald-400/[0.15] text-emerald-200 shadow-[0_0_26px_rgba(16,185,129,0.2)]',
+                    : statusTone === 'muted'
+                      ? 'border-white/15 bg-white/[0.04] text-mist/70'
+                      : 'border-emerald-300/50 bg-emerald-400/[0.15] text-emerald-200 shadow-[0_0_26px_rgba(16,185,129,0.2)]',
               )}
             >
               <span
                 className={cx(
                   'h-2 w-2 rounded-full',
-                  heroHealth?.state === 'down'
+                  statusTone === 'down'
                     ? 'bg-rose-400 shadow-[0_0_10px_rgba(251,113,133,0.95)]'
-                    : heroHealth?.state === 'checking'
+                    : statusTone === 'checking'
                       ? 'bg-amber-300'
-                      : 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.95)]',
-                  heroHealth?.state === 'up' && livePlayers > 0 && 'animate-pulse',
+                      : statusTone === 'muted'
+                        ? 'bg-slate-400'
+                        : 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.95)]',
+                  statusTone === 'up' && livePlayers > 0 && 'animate-pulse',
                 )}
               />
               {onlineStatus}
             </span>
+            {heroCommunity && (
+              <span
+                title={`Community ${heroCommunity} — live community presence, not in-game players.`}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-arc/25 bg-arc/[0.08] px-2.5 py-1 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-arc/90 backdrop-blur"
+              >
+                <Globe2 className="h-3 w-3" />
+                Community · {heroCommunity}
+              </span>
+            )}
             {directoryProviders.length > 0 && (
               <span
                 title={`External directories list ${directoryProviders.join(', ')} for this season.`}
@@ -983,7 +1016,8 @@ export function ActiveBuildCard({
                               : [
                                   globalBadge(provider),
                                   serverCountLabel(counts.servers),
-                                  backendPopulationLabel(counts),
+                                  backendPlayerLabel(counts),
+                                  backendCommunityLabel(counts),
                                 ]
                                   .filter(Boolean)
                                   .join(' · ')

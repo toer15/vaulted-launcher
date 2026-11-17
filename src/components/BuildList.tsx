@@ -6,8 +6,7 @@ import { formatDownloadSize } from '../lib/downloadSize'
 import {
   DEFAULT_PLAY_MODE,
   onlinePlayerCount,
-  onlineStatusLabel,
-  seasonServerCount,
+  seasonStatusLabel,
   type SeasonPlayMode,
 } from '../lib/playMode'
 import type { Build } from '../types'
@@ -95,11 +94,13 @@ export function BuildList({
         // Real-time total across every live server for this season; no local
         // presence heartbeat and no synthetic player placeholder.
         const onlinePlayers = onlinePlayerCount(playMode)
-        const onlineServers = seasonServerCount(playMode)
-        const onlineStatus =
-          playMode.globalOnline && onlinePlayers === 0 && onlineServers === 0
-            ? `GLOBAL ONLINE${playMode.globalProviderLabel ? ` · ${playMode.globalProviderLabel}` : ''}`
-            : onlineStatusLabel(onlinePlayers, onlineServers)
+        const isLive = playMode.online || playMode.globalOnline === true
+        const isChecking =
+          !isLive && playMode.availability === 'global' && playMode.globalOffline !== true
+        const isSelfHosted = playMode.availability === 'self-hosted'
+        const isDirectoryOnly = playMode.availability === 'directory'
+        const isMuted = !isLive && (isSelfHosted || isDirectoryOnly)
+        const onlineStatus = seasonStatusLabel(playMode)
         const chapterChanged = index === 0 || builds[index - 1].season.chapter !== build.season.chapter
         const hasSource = Boolean(sourceKey && sourceKeys?.has(sourceKey))
         const sizeLabel = sourceKey && sourceSizes?.[sourceKey] ? formatDownloadSize(sourceSizes[sourceKey]) : null
@@ -194,15 +195,26 @@ export function BuildList({
                       aria-label={playModeTitle}
                       className={cx(
                         'inline-flex min-w-0 max-w-full flex-wrap items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em]',
-                        onlinePlayers > 0
+                        isLive
                           ? 'border-emerald-300/45 bg-emerald-400/20 text-emerald-200 shadow-[0_0_16px_rgba(16,185,129,0.18)]'
-                          : 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300',
+                          : isChecking
+                            ? 'border-amber-400/35 bg-amber-400/[0.08] text-amber-200/90'
+                            : isMuted
+                              ? 'border-sky-400/25 bg-sky-400/[0.08] text-sky-200/80'
+                              : 'border-rose-400/25 bg-rose-500/[0.08] text-rose-200/80',
                       )}
                     >
                       <span
                         className={cx(
-                          'h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]',
-                          onlinePlayers > 0 && 'animate-pulse',
+                          'h-1.5 w-1.5 rounded-full',
+                          isLive
+                            ? 'bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]'
+                            : isChecking
+                              ? 'bg-amber-300'
+                              : isMuted
+                                ? 'bg-sky-400'
+                                : 'bg-rose-400/80',
+                          isLive && onlinePlayers > 0 && 'animate-pulse',
                         )}
                       />
                       {onlineStatus}
