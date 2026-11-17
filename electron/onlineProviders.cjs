@@ -300,6 +300,14 @@ function catalogData() {
     redirectDllSha256: /^[a-f0-9]{64}$/i.test(runtime.redirectDllSha256 || '')
       ? String(runtime.redirectDllSha256).toLowerCase()
       : '',
+    legacyRedirectDllName:
+      typeof runtime.legacyRedirectDllName === 'string' &&
+      SAFE_DLL_NAME.test(runtime.legacyRedirectDllName)
+        ? runtime.legacyRedirectDllName
+        : LEGACY_REDIRECT_DLL,
+    legacyRedirectDllSha256: /^[a-f0-9]{64}$/i.test(runtime.legacyRedirectDllSha256 || '')
+      ? String(runtime.legacyRedirectDllSha256).toLowerCase()
+      : LEGACY_REDIRECT_SHA256,
   }
   const providers = []
   for (const entry of Array.isArray(raw?.providers) ? raw.providers : []) {
@@ -837,10 +845,11 @@ function ensureProviderRedirects() {
 
 /** Cobalt replaces Tellurium for Chapter 1 builds that predate its signatures. */
 function legacyRedirectProfile(profile) {
+  const defaults = catalogData().defaults
   return {
     ...profile,
-    redirectDllName: LEGACY_REDIRECT_DLL,
-    redirectDllSha256: LEGACY_REDIRECT_SHA256,
+    redirectDllName: defaults.legacyRedirectDllName,
+    redirectDllSha256: defaults.legacyRedirectDllSha256,
   }
 }
 
@@ -871,6 +880,9 @@ function providerRuntime(profile, options = {}) {
   return {
     injector: path.join(shared.root, shared.injector),
     dll: providerDllPath(selected),
+    // The checksum check must use the profile that selected this DLL.
+    profile: selected,
+    legacy: options.legacy === true,
     root: shared.root,
     configPath: shared.configPath,
   }

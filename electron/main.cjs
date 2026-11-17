@@ -4819,7 +4819,7 @@ async function launchOnlineProvider(payload) {
         `The bundled redirect DLL is missing from this installation. Reinstall VAULTED.`,
     )
   }
-  if (!redirectDllMatchesProfile(redirectDll, profile)) {
+  if (!redirectDllMatchesProfile(redirectDll, runtime.profile)) {
     throw new Error(
       `The ${profile.label} redirect DLL does not match the checksum of the DLL bundled with VAULTED.\n\n` +
         `Reinstall VAULTED to restore the validated provider files.`,
@@ -5598,7 +5598,7 @@ function registerIpc() {
     if (!fs.existsSync(runtime.injector)) {
       throw new Error(`The bundled runtime injector for ${profile.label} is missing. Reinstall VAULTED.`)
     }
-    if (!fs.existsSync(runtime.dll) || !redirectDllMatchesProfile(runtime.dll, profile)) {
+    if (!fs.existsSync(runtime.dll) || !redirectDllMatchesProfile(runtime.dll, runtime.profile)) {
       throw new Error(`VAULTED could not verify the bundled ${profile.label} redirect DLL.`)
     }
     return { ok: true, providerId: id, label: profile.label, cached: true }

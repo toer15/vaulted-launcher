@@ -2,7 +2,9 @@
   "version": 1,
   "runtime": {
     "redirectDllName": "Tellurium.dll",
-    "redirectDllSha256": "16b97054fb1128595300a22a6b79343baf33d6d37b04eea8c9f1af650ba8c766"
+    "redirectDllSha256": "16b97054fb1128595300a22a6b79343baf33d6d37b04eea8c9f1af650ba8c766",
+    "legacyRedirectDllName": "Cobalt.dll",
+    "legacyRedirectDllSha256": "21b5e00f886ad4732a0a6eb989c192cd1583524be170c4068c1ef865c1ca6e3f"
   },
   "providers": [
     {
