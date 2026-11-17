@@ -25,11 +25,11 @@ function localAuthLogin(username) {
 }
 
 function providerFortniteArgs(backendUrl, authCode = '', providerId = '', authToken = '', options = {}) {
-  // Era's official launcher marks the game as a backend client. Its native
-  // era.dll uses that launch shape when registering the process for
-  // matchmaking; without -frombe the game can load the DLL but Era still
-  // answers the athena profile and matchmaking with "The Era client isn't
-  // running."
+  // Era's backend expects the game to identify itself as a backend client.
+  // The -frombe shape keeps the exchange-code login and matchmaking ticket
+  // working; VAULTED registers the process through its realtime session
+  // instead of injecting Era's native client DLL, which crashes this 6.21
+  // client after the redirect attaches.
   const era = providerId === 'era'
   const retrac = providerId === 'retrac'
   const stellar = providerId === 'stellar'
