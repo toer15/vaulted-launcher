@@ -31,7 +31,10 @@ const localProviderIds = ['reboot', 'neo', 'era', 'ezfn', 'ezfn-hybrid']
 // Stellar and Retrac reuse the shared DLL; the external projects are links to
 // their own launchers/communities and deliberately have no redirect DLL.
 const globalProviderIds = ['stellar']
-const externalProviderIds = ['eon', 'hydro', 'interloop', 'crystal', 'echo', 'arc', 'retrac-official']
+const externalProviderIds = [
+  'eon', 'hydro', 'interloop', 'crystal', 'echo', 'arc', 'retrac-official',
+  'slurp', 'ambient', 'reef', 'legacy-mp', 'horizon', 'sunset', 'blue-og', 'glow',
+]
 const dllProviderIds = [...localProviderIds, ...globalProviderIds]
 const providerIds = [...dllProviderIds, ...externalProviderIds]
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-provider-repair-'))

@@ -9,6 +9,7 @@ export type PlayModeLabel =
   | 'SERVER DOWN'
   | 'READY'
   | 'OFFLINE'
+  | 'ARCHIVED'
 
 /** How a season can actually be played today. */
 export type SeasonAvailability = 'global' | 'launcher' | 'directory' | 'unsupported'
@@ -42,6 +43,8 @@ export interface SeasonPlayMode {
   globalOffline?: boolean
   /** whether this season has a hosted backend, a bundled launcher, or no live route */
   availability?: SeasonAvailability
+  /** archive-only card; never offers Play */
+  archived?: boolean
 }
 
 /** Shared neutral state for a season with no live route. */
@@ -104,6 +107,7 @@ export function onlineStatusLabel(players: number, servers = 0): string {
  * profile alone is not evidence that the season is online.
  */
 export function seasonStatusLabel(mode: SeasonPlayMode | null | undefined): string {
+  if (mode?.archived) return 'ARCHIVED'
   if (mode?.globalOnline || mode?.online) {
     return onlineStatusLabel(onlinePlayerCount(mode), seasonServerCount(mode))
   }
@@ -478,25 +482,31 @@ export function playModesForBuilds(
     // is not a live server. Only a configured global backend or a live relay /
     // directory row can put a season online.
     const seasonKey = artKeyFor(build.season)
-    const hasGlobal = Boolean(seasonKey && globalBySeason.has(seasonKey))
-    const availability: SeasonAvailability = hasGlobal
-      ? 'global'
-      : build.onlineProvider
-        ? 'launcher'
-        : 'unsupported'
+    const archived = build.archived === true
+    const hasGlobal = !archived && Boolean(seasonKey && globalBySeason.has(seasonKey))
+    const availability: SeasonAvailability = archived
+      ? 'unsupported'
+      : hasGlobal
+        ? 'global'
+        : build.onlineProvider
+          ? 'launcher'
+          : 'unsupported'
     modes[build.id] = {
       online: false,
-      label: hasGlobal
-        ? 'SERVER CHECKING'
-        : availability === 'launcher'
-          ? 'READY'
-          : 'OFFLINE',
+      label: archived
+        ? 'ARCHIVED'
+        : hasGlobal
+          ? 'SERVER CHECKING'
+          : availability === 'launcher'
+            ? 'READY'
+            : 'OFFLINE',
       lobbyCount: 0,
       playerCount: 0,
       ...(build.onlineProvider
         ? { providerLabel: build.onlineProvider.label || build.onlineProvider.name }
         : {}),
       availability,
+      ...(archived ? { archived: true } : {}),
     }
   }
 
@@ -627,6 +637,14 @@ export function playModesForBuilds(
         availability,
         ...(directoryLabels.length > 0 ? { directoryProviders: directoryLabels } : {}),
       }
+    }
+  }
+
+  // An archived card must never become playable through a lobby, directory
+  // row, or backend that happens to reuse the same season id.
+  for (const build of builds) {
+    if (build.archived === true) {
+      modes[build.id] = { ...DEFAULT_PLAY_MODE, label: 'ARCHIVED', archived: true }
     }
   }
 

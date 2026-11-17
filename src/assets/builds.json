@@ -58,7 +58,19 @@
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        },
+        {
+          "id": "sunset",
+          "name": "SunSet Studios",
+          "label": "SunSet"
+        }
+      ]
     },
     "ch1-s3": {
       "id": "ch1-s3",
@@ -98,6 +110,11 @@
           "id": "echo",
           "name": "Project Echo",
           "label": "Echo"
+        },
+        {
+          "id": "sunset",
+          "name": "SunSet Studios",
+          "label": "SunSet"
         }
       ]
     },
@@ -139,6 +156,11 @@
           "id": "arc",
           "name": "ARC",
           "label": "ARC"
+        },
+        {
+          "id": "sunset",
+          "name": "SunSet Studios",
+          "label": "SunSet"
         }
       ]
     },
@@ -169,7 +191,19 @@
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        },
+        {
+          "id": "sunset",
+          "name": "SunSet Studios",
+          "label": "SunSet"
+        }
+      ]
     },
     "ch1-s6": {
       "id": "ch1-s6",
@@ -291,7 +325,14 @@
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        }
+      ]
     },
     "ch1-s10": {
       "id": "ch1-s10",
@@ -349,7 +390,29 @@
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        },
+        {
+          "id": "ambient",
+          "name": "Ambient",
+          "label": "Ambient"
+        },
+        {
+          "id": "reef",
+          "name": "Project Reef",
+          "label": "Reef"
+        },
+        {
+          "id": "legacy-mp",
+          "name": "LegacyMP",
+          "label": "LegacyMP"
+        }
+      ]
     },
     "ch2-s2": {
       "id": "ch2-s2",
@@ -394,6 +457,16 @@
           "id": "interloop",
           "name": "Project Interloop",
           "label": "Interloop"
+        },
+        {
+          "id": "slurp",
+          "name": "Project Slurp",
+          "label": "Slurp"
+        },
+        {
+          "id": "horizon",
+          "name": "Horizon",
+          "label": "Horizon"
         }
       ]
     },
@@ -448,9 +521,9 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 28769341535
+      "sizeBytes": 28769341535,
+      "archived": true
     },
-
     "ch2-s4-1460": {
       "id": "ch2-s4-1460",
       "title": "Chapter 2 Season 4 · 14.60",
@@ -491,7 +564,6 @@
         }
       ]
     },
-
     "ch2-s5": {
       "id": "ch2-s5",
       "title": "Chapter 2 Season 5",
@@ -565,7 +637,14 @@
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        }
+      ]
     },
     "ch2-s7": {
       "id": "ch2-s7",
@@ -664,7 +743,19 @@
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        },
+        {
+          "id": "blue-og",
+          "name": "BlueOG",
+          "label": "BlueOG"
+        }
+      ]
     },
     "ch3-s2": {
       "id": "ch3-s2",
@@ -867,7 +958,19 @@
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        },
+        {
+          "id": "glow",
+          "name": "Glow",
+          "label": "Glow"
+        }
+      ]
     },
     "ch4-s5": {
       "id": "ch4-s5",

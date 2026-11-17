@@ -237,6 +237,230 @@
       "global": true,
       "seasons": [
         "ch2-s4-1460"
+      ],
+      "runtime": {
+        "kind": "msi",
+        "label": "Retrac Launcher",
+        "versionUrl": "https://launcher-service-prod.retr.ac/version/0.0.0",
+        "downloadHosts": [
+          "cdn.retrac.site"
+        ],
+        "signerSubject": "Lezah Limited",
+        "installerName": "Retrac-{version}-x64.msi",
+        "autoInstall": true,
+        "installedExecutables": [
+          "%LOCALAPPDATA%/Programs/Retrac/Retrac.exe",
+          "%LOCALAPPDATA%/Retrac/Retrac.exe",
+          "%PROGRAMFILES%/Retrac/Retrac.exe"
+        ],
+        "manifestIds": {
+          "14.60": "++Fortnite+Release-14.60-CL-14786821-Windows"
+        },
+        "launchArgs": [
+          "-action_after=launch_build:{manifestId}"
+        ],
+        "processName": "Retrac.exe"
+      }
+    },
+    {
+      "id": "slurp",
+      "name": "Project Slurp",
+      "label": "Slurp",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/9yyBHJTGSb",
+      "launchUrl": "https://discord.gg/9yyBHJTGSb",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "9yyBHJTGSb",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/9yyBHJTGSb",
+        "guildId": "1526299306384949298",
+        "label": "Project Slurp Discord"
+      },
+      "seasons": [
+        "ch2-s2"
+      ]
+    },
+    {
+      "id": "ambient",
+      "name": "Ambient",
+      "label": "Ambient",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.com/servers/ambient-1511812282751914144",
+      "launchUrl": "https://discord.com/servers/ambient-1511812282751914144",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch2-s1"
+      ]
+    },
+    {
+      "id": "reef",
+      "name": "Project Reef",
+      "label": "Reef",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/ECQyr9mtsD",
+      "launchUrl": "https://discord.gg/ECQyr9mtsD",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "ECQyr9mtsD",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/ECQyr9mtsD",
+        "guildId": "1478183177452523635",
+        "label": "Project Reef Discord"
+      },
+      "seasons": [
+        "ch2-s1"
+      ]
+    },
+    {
+      "id": "legacy-mp",
+      "name": "LegacyMP",
+      "label": "LegacyMP",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/FecWFJkYjy",
+      "launchUrl": "https://discord.gg/FecWFJkYjy",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "FecWFJkYjy",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/FecWFJkYjy",
+        "guildId": "1472314222875770962",
+        "label": "LegacyMP Discord"
+      },
+      "seasons": [
+        "ch2-s1"
+      ]
+    },
+    {
+      "id": "horizon",
+      "name": "Horizon",
+      "label": "Horizon",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/5NGeWtq8Mh",
+      "launchUrl": "https://discord.gg/5NGeWtq8Mh",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "5NGeWtq8Mh",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/5NGeWtq8Mh",
+        "guildId": "1456587039565676658",
+        "label": "Horizon Discord"
+      },
+      "seasons": [
+        "ch2-s2"
+      ]
+    },
+    {
+      "id": "sunset",
+      "name": "SunSet Studios",
+      "label": "SunSet",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/HRrjapjcCR",
+      "launchUrl": "https://discord.gg/HRrjapjcCR",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "HRrjapjcCR",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/HRrjapjcCR",
+        "guildId": "1202689889468944444",
+        "label": "SunSet Studios Discord"
+      },
+      "seasons": [
+        "ch1-s2",
+        "ch1-s3",
+        "ch1-s4",
+        "ch1-s5"
+      ]
+    },
+    {
+      "id": "blue-og",
+      "name": "BlueOG",
+      "label": "BlueOG",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/cdCgqBvJT6",
+      "launchUrl": "https://discord.gg/cdCgqBvJT6",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "cdCgqBvJT6",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/cdCgqBvJT6",
+        "guildId": "1463219079765561378",
+        "label": "BlueOG Discord"
+      },
+      "seasons": [
+        "ch3-s1"
+      ]
+    },
+    {
+      "id": "glow",
+      "name": "Glow | FR",
+      "label": "Glow",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/wZf8RaucJd",
+      "launchUrl": "https://discord.gg/wZf8RaucJd",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "wZf8RaucJd",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/wZf8RaucJd",
+        "guildId": "1508886158984216676",
+        "label": "Glow | FR Discord"
+      },
+      "seasons": [
+        "ch4-s4"
       ]
     }
   ]

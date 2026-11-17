@@ -79,7 +79,17 @@ contextBridge.exposeInMainWorld('arc', {
     clear: () => ipcRenderer.invoke('arc:clear-session'),
   },
   launchOnlineProvider: (payload) => ipcRenderer.invoke('arc:online-provider-launch', payload),
-  openProviderLauncher: (providerId) => ipcRenderer.invoke('arc:open-provider-launcher', providerId),
+  openProviderLauncher: (providerId, options) =>
+    ipcRenderer.invoke('arc:open-provider-launcher', providerId, options),
+  providerRuntimeStatus: (providerId) =>
+    ipcRenderer.invoke('arc:provider-runtime-status', providerId),
+  installProviderRuntime: (providerId) =>
+    ipcRenderer.invoke('arc:install-provider-runtime', providerId),
+  onRuntimeProgress: (callback) => {
+    const listener = (_event, payload) => callback(payload)
+    ipcRenderer.on('arc:runtime-progress', listener)
+    return () => ipcRenderer.removeListener('arc:runtime-progress', listener)
+  },
   window: {
     minimize: () => ipcRenderer.invoke('win:minimize'),
     toggleMaximize: () => ipcRenderer.invoke('win:toggle-maximize'),

@@ -165,7 +165,11 @@ async function readPayload(response) {
  */
 async function probeProviderStatus(provider, options = {}) {
   const providerId = typeof provider?.id === 'string' ? provider.id.trim() : ''
-  const url = safeHttpUrl(provider?.statusUrl || provider?.backendUrl)
+  // Discord-only communities have no game-server health endpoint. Their
+  // Discord gate is the availability signal; probing discord.com would turn
+  // every listing into a fake online server.
+  const discordOnly = provider?.mode === 'external' && !provider?.statusUrl
+  const url = discordOnly ? null : safeHttpUrl(provider?.statusUrl || provider?.backendUrl)
   const checkedAt = new Date().toISOString()
   if (!providerId || !url) {
     return {
@@ -173,7 +177,9 @@ async function probeProviderStatus(provider, options = {}) {
       online: false,
       servers: 0,
       serverData: false,
-      reason: 'No health endpoint is configured.',
+      reason: discordOnly
+        ? 'This community exposes a Discord gate rather than a game-server health endpoint.'
+        : 'No health endpoint is configured.',
       checkedAt,
     }
   }

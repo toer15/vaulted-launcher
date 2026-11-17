@@ -15,6 +15,7 @@ const {
   providerForId,
   providerProfile,
   providerRuntime,
+  providerRuntimeMetadata,
   redirectDllMatchesProfile,
   redirectSupportsBackendParameter,
 } = require('./onlineProviders.cjs')
@@ -32,6 +33,11 @@ const { createEraBridge } = require('./eraBridge.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
+const {
+  ensureProviderRuntime,
+  installedExecutable,
+  launchArguments,
+} = require('./providerRuntime.cjs')
 
 const { botFillPreferences } = require('./botFill.cjs')
 
@@ -74,6 +80,8 @@ const joinWatchdogs = new Map()
 const downloads = new Map()
 /** buildId -> running archive extraction process */
 const extractions = new Map()
+/** providerId -> signed external launcher spawned by VAULTED */
+const providerLaunchers = new Map()
 
 /**
  * Every old Fortnite client needs a private server and a redirected login.
@@ -2429,6 +2437,73 @@ function closeProcessTreeGracefully(pid) {
  * Only VAULTED launches contain -AUTH_LOGIN; an official Epic client is left
  * alone.
  */
+function fortniteProcessRunning() {
+  if (process.platform !== 'win32') return Promise.resolve(false)
+  return new Promise((resolve) => {
+    execFile(
+      'tasklist',
+      ['/FI', 'IMAGENAME eq FortniteClient-Win64-Shipping.exe', '/NH', '/FO', 'CSV'],
+      { windowsHide: true, timeout: 8000 },
+      (error, stdout) => {
+        if (error || !stdout) return resolve(false)
+        resolve(/FortniteClient-Win64-Shipping\.exe/i.test(String(stdout)))
+      },
+    )
+  })
+}
+
+/**
+ * A documented external launcher (Retrac) is spawned with its own launch flag.
+ * Keep the exact child PID so VAULTED can close that helper after the game it
+ * started exits. A launcher that forwards to an already-running instance and
+ * exits immediately has no child left to own, so the monitor stops with it.
+ */
+function trackProviderLauncher(providerId, child) {
+  if (!child?.pid) return
+  const entry = { pid: child.pid, startedAt: Date.now(), sawGame: false, checking: false }
+  providerLaunchers.set(providerId, entry)
+  const timer = setInterval(async () => {
+    if (entry.checking) return
+    entry.checking = true
+    try {
+      const gameRunning = await fortniteProcessRunning()
+      if (gameRunning) {
+        entry.sawGame = true
+        return
+      }
+      if (!entry.sawGame) {
+        // Retrac may still be signing in or showing its own UI. Do not close a
+        // helper just because the game has not appeared yet.
+        if (Date.now() - entry.startedAt > 15 * 60_000) stop()
+        return
+      }
+      await closeProcessTreeGracefully(entry.pid)
+      stop()
+    } finally {
+      entry.checking = false
+    }
+  }, 5000)
+  timer.unref?.()
+  const stop = () => {
+    clearInterval(timer)
+    if (providerLaunchers.get(providerId) === entry) providerLaunchers.delete(providerId)
+  }
+  child.once('exit', stop)
+}
+
+/** Public runtime state for the season card; no URLs or filesystem internals. */
+function providerRuntimeStatus(providerId) {
+  const id = String(providerId || '').trim().toLowerCase()
+  const metadata = providerRuntimeMetadata(id)
+  if (!metadata) return null
+  return {
+    providerId: id,
+    required: true,
+    label: metadata.label,
+    installed: Boolean(installedExecutable(metadata)),
+  }
+}
+
 async function stopStaleVaultedClients() {
   if (process.platform !== 'win32') return
   // The PowerShell query below costs a second or more. Almost every launch has
@@ -3422,6 +3497,39 @@ async function downloadBuild(payload) {
     }
   }
 
+  // The documented runtime is independent of the season archive. Start its
+  // download now so a slow game archive and a slow MSI share one wait, but keep
+  // its progress off the bar until the archive work reaches its end; otherwise
+  // a fast runtime would make the unified percentage jump backwards.
+  const runtimeMetadata = providerId ? providerRuntimeMetadata(providerId) : null
+  let runtimeResult = null
+  let runtimeError = ''
+  let runtimeProgressAllowed = false
+  let runtimeSettled = false
+  const runtimeTask = runtimeMetadata
+    ? ensureProviderRuntime(providerId, runtimeMetadata, {
+        root: path.join(app.getPath('userData'), 'provider-runtimes'),
+        signal: controller.signal,
+        report: (progress) => {
+          if (!runtimeProgressAllowed) return
+          send('arc:download-progress', {
+            id,
+            ...progress,
+            url: String(parsed),
+          })
+        },
+      })
+        .then((result) => {
+          runtimeResult = result
+        })
+        .catch((error) => {
+          runtimeError = error instanceof Error ? error.message : String(error)
+        })
+        .finally(() => {
+          runtimeSettled = true
+        })
+    : Promise.resolve()
+
   try {
     downloadBlock: {
       // A prior repair keeps its downloaded archive. Reuse it so a retry does
@@ -3725,6 +3833,21 @@ async function downloadBuild(payload) {
       }
     }
 
+    runtimeProgressAllowed = true
+    if (!runtimeSettled && runtimeMetadata) {
+      send('arc:download-progress', {
+        id,
+        received: 0,
+        total: 0,
+        percent: 0,
+        etaSeconds: null,
+        bytesPerSecond: null,
+        phase: 'runtime',
+        url: String(parsed),
+      })
+    }
+    await runtimeTask
+
     const mobile = !executable && (mobileArchive || hasMobilePayload(targetDir))
     const reason = executable ? null : mobile ? 'mobile' : 'no-executable'
 
@@ -3747,6 +3870,15 @@ async function downloadBuild(payload) {
             manifestBytes: manifestReport.bytes,
           }
         : {}),
+      ...(runtimeResult
+        ? {
+            runtimeVersion: runtimeResult.version,
+            runtimeInstalled: runtimeResult.installed,
+            runtimeInstaller: runtimeResult.installer,
+            runtimeExecutable: runtimeResult.executable,
+          }
+        : {}),
+      ...(runtimeError ? { runtimeError } : {}),
     }
   } catch (error) {
     // Never wipe the target folder, archive, or extracted files because of a
@@ -5269,27 +5401,148 @@ function registerIpc() {
     launchOnlineProvider(payload),
   )
 
-  // Retrac's 14.60 client is launched by its signed Alea launcher, not by the
-  // Tellurium redirect. Never fake -alea-auth or bypass the anticheat service.
-  ipcMain.handle('arc:open-provider-launcher', async (_event, providerId) => {
-    if (providerId !== 'retrac-official') {
+  // External communities are opened through the documented entry point in
+  // provider.json. VAULTED does not inject credentials or fake a launcher
+  // handshake; the project owns its sign-in, anticheat and season selection.
+  ipcMain.handle('arc:open-provider-launcher', async (_event, providerId, options = {}) => {
+    const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
+    const profile = id && providerForId(id) ? providerProfile(id) : null
+    if (!profile || profile.external !== true || profile.mode !== 'external') {
       return { opened: false, error: 'That provider does not use an official launcher.' }
     }
-    const localAppData = process.env.LOCALAPPDATA || ''
-    const programFiles = process.env.PROGRAMFILES || ''
-    const candidates = [
-      path.join(localAppData, 'Programs', 'Retrac', 'Retrac.exe'),
-      path.join(localAppData, 'Retrac', 'Retrac.exe'),
-      path.join(programFiles, 'Retrac', 'Retrac.exe'),
-    ].filter(Boolean)
-    const executable = candidates.find((candidate) => fs.existsSync(candidate))
-    if (executable) {
+
+    // A provider with documented runtime metadata starts its signed launcher
+    // with the exact build flag it publishes. Retrac keeps its library in a
+    // private WebView2 store, so VAULTED never edits that undocumented store;
+    // it only asks Retrac for the build after the player has added it there.
+    const runtimeMetadata = providerRuntimeMetadata(id)
+    const launchOptions =
+      options && typeof options === 'object' && !Array.isArray(options) ? options : {}
+    if (runtimeMetadata) {
+      const requestedVersion =
+        typeof launchOptions.version === 'string' ? launchOptions.version.trim() : ''
+      const version = runtimeMetadata.manifestIds[requestedVersion]
+        ? requestedVersion
+        : Object.keys(runtimeMetadata.manifestIds)[0]
+      let executable = installedExecutable(runtimeMetadata)
+      if (!executable) {
+        // The season archive may already have been installed before this
+        // runtime metadata existed. Prepare the signed launcher on Play as
+        // well, without requiring another 14.60 archive download.
+        try {
+          const runtime = await ensureProviderRuntime(id, runtimeMetadata, {
+            root: path.join(app.getPath('userData'), 'provider-runtimes'),
+          })
+          executable = runtime?.executable || ''
+        } catch (error) {
+          return {
+            opened: false,
+            error: error instanceof Error ? error.message : 'The provider runtime could not be prepared.',
+          }
+        }
+      }
+      if (!executable) {
+        return {
+          opened: false,
+          error: `${profile.label} is not installed yet. Download its ${version} build from VAULTED once to install the verified launcher.`,
+        }
+      }
+      const args = launchArguments(runtimeMetadata, version)
+      if (args) {
+        try {
+          const child = spawn(executable, args, {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: false,
+            cwd: path.dirname(executable),
+          })
+          const started = await new Promise((resolve) => {
+            child.once('spawn', () => resolve(true))
+            child.once('error', () => resolve(false))
+            setTimeout(() => resolve(true), 1500).unref?.()
+          })
+          if (!started) {
+            return { opened: false, error: `${profile.label} could not be started.` }
+          }
+          child.unref()
+          trackProviderLauncher(id, child)
+          return {
+            opened: true,
+            path: executable,
+            args,
+            version,
+            pid: child.pid ?? null,
+            tracked: true,
+          }
+        } catch (error) {
+          return {
+            opened: false,
+            error: error instanceof Error ? error.message : 'The provider launcher could not be started.',
+          }
+        }
+      }
       const error = await shell.openPath(executable)
-      if (!error) return { opened: true, path: executable }
-      return { opened: false, error }
+      return error ? { opened: false, error } : { opened: true, path: executable }
     }
-    await shell.openExternal('https://retrac.site/')
-    return { opened: true, url: 'https://retrac.site/' }
+
+    const launchUrl = profile.launchUrl || profile.website || profile.backendUrl
+    if (!/^https?:\/\//i.test(launchUrl)) {
+      return { opened: false, error: `${profile.label} has no safe launch URL.` }
+    }
+    await shell.openExternal(launchUrl)
+    return { opened: true, url: launchUrl }
+  })
+
+  ipcMain.handle('arc:provider-runtime-status', (_event, providerId) =>
+    providerRuntimeStatus(providerId),
+  )
+
+  ipcMain.handle('arc:install-provider-runtime', async (_event, providerId) => {
+    const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
+    const metadata = providerRuntimeMetadata(id)
+    if (!metadata) throw new Error('That provider has no companion runtime.')
+    try {
+      const result = await ensureProviderRuntime(id, metadata, {
+        root: path.join(app.getPath('userData'), 'provider-runtimes'),
+        report: (progress) =>
+          send('arc:runtime-progress', {
+            providerId: id,
+            label: metadata.label,
+            ...progress,
+            phase: progress.phase === 'installing' ? 'installing' : 'downloading',
+          }),
+      })
+      send('arc:runtime-progress', {
+        providerId: id,
+        label: metadata.label,
+        phase: 'done',
+        percent: 100,
+        received: 0,
+        total: 0,
+        etaSeconds: null,
+        bytesPerSecond: null,
+      })
+      return {
+        ok: true,
+        providerId: id,
+        label: metadata.label,
+        version: result.version,
+        installed: result.installed,
+      }
+    } catch (error) {
+      send('arc:runtime-progress', {
+        providerId: id,
+        label: metadata.label,
+        phase: 'error',
+        percent: null,
+        received: 0,
+        total: 0,
+        etaSeconds: null,
+        bytesPerSecond: null,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
   })
 
   ipcMain.handle('arc:provider-catalog', () => providerCatalog())

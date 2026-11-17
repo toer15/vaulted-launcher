@@ -34,8 +34,10 @@ import {
   checkInstalledBuilds,
   closeBuildProcess,
   deleteBuild,
+  fetchProviderRuntimeStatus,
   getBuildSize,
   hasNativeBridge,
+  installProviderRuntime,
   launchBuild,
   launchOnlineProvider,
   openBuildFolder,
@@ -49,7 +51,10 @@ import {
   subscribeBuildExit,
   subscribeDownloadProgress,
   subscribeJoinFailed,
+  subscribeProviderRuntimeProgress,
   verifyBuildFiles,
+  type ProviderRuntimeProgress,
+  type ProviderRuntimeStatus,
 } from './lib/launch'
 import { clearSession as clearNetworkSession } from './lib/network'
 import {
@@ -335,6 +340,8 @@ export default function App() {
   const [diskSizes, setDiskSizes] = useState<Record<string, number>>({})
   const requestedDiskSizes = useRef(new Set<string>())
   const [downloads, setDownloads] = useState<Record<string, DownloadState>>({})
+  const [runtimeStatuses, setRuntimeStatuses] = useState<Record<string, ProviderRuntimeStatus>>({})
+  const [runtimeProgress, setRuntimeProgress] = useState<Record<string, ProviderRuntimeProgress>>({})
   const pausedDownloadIds = useRef(new Set<string>())
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [runningId, setRunningId] = useState<string | null>(null)
@@ -704,9 +711,16 @@ export default function App() {
         const current = build.onlineProvider
         const currentIds = (build.onlineProviders ?? (current ? [current] : [])).map((item) => item.id).join('|')
         const nextIds = (providers ?? (provider ? [provider] : [])).map((item) => item.id).join('|')
-        if ((current?.id ?? null) === (provider?.id ?? null) && currentIds === nextIds) return build
+        const archived = entry?.archived === true
+        if (
+          (current?.id ?? null) === (provider?.id ?? null) &&
+          currentIds === nextIds &&
+          (build.archived === true) === archived
+        ) {
+          return build
+        }
         changed = true
-        return { ...build, onlineProvider: provider, onlineProviders: providers }
+        return { ...build, onlineProvider: provider, onlineProviders: providers, archived }
       })
       return changed ? next : prev
     })
@@ -857,6 +871,27 @@ export default function App() {
     ],
   )
   const activePlayMode = activeBuild ? playModes[activeBuild.id] : undefined
+
+  const activeRuntime = useMemo(() => {
+    const providerId = activeBuild?.onlineProvider?.id ?? null
+    if (!providerId) return null
+    const declared =
+      providerCatalog.find((provider) => provider.id === providerId)?.runtime ?? null
+    const status = runtimeStatuses[providerId]
+    const progress = runtimeProgress[providerId]
+    if (!declared && !status && providerId !== 'retrac-official') return null
+    return {
+      providerId,
+      required: true,
+      label: status?.label || declared?.label || 'Retrac Launcher',
+      installed: status?.installed === true,
+      phase:
+        progress && progress.phase !== 'done' ? progress.phase : undefined,
+      percent: progress?.percent ?? null,
+      error: progress?.phase === 'error' ? progress.error || 'The runtime install failed.' : null,
+    }
+  }, [activeBuild?.onlineProvider?.id, providerCatalog, runtimeProgress, runtimeStatuses])
+
 
   // The hero dropdown and Play read one route: exact-season relay/manual rows
   // first, then external directories. A different-season external server is
@@ -1456,6 +1491,49 @@ export default function App() {
     }
   }, [native])
 
+  const activeRuntimeProviderId = activeBuild?.onlineProvider?.id ?? null
+
+  // The season card needs the companion launcher state before it can enable
+  // Download Season. Main owns the installer and returns only safe metadata.
+  useEffect(() => {
+    if (!native || !activeRuntimeProviderId) return
+    let cancelled = false
+    void fetchProviderRuntimeStatus(activeRuntimeProviderId)
+      .then((status) => {
+        if (cancelled) return
+        setRuntimeStatuses((prev) => {
+          const next = { ...prev }
+          if (status) next[status.providerId] = status
+          else delete next[activeRuntimeProviderId]
+          return next
+        })
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [activeRuntimeProviderId, native])
+
+  useEffect(() => {
+    if (!native) return
+    return subscribeProviderRuntimeProgress((progress) => {
+      setRuntimeProgress((prev) => ({ ...prev, [progress.providerId]: progress }))
+      if (progress.phase !== 'done') return
+      setRuntimeStatuses((prev) => {
+        const current = prev[progress.providerId]
+        return {
+          ...prev,
+          [progress.providerId]: {
+            providerId: progress.providerId,
+            required: true,
+            label: progress.label || current?.label || 'Companion Launcher',
+            installed: true,
+          },
+        }
+      })
+    })
+  }, [native])
+
   const pushToast = useCallback((toast: Omit<ToastMessage, 'id'>) => {
     const id = uid()
     setToasts((prev) => {
@@ -1474,6 +1552,66 @@ export default function App() {
       setToasts((prev) => prev.filter((item) => item.id !== id))
     }, toast.ttlMs ?? TOAST_TTL)
   }, [])
+
+  /** Step 1 of the season unlock: verified silent companion-runtime install. */
+  const handleInstallRuntime = useCallback(async () => {
+    const providerId = activeBuild?.onlineProvider?.id
+    if (!providerId) return
+    const current = runtimeProgress[providerId]
+    if (current?.phase === 'downloading' || current?.phase === 'installing') return
+    setRuntimeProgress((prev) => ({
+      ...prev,
+      [providerId]: {
+        providerId,
+        phase: 'downloading',
+        percent: 0,
+        received: 0,
+        total: 0,
+        etaSeconds: null,
+        bytesPerSecond: null,
+      },
+    }))
+    try {
+      const result = await installProviderRuntime(providerId)
+      if (!result.installed) {
+        throw new Error(
+          `${result.label} installed but its executable could not be found. Try again or install it from the official page.`,
+        )
+      }
+      setRuntimeStatuses((prev) => ({
+        ...prev,
+        [providerId]: {
+          providerId,
+          required: true,
+          label: result.label,
+          installed: true,
+        },
+      }))
+      pushToast({
+        tone: 'success',
+        title: `${result.label} ${result.version} installed`,
+        description: 'The verified runtime is ready — Download Season is now unlocked.',
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'The runtime install failed.'
+      setRuntimeProgress((prev) => ({
+        ...prev,
+        [providerId]: {
+          ...(prev[providerId] || {
+            providerId,
+            percent: null,
+            received: 0,
+            total: 0,
+            etaSeconds: null,
+            bytesPerSecond: null,
+          }),
+          phase: 'error',
+          error: message,
+        },
+      }))
+      pushToast({ tone: 'error', title: 'Runtime install failed', description: message })
+    }
+  }, [activeBuild?.onlineProvider?.id, pushToast, runtimeProgress])
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((item) => item.id !== id))
@@ -1977,21 +2115,42 @@ export default function App() {
             ),
           )
           rememberInstalledBuild(downloaded, result.folder)
-          if (options.launchAfter) {
+          if (result.runtimeInstalled && options.providerId) {
+            setRuntimeStatuses((prev) => ({
+              ...prev,
+              [options.providerId!]: {
+                providerId: options.providerId!,
+                required: true,
+                label: prev[options.providerId!]?.label || 'Companion Launcher',
+                installed: true,
+              },
+            }))
+          }
+          if (options.launchAfter && !result.runtimeError) {
             pendingProviderLaunchRef.current = {
               build: downloaded,
               forceProviderId: options.forceProviderId,
             }
           }
-          pushToast({
-            tone: 'success',
-            title: options.launchAfter
-              ? `Updated to the live ${downloaded.version} build`
-              : 'Download complete',
-            description: options.launchAfter
-              ? `${build.season.label} now matches the live build — signing in and launching…`
-              : `${build.season.label} is ready — press Play.`,
-          })
+          if (result.runtimeError) {
+            pushToast({
+              tone: 'info',
+              title: 'Build downloaded — runtime needs attention',
+              description: result.runtimeError,
+            })
+          } else {
+            pushToast({
+              tone: 'success',
+              title: options.launchAfter
+                ? `Updated to the live ${downloaded.version} build`
+                : 'Download complete',
+              description: options.launchAfter
+                ? `${build.season.label} now matches the live build — signing in and launching…`
+                : result.runtimeVersion
+                  ? `${build.season.label} and its signed runtime ${result.runtimeVersion} are ready — press Play. Retrac may ask you to add the downloaded folder to its library once.`
+                  : `${build.season.label} is ready — press Play.`,
+            })
+          }
         } else {
           pushToast({
             tone: 'info',
@@ -2212,7 +2371,7 @@ export default function App() {
           repair: Boolean(source.providerBuild),
           preferredFolder: source.providerBuild ? source.buildVersion || undefined : undefined,
           buildVersion: source.providerBuild ? source.buildVersion || undefined : undefined,
-          providerId: source.providerBuild?.providerId,
+          providerId: source.providerBuild?.providerId || build.onlineProvider?.id,
           seasonId: source.providerBuild?.seasonId || key,
           buildId: source.providerBuild?.buildId,
           validateProvider: Boolean(source.providerBuild?.buildId),
@@ -2272,6 +2431,51 @@ export default function App() {
       launchAfter: true,
     })
   }, [activeBuild, activeBuildIssue, beginDownload, beginProviderSync, pushToast, seasonManifest])
+
+  /**
+   * Retrac owns its signed Alea client and launcher. Every Retrac handoff,
+   * including the automatic launch after Download Season, must go through the
+   * installed official CLI so VAULTED can track its child PID and close the
+   * launcher after Fortnite exits.
+   */
+  const openRetracBuild = useCallback(
+    async (build: Build) => {
+      if (!installed[build.id]) {
+        requestDownload(build, { launchAfter: true })
+        return
+      }
+      setPhase('launching')
+      setLaunchStage('Opening Retrac 14.60…')
+      try {
+        const launchOptions =
+          build.executable && build.path && installed[build.id]
+            ? { version: build.version, folder: build.path, executable: build.executable }
+            : undefined
+        const result = await window.arc?.openProviderLauncher?.('retrac-official', launchOptions)
+        if (!result?.opened) throw new Error(result?.error || 'Retrac could not be opened.')
+        pushToast({
+          tone: 'info',
+          title: result.tracked ? 'Retrac is launching 14.60' : 'Retrac 14.60 opened',
+          description: result.tracked
+            ? 'Retrac is starting the downloaded build. If it asks, add the VAULTED 14.60 folder to its library once; VAULTED will close Retrac when Fortnite exits.'
+            : result.path
+              ? 'Sign in to Retrac and press Play there. Retrac owns its Alea client and matchmaking.'
+              : 'Install Retrac’s official launcher, sign in, and press Play there.',
+        })
+        setPhase('idle')
+        setLaunchStage(null)
+      } catch (error) {
+        setPhase('error')
+        setLaunchStage(null)
+        pushToast({
+          tone: 'error',
+          title: 'Retrac 14.60 could not be opened',
+          description: error instanceof Error ? error.message : 'Unknown error.',
+        })
+      }
+    },
+    [installed, pushToast, requestDownload],
+  )
 
   /** Show the generic account prompt and remember the Play that should resume. */
   const openAccountPrompt = useCallback(
@@ -2353,15 +2557,52 @@ export default function App() {
         return false
       }
 
-      // External launchers stay catalogued for routing, but VAULTED never
-      // navigates the player away from the app to a third-party site.
+      // External communities own their sign-in, anticheat and season handoff.
+      // Open their documented entry point instead of pretending VAULTED can
+      // inject into a backend that does not ship a compatible runtime.
       if (provider.mode === 'external' || provider.external) {
-        pushToast({
-          tone: 'info',
-          title: 'Online play is not available for this season yet',
-          description: 'Download the build or choose another season that is online.',
-        })
-        return false
+        if (!window.arc?.openProviderLauncher) {
+          pushToast({
+            tone: 'error',
+            title: 'This community needs the desktop app',
+            description: 'Run "npm run app" to open provider handoffs.',
+          })
+          return false
+        }
+        try {
+          const result = await window.arc.openProviderLauncher(
+            provider.id,
+            build.executable && build.path
+              ? { version: build.version, folder: build.path, executable: build.executable }
+              : undefined,
+          )
+          if (!result?.opened) {
+            pushToast({
+              tone: 'error',
+              title: `${provider.label} could not be opened`,
+              description: result?.error || 'Check the community link and try again.',
+            })
+            return false
+          }
+          pushToast({
+            tone: 'success',
+            title: result.tracked ? `${provider.label} is launching ${build.version}` : `${provider.label} opened`,
+            description:
+              result.tracked
+                ? 'The provider launcher owns the game process. VAULTED closes it when Fortnite exits.'
+                : provider.launchKind === 'discord'
+                  ? 'Join the community to download its launcher and select this season.'
+                  : 'Finish this season in the community launcher that owns its backend.',
+          })
+          return true
+        } catch (error) {
+          pushToast({
+            tone: 'error',
+            title: `${provider.label} could not be opened`,
+            description: error instanceof Error ? error.message : 'Unknown launcher error.',
+          })
+          return false
+        }
       }
 
       const localLauncher = provider.global !== true
@@ -2643,6 +2884,14 @@ export default function App() {
       join?: { host: string; port: number },
       options: { promptOnEmpty?: boolean; forceProviderId?: string } = {},
     ) => {
+      if (build.archived === true) {
+        pushToast({
+          tone: 'info',
+          title: `${build.season.label} is archived`,
+          description: 'Use the separate 14.60 card for online play.',
+        })
+        return
+      }
       const selectedValue = !join ? serverSelections[build.id] : undefined
       const externalChoice = selectedValue?.startsWith('global:')
         ? providerCatalog.find(
@@ -2657,7 +2906,10 @@ export default function App() {
         await startOnlineProvider(build, externalChoice)
         return
       }
-      if (!signedIn) {
+      // Retrac owns its own Alea account. Never put it behind VAULTED's account
+      // prompt, including the launch resumed automatically after a download.
+      const isRetracOfficial = build.onlineProvider?.id === 'retrac-official'
+      if (!signedIn && !isRetracOfficial) {
         setSignInOpen(true)
         return
       }
@@ -2681,6 +2933,14 @@ export default function App() {
           title: 'Close the running build first',
           description: 'Only one Fortnite client can run at a time.',
         })
+        return
+      }
+
+      // Route every Retrac entry point through the installed official CLI. This
+      // is the same branch Play uses, so the post-download handoff opens Retrac
+      // with its 14.60 build flag and registers the child for auto-close.
+      if (isRetracOfficial) {
+        await openRetracBuild(build)
         return
       }
 
@@ -3006,8 +3266,10 @@ export default function App() {
       }
     },
     [
+      activeRuntime,
       downloads,
       launchAttempts,
+      openRetracBuild,
       phase,
       installed,
       requestDownload,
@@ -3149,39 +3411,27 @@ export default function App() {
       return
     }
 
+    // The companion launcher is step one of the card's unlock sequence. Never
+    // spend a season download before the verified runtime is installed.
+    if (activeRuntime?.required && !activeRuntime.installed) {
+      pushToast({
+        tone: 'info',
+        title: `Install ${activeRuntime.label} first`,
+        description: 'Step 1 unlocks the green Download Season button automatically.',
+      })
+      return
+    }
+
     // Chapter 2 Season 4 moved to Retrac's 14.60 client. Retrac owns its
     // signed Alea service and launcher; do not pass a 14.50 Tellurium login
     // to an endpoint that now requires -alea-auth.
     if (build.onlineProvider?.id === 'retrac-official') {
-      setPhase('launching')
-      setLaunchStage('Opening Retrac 14.60…')
-      try {
-        const result = await window.arc?.openProviderLauncher?.('retrac-official')
-        if (!result?.opened) throw new Error(result?.error || 'Retrac could not be opened.')
-        pushToast({
-          tone: 'info',
-          title: 'Retrac 14.60 opened',
-          description: result.path
-            ? 'Sign in to Retrac and press Play there. Retrac owns its Alea client and matchmaking.'
-            : 'Install Retrac’s official launcher, sign in, and press Play there.',
-        })
-        setPhase('idle')
-        setLaunchStage(null)
-        return
-      } catch (error) {
-        setPhase('error')
-        setLaunchStage(null)
-        pushToast({
-          tone: 'error',
-          title: 'Retrac 14.60 could not be opened',
-          description: error instanceof Error ? error.message : 'Unknown error.',
-        })
-        return
-      }
+      await openRetracBuild(build)
+      return
     }
 
     await startBuild(build, undefined, { promptOnEmpty: true })
-  }, [activeBuild, downloads, installed, phase, providerOnly, pushToast, runningId, signedIn, startBuild])
+  }, [activeBuild, downloads, installed, openRetracBuild, phase, providerOnly, pushToast, runningId, signedIn, startBuild])
 
   const handlePlayChallengeBuild = useCallback(
     (buildId: string) => {
@@ -4068,6 +4318,8 @@ export default function App() {
                 }}
                 signedIn={signedIn}
                 onSignIn={() => setSignInOpen(true)}
+                runtime={activeRuntime}
+                onInstallRuntime={() => void handleInstallRuntime()}
                 accountAuthRequired={Boolean(
                   activeBuild && installed[activeBuild.id] && activeAccountBackend,
                 )}

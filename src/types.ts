@@ -95,6 +95,8 @@ export interface GlobalBackend extends OnlineProviderConfig {
   mode?: 'download' | 'global_live' | 'external'
   /** external launchers are opened through their official launcher/site */
   external?: boolean
+  /** signed companion launcher that must be installed before the season download */
+  runtime?: { required: boolean; label: string }
   /** official launcher, or a Discord community for projects without a site */
   launchKind?: 'official' | 'discord'
   /** official launcher, download page, or Discord invite opened when external */
@@ -154,6 +156,8 @@ export interface Build {
   onlineProviders?: OnlineProviderConfig[]
   /** Discord-gated communities mapped to this season */
   discordGates?: DiscordGate[]
+  /** historical build kept for archive use; Play must stay disabled */
+  archived?: boolean
   season: SeasonInfo
   addedAt: number
   /** true until a real build folder is linked or downloaded */
@@ -186,7 +190,7 @@ export interface DownloadState {
   etaSeconds: number | null
   /** live transfer rate in bytes per second */
   speedBytesPerSecond?: number | null
-  phase: 'downloading' | 'verifying' | 'extracting' | 'paused'
+  phase: 'downloading' | 'verifying' | 'extracting' | 'runtime' | 'paused'
   /** bytes kept from an interrupted download, when paused */
   received?: number
   total?: number

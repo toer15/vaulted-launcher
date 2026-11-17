@@ -24,7 +24,8 @@ const {
   providerLaunchDiagnostic,
 } = require('../electron/providerLaunchArgs.cjs')
 const { createProviderAuth, retracCodeFromMessage } = require('../electron/providerAuth.cjs')
-const { providerCatalog, providerProfile } = require('../electron/onlineProviders.cjs')
+const { providerCatalog, providerProfile, providerRuntimeMetadata } = require('../electron/onlineProviders.cjs')
+const { launchArguments } = require('../electron/providerRuntime.cjs')
 const seasonManifest = require('../src/assets/builds.json').seasons
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-provider-launch-'))
@@ -112,12 +113,63 @@ function testLiveProviderMappings() {
   // official launcher instead of faking -alea-auth in Tellurium.
   assert.equal(seasonManifest['ch2-s4']?.onlineProvider, undefined)
   assert.equal(seasonManifest['ch2-s4']?.onlineProviders, undefined)
+  assert.equal(seasonManifest['ch2-s4']?.archived, true)
+  assert.equal(
+    seasonManifest['ch2-s2']?.onlineProviders?.some((provider) => provider.id === 'slurp'),
+    true,
+  )
+  assert.equal(
+    seasonManifest['ch2-s7']?.onlineProviders?.some((provider) => provider.id === 'eon'),
+    true,
+  )
+  assert.equal(
+    seasonManifest['ch2-s7']?.onlineProviders?.some((provider) => provider.id === 'fortmp'),
+    false,
+  )
+  assert.equal(
+    seasonManifest['ch2-s1']?.onlineProviders?.some((provider) => provider.id === 'ambient'),
+    true,
+  )
   assert.equal(seasonManifest['ch2-s4-1460']?.buildVersion, '14.60')
   assert.equal(seasonManifest['ch2-s4-1460']?.onlineProvider?.id, 'retrac-official')
   const official = providerCatalog().find((provider) => provider.id === 'retrac-official')
   assert.equal(official?.mode, 'external')
   assert.equal(official?.auth, 'none')
   assert.equal(official?.launchKind, 'official')
+  for (const id of ['slurp', 'ambient', 'reef', 'legacy-mp', 'horizon', 'sunset', 'blue-og', 'glow']) {
+    const provider = providerCatalog().find((entry) => entry.id === id)
+    assert.equal(provider?.mode, 'external', `${id} must stay an external community route`)
+    assert.equal(provider?.auth, 'none', `${id} must not fake a VAULTED account login`)
+    assert.equal(Boolean(provider?.launchUrl), true, `${id} needs a documented launch URL`)
+    const profile = providerProfile(id)
+    assert.equal(profile.external, true, `${id} profile must expose the external flag`)
+    assert.equal(profile.mode, 'external', `${id} profile must keep the external mode`)
+    assert.match(profile.launchUrl, /^https:\/\//, `${id} profile must expose its sanitized launch URL`)
+  }
+  // Dead routes are removed rather than kept as plausible-looking links.
+  for (const id of ['fortmp', 'havoc', 'natrex']) {
+    assert.equal(providerCatalog().some((entry) => entry.id === id), false, `${id} must be removed`)
+    assert.equal(
+      Object.values(seasonManifest).some((season) =>
+        [...(season.onlineProvider ? [season.onlineProvider] : []), ...(season.onlineProviders || [])].some(
+          (provider) => provider.id === id,
+        ),
+      ),
+      false,
+      `${id} must not remain in a season mapping`,
+    )
+  }
+  const runtime = providerRuntimeMetadata('retrac-official')
+  assert.equal(runtime?.kind, 'msi')
+  assert.equal(runtime?.label, 'Retrac Launcher')
+  assert.equal(runtime?.versionUrl, 'https://launcher-service-prod.retr.ac/version/0.0.0')
+  assert.deepEqual(runtime?.downloadHosts, ['cdn.retrac.site'])
+  assert.equal(runtime?.signerSubject, 'Lezah Limited')
+  assert.deepEqual(launchArguments(runtime, '14.60'), [
+    '-action_after=launch_build:++Fortnite+Release-14.60-CL-14786821-Windows',
+  ])
+  assert.equal(providerRuntimeMetadata('slurp'), null)
+  assert.deepEqual(official?.runtime, { required: true, label: 'Retrac Launcher' })
   const authSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'providerAuth.cjs'), 'utf8')
   assert.match(authSource, /authorisation_code/)
   assert.match(authSource, /anticheat_token/)
@@ -143,6 +195,41 @@ function testRetracCodeReply() {
   })
   assert.equal(retracCodeFromMessage({ id: 'code', authorisation_code: '' }), null)
   assert.equal(retracCodeFromMessage({ id: 'code', code: '' }), null)
+}
+
+function testRetracPendingLaunchRouting() {
+  // There is no React test harness in this project, so lock the wiring that
+  // regressed: Download Season leaves a pending launch, the pending effect
+  // resumes through startBuild, and startBuild must reach the Retrac CLI
+  // branch before the generic installed/download routing.
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'src', 'App.tsx'), 'utf8')
+  const main = fs.readFileSync(path.join(__dirname, '..', 'electron', 'main.cjs'), 'utf8')
+  const helperAt = renderer.indexOf('const openRetracBuild = useCallback')
+  const startAt = renderer.indexOf('const startBuild = useCallback')
+  assert.ok(helperAt > 0, 'Retrac launch helper is missing')
+  assert.ok(startAt > helperAt, 'startBuild must be able to call the Retrac launch helper')
+
+  const startBody = renderer.slice(startAt, renderer.indexOf('startBuildRef.current = startBuild', startAt))
+  const signedInAt = startBody.indexOf('if (!signedIn && !isRetracOfficial)')
+  const retracAt = startBody.indexOf('if (isRetracOfficial)')
+  const installedAt = startBody.indexOf('if (!installed[build.id])')
+  assert.ok(signedInAt >= 0, 'startBuild must exempt Retrac from the VAULTED sign-in prompt')
+  assert.ok(retracAt > signedInAt, 'startBuild must route Retrac after the sign-in exemption')
+  assert.ok(installedAt > retracAt, 'post-download Retrac must reach its CLI branch before generic download routing')
+  assert.match(startBody, /await openRetracBuild\(build\)/)
+
+  const helperAtEnd = renderer.indexOf('/** Show the generic account prompt', helperAt)
+  const helperBody = renderer.slice(helperAt, helperAtEnd)
+  assert.match(helperBody, /openProviderLauncher\?\.\('retrac-official'/, 'Retrac must use the official CLI bridge')
+  assert.match(helperBody, /requestDownload\(build, \{ launchAfter: true \}\)/, 'missing Retrac builds must still download first')
+
+  const pendingAt = renderer.indexOf('const pending = pendingProviderLaunchRef.current')
+  const pendingBody = renderer.slice(pendingAt, pendingAt + 900)
+  assert.match(pendingBody, /startBuildRef\.current\?\./, 'the post-download pending launch must resume through startBuild')
+
+  assert.match(main, /launchArguments\(runtimeMetadata, version\)/, 'the Retrac CLI must receive its manifest flag')
+  assert.match(main, /trackProviderLauncher\(id, child\)/, 'the opened Retrac process must be tracked for auto-close')
+  assert.match(main, /await closeProcessTreeGracefully\(entry\.pid\)/, 'tracked Retrac must be closed after the game exits')
 }
 
 function testLaunchArguments() {
@@ -344,6 +431,7 @@ async function testStellarExchangeTimeout() {
 async function main() {
   testLiveProviderMappings()
   testRetracCodeReply()
+  testRetracPendingLaunchRouting()
   writeTokenStore()
   testLaunchArguments()
   await testStellarExchangeSuccess()
@@ -354,7 +442,7 @@ async function main() {
   writeTokenStore()
   await testStellarExchangeTimeout()
   console.log(
-    'provider launch smoke passed: Stellar exchange payload, 401/invalid/timeout diagnostics, and Stellar/Retrac/local launch arguments checked offline',
+    'provider launch smoke passed: Stellar exchange payload, 401/invalid/timeout diagnostics, Stellar/Retrac/local launch arguments, and the post-download Retrac CLI handoff checked offline',
   )
 }
 

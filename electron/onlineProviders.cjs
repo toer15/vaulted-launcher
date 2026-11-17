@@ -151,6 +151,72 @@ function parseEmbeddedWeb(raw) {
  * full Discord invite URL or a bare vanity code, and keep it constrained to
  * Discord's two invite hosts so the renderer can open it safely.
  */
+function parseRuntimeMetadata(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.kind !== 'msi') return null
+  const versionUrl = parseHttpUrl(raw.versionUrl)
+  if (!versionUrl || versionUrl.protocol !== 'https:') return null
+  const downloadHosts = Array.isArray(raw.downloadHosts)
+    ? [...new Set(raw.downloadHosts.filter((host) => typeof host === 'string' && /^(?:[a-z0-9-]+\.)*[a-z0-9-]+$/i.test(host.trim())).map((host) => host.trim().toLowerCase()))]
+    : []
+  if (downloadHosts.length === 0 || downloadHosts.length > 8) return null
+  const label =
+    typeof raw.label === 'string' && raw.label.trim()
+      ? raw.label.trim().slice(0, 48)
+      : 'Companion Launcher'
+  const signerSubject =
+    typeof raw.signerSubject === 'string' ? raw.signerSubject.trim().slice(0, 256) : ''
+  const installerName =
+    typeof raw.installerName === 'string' ? raw.installerName.trim().slice(0, 128) : ''
+  if (!signerSubject || !/^[^\\/:*?"<>|]+\.msi$/i.test(installerName)) return null
+  const installedExecutables = Array.isArray(raw.installedExecutables)
+    ? raw.installedExecutables
+        .filter(
+          (value) =>
+            typeof value === 'string' &&
+            /^%(?:LOCALAPPDATA|PROGRAMFILES|PROGRAMFILES\(X86\))%[\\/][A-Za-z0-9 ._\\/-]+\.exe$/i.test(value.trim()) &&
+            !value.includes('..'),
+        )
+        .map((value) => value.trim().slice(0, 260))
+    : []
+  if (installedExecutables.length === 0) return null
+  const manifestIds = {}
+  if (raw.manifestIds && typeof raw.manifestIds === 'object' && !Array.isArray(raw.manifestIds)) {
+    for (const [version, manifestId] of Object.entries(raw.manifestIds)) {
+      if (!/^\d{1,2}\.\d{1,2}$/.test(version)) continue
+      if (
+        typeof manifestId !== 'string' ||
+        !/^\+\+Fortnite\+Release-[A-Za-z0-9.]+-CL-\d+-Windows$/.test(manifestId.trim())
+      ) {
+        continue
+      }
+      manifestIds[version] = manifestId.trim()
+    }
+  }
+  const launchArgs = Array.isArray(raw.launchArgs)
+    ? raw.launchArgs
+        .filter((value) => typeof value === 'string' && /^-[^\s"'`]{1,160}$/.test(value.trim()))
+        .map((value) => value.trim())
+    : []
+  const processName =
+    typeof raw.processName === 'string' && SAFE_EXE_NAME.test(raw.processName.trim())
+      ? raw.processName.trim()
+      : ''
+  if (!processName || Object.keys(manifestIds).length === 0 || launchArgs.length === 0) return null
+  return {
+    kind: 'msi',
+    label,
+    versionUrl: versionUrl.toString(),
+    downloadHosts,
+    signerSubject,
+    installerName,
+    autoInstall: raw.autoInstall !== false,
+    installedExecutables,
+    manifestIds,
+    launchArgs,
+    processName,
+  }
+}
+
 function parseDiscordGate(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const configured = typeof raw.inviteUrl === 'string' ? raw.inviteUrl.trim() : ''
@@ -304,6 +370,7 @@ function catalogData() {
     }
     const discordAuth = entry.discordAuth === true || discordAuthorize
     const parsedDiscordGate = parseDiscordGate(entry.discordGate)
+    const runtimeMetadata = parseRuntimeMetadata(entry.runtime)
 
     providers.push({
       id,
@@ -317,6 +384,7 @@ function catalogData() {
       discordGate: parsedDiscordGate
         ? { providerId: id, ...parsedDiscordGate }
         : undefined,
+      runtime: runtimeMetadata,
       mode,
       external: mode === 'external' || entry.external === true,
       launchKind,
@@ -373,6 +441,7 @@ function providerCatalog() {
     discordGate: entry.discordGate,
     mode: entry.mode,
     external: entry.external === true,
+    runtime: entry.runtime ? { required: true, label: entry.runtime.label } : undefined,
     launchKind: entry.launchKind,
     launchUrl: entry.launchUrl,
     launchHandshakePending: entry.launchHandshakePending,
@@ -461,6 +530,13 @@ function userProviderRoot() {
 
 function providerForId(id) {
   return PROVIDERS.get(String(id || '')) || null
+}
+
+/** Documented release/runtime metadata for a catalog provider, if any. */
+function providerRuntimeMetadata(id) {
+  const key = String(id || '').trim().toLowerCase()
+  const entry = catalogData().providers.find((provider) => provider.id === key)
+  return entry?.runtime ?? null
 }
 
 /**
@@ -583,7 +659,12 @@ function providerProfile(id) {
     mode:
       catalogEntry?.mode ||
       (raw?.mode === 'global_live' && raw?.auth === 'oauth' ? 'global_live' : 'download'),
+    external: (catalogEntry?.mode || raw?.mode) === 'external' || catalogEntry?.external === true,
     launchKind: catalogEntry?.launchKind || (raw?.launchKind === 'discord' ? 'discord' : undefined),
+    launchUrl:
+      parseHttpUrl(catalogEntry?.launchUrl)?.toString() ||
+      parseHttpUrl(catalogEntry?.website)?.toString() ||
+      '',
     oauth: catalogEntry?.oauth || parseOAuth(raw?.oauth),
     deeplink: catalogEntry?.deeplink || null,
     embeddedWeb: catalogEntry?.embeddedWeb || null,
@@ -761,6 +842,7 @@ function providerRuntime(profile) {
 }
 
 module.exports = {
+  providerRuntimeMetadata,
   ensureProviderRedirects,
   providerCatalog,
   providerDllPath,

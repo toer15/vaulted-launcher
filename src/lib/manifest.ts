@@ -35,6 +35,8 @@ export interface SeasonManifestEntry {
   onlineProvider?: OnlineProviderConfig
   /** every provider that can host this season, primary first */
   onlineProviders?: OnlineProviderConfig[]
+  /** kept as an archive; Play is disabled for this card */
+  archived?: boolean
 }
 
 /** The fallback used before the desktop shell reports its real builds root. */
@@ -143,6 +145,7 @@ export function buildSeasonManifest(
       servers: Array.isArray(source.servers) ? source.servers : undefined,
       onlineProvider: source.onlineProvider,
       onlineProviders: providerList(source.onlineProvider, source.onlineProviders),
+      archived: source.archived === true,
     }
   }
 

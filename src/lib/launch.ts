@@ -90,7 +90,26 @@ export interface DownloadProgress {
   bytesPerSecond: number | null
   /** the resolved source URL, including a bucket fallback switch */
   url?: string
-  phase: 'downloading' | 'verifying' | 'extracting'
+  phase: 'downloading' | 'verifying' | 'extracting' | 'runtime'
+}
+
+export interface ProviderRuntimeStatus {
+  providerId: string
+  required: boolean
+  label: string
+  installed: boolean
+}
+
+export interface ProviderRuntimeProgress {
+  providerId: string
+  label?: string
+  phase: 'downloading' | 'installing' | 'done' | 'error'
+  percent: number | null
+  received: number
+  total: number
+  etaSeconds: number | null
+  bytesPerSecond: number | null
+  error?: string
 }
 
 export interface InterruptedDownload {
@@ -112,6 +131,12 @@ export interface DownloadResult {
   manifestVerified?: boolean
   manifestFiles?: number
   manifestBytes?: number
+  /** signed desktop runtime prepared alongside the season build */
+  runtimeVersion?: string
+  runtimeInstalled?: boolean
+  runtimeInstaller?: string
+  runtimeExecutable?: string
+  runtimeError?: string
 }
 
 export interface ProviderSyncResult {
@@ -317,12 +342,28 @@ export interface LauncherBridge {
     clear(): Promise<boolean>
   }
   /** open a signed third-party launcher that owns its own anticheat/runtime */
-  openProviderLauncher?(providerId: string): Promise<{
+  openProviderLauncher?(
+    providerId: string,
+    options?: { version?: string; folder?: string; executable?: string },
+  ): Promise<{
     opened: boolean
     path?: string
     url?: string
     error?: string
+    args?: string[]
+    version?: string
+    pid?: number | null
+    tracked?: boolean
   }>
+  providerRuntimeStatus?(providerId: string): Promise<ProviderRuntimeStatus | null>
+  installProviderRuntime?(providerId: string): Promise<{
+    ok: boolean
+    providerId: string
+    label: string
+    version: string
+    installed: boolean
+  }>
+  onRuntimeProgress?(callback: (progress: ProviderRuntimeProgress) => void): () => void
   /** launch a downloaded season through its bundled provider profile */
   launchOnlineProvider?(payload: {
     id: string
@@ -561,6 +602,34 @@ export async function pauseDownload(id: string): Promise<boolean> {
 
 export function subscribeDownloadProgress(callback: (progress: DownloadProgress) => void): () => void {
   return window.arc?.onDownloadProgress?.(callback) ?? (() => {})
+}
+
+export async function fetchProviderRuntimeStatus(
+  providerId: string,
+): Promise<ProviderRuntimeStatus | null> {
+  if (!window.arc?.providerRuntimeStatus) return null
+  try {
+    return await window.arc.providerRuntimeStatus(providerId)
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+export async function installProviderRuntime(providerId: string) {
+  if (!window.arc?.installProviderRuntime) {
+    throw new Error('Companion runtime installation needs the desktop app.')
+  }
+  try {
+    return await window.arc.installProviderRuntime(providerId)
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+export function subscribeProviderRuntimeProgress(
+  callback: (progress: ProviderRuntimeProgress) => void,
+): () => void {
+  return window.arc?.onRuntimeProgress?.(callback) ?? (() => {})
 }
 
 export function subscribeBuildExit(callback: (payload: BuildExitInfo) => void): () => void {

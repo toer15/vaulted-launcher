@@ -1,4 +1,5 @@
 import {
+  Archive,
   ArrowLeftRight,
   Ban,
   Check,
@@ -65,6 +66,17 @@ interface ActiveBuildCardProps {
   signedIn?: boolean
   /** open the in-app VAULTED sign-in modal */
   onSignIn?: () => void
+  /** signed companion launcher required before the season download */
+  runtime?: {
+    providerId: string
+    required: boolean
+    label: string
+    installed: boolean
+    phase?: 'downloading' | 'installing' | 'error'
+    percent?: number | null
+    error?: string | null
+  } | null
+  onInstallRuntime?: () => void
   /** this season's active backend needs an online account link */
   accountAuthRequired?: boolean
   /** the hosted provider already has an encrypted session */
@@ -183,6 +195,14 @@ interface ServerHealth {
 }
 
 function healthForBackend(provider: GlobalBackend | null | undefined): ServerHealth {
+  // External providers are destinations, not game backends. A missing health
+  // probe must not turn a working launcher or Discord community into OFFLINE.
+  if (provider?.external === true || provider?.mode === 'external') {
+    return {
+      state: 'link',
+      linkLabel: provider.launchKind === 'discord' ? 'ONLINE · DISCORD' : 'LAUNCHER',
+    }
+  }
   if (!provider?.live) return { state: 'checking' }
   return {
     state: provider.live.online ? 'up' : 'down',
@@ -223,9 +243,11 @@ function healthCheckedLabel(health: ServerHealth): string {
 function healthTitle(health: ServerHealth): string {
   return [
     health.state === 'up'
-        ? 'Server up'
-        : health.state === 'down'
-          ? 'Server down'
+      ? 'Server up'
+      : health.state === 'down'
+        ? 'Server down'
+        : health.state === 'link'
+          ? 'External provider link'
           : 'Checking server health',
     health.populationSource === 'discord' && health.communityPlayers !== undefined
       ? `Community ${communityCountLabel(health.communityPlayers)} — not in-game players`
@@ -259,6 +281,8 @@ export function ActiveBuildCard({
   onSelectServer,
   signedIn = true,
   onSignIn,
+  runtime = null,
+  onInstallRuntime,
   accountAuthRequired = false,
   accountSignedIn = false,
   onConnectAccount,
@@ -318,10 +342,13 @@ export function ActiveBuildCard({
   }
 
   const { season } = build
+  const archived = build.archived === true
   const busy = state === 'launching' || state === 'downloading'
   const verificationRequired = Boolean(launchVerificationUrl)
   const buildUpdateRequired = Boolean(buildVerificationRequired && onUpdateLiveBuild)
-  const pill = verificationRequired
+  const pill = archived
+    ? { label: 'Archived', dot: 'bg-slate-400', text: 'text-mist/70' }
+    : verificationRequired
     ? { label: 'Verification needed', dot: 'bg-amber-400', text: 'text-amber-300' }
     : buildUpdateRequired
       ? { label: 'Build update needed', dot: 'bg-amber-400', text: 'text-amber-300' }
@@ -336,11 +363,15 @@ export function ActiveBuildCard({
   // archive card must never gate it behind a VAULTED account or a download.
   const officialExternal = build?.onlineProvider?.id === 'retrac-official'
   const requiresSignIn =
-    !officialExternal && signedOut && ['missing', 'paused', 'ready', 'error'].includes(state)
+    !archived &&
+    !officialExternal &&
+    signedOut &&
+    ['missing', 'paused', 'ready', 'error'].includes(state)
   // Only offer the account prompt for an installed season. A missing build
   // still uses the normal Download path, then asks for the account before Play.
   const accountConnectRequired = Boolean(
-    accountAuthRequired &&
+    !archived &&
+      accountAuthRequired &&
       accountSignedIn === false &&
       isInstalled &&
       ['ready', 'error'].includes(state) &&
@@ -349,7 +380,8 @@ export function ActiveBuildCard({
   // A Discord gate only changes the Play action once the build is actually
   // ready. Download, pause and resume keep their normal install language.
   const discordLocked = Boolean(
-    discordGate &&
+    !archived &&
+      discordGate &&
       !discordGateVerified &&
       isInstalled &&
       ['ready', 'error'].includes(state) &&
@@ -358,6 +390,14 @@ export function ActiveBuildCard({
   const signInTarget = isInstalled ? 'Play' : 'Download'
 
   const hasDownloadSource = Boolean(artKeyFor(season) && sourceKeys?.has(artKeyFor(season)!))
+  const runtimeRequired = runtime?.required === true
+  const runtimeReady = !runtimeRequired || runtime?.installed === true
+  const runtimeBusy =
+    runtimeRequired &&
+    (runtime?.phase === 'downloading' || runtime?.phase === 'installing')
+  const downloadUnlocked =
+    hasDownloadSource && runtimeReady && !requiresSignIn && !busy && !archived
+  const setupSequence = !archived && state === 'missing'
   const etaLabel = download?.phase === 'downloading' ? formatEta(download.etaSeconds) : null
   const speedLabel = download?.phase === 'downloading' ? formatSpeed(download.speedBytesPerSecond) : null
   const rateLabel = [speedLabel, etaLabel].filter(Boolean).join(' · ') || null
@@ -398,7 +438,9 @@ export function ActiveBuildCard({
       ? onlineStatusLabel(onlinePlayers, onlineServers)
       : heroHealth.state === 'down'
         ? 'OFFLINE'
-        : 'CHECKING'
+        : heroHealth.state === 'link'
+          ? heroHealth.linkLabel || 'LAUNCHER'
+          : 'CHECKING'
     : seasonStatusLabel(playMode)
   const statusTone = statusToneFor(heroHealth, playMode)
   const heroStatusTitle = heroHealth ? healthTitle(heroHealth) : onlineStatus
@@ -416,7 +458,7 @@ export function ActiveBuildCard({
       ].filter((entry) => (entry[1] as string[]).length > 0)
     : []
 
-  const statePrimary = {
+  const defaultStatePrimary = {
     missing: officialExternal
       ? {
           label: 'Open Retrac 14.60',
@@ -448,11 +490,13 @@ export function ActiveBuildCard({
     },
     downloading: {
       label:
-        download?.phase === 'extracting'
-          ? 'Unpacking…'
-          : download?.phase === 'verifying'
-            ? 'Verifying checksum…'
-            : download?.percent != null
+        download?.phase === 'runtime'
+          ? 'Preparing the provider runtime…'
+          : download?.phase === 'extracting'
+            ? 'Unpacking…'
+            : download?.phase === 'verifying'
+              ? 'Verifying checksum…'
+              : download?.percent != null
             ? rateLabel
               ? `Downloading… ${download.percent}% · ${rateLabel}`
               : `Downloading… ${download.percent}%`
@@ -486,8 +530,18 @@ export function ActiveBuildCard({
       glow: 'rgba(251,191,36,0.45)',
     },
   }[state]
+  const statePrimary = archived
+    ? {
+        label: 'Archive only',
+        icon: Archive,
+        background: 'linear-gradient(120deg, #64748b, #334155)',
+        glow: 'rgba(100,116,139,0.35)',
+      }
+    : defaultStatePrimary
 
-  const primary = accountConnectRequired
+  const primary = archived
+    ? statePrimary
+    : accountConnectRequired
     ? {
         label: 'Connect online account',
         icon: ShieldCheck,
@@ -511,16 +565,27 @@ export function ActiveBuildCard({
       : statePrimary
   const primaryBusy = busy && !requiresSignIn && !accountConnectRequired
   const primaryDisabled =
-    !requiresSignIn &&
-    !accountConnectRequired &&
-    (busy || (state === 'missing' && !hasDownloadSource && !officialExternal))
+    archived ||
+    (!requiresSignIn &&
+      !accountConnectRequired &&
+      (busy || (state === 'missing' && !hasDownloadSource && !officialExternal)))
 
   const PrimaryIcon = primary.icon
 
   const statusText: Record<BuildState, string> = {
     missing: officialExternal
-      ? 'This card opens Retrac’s official launcher. Its signed 14.60 client, Alea service and matchmaking stay inside Retrac.'
-      : hasDownloadSource
+      ? runtimeRequired && !runtime?.installed
+        ? `Step 1 — install ${runtime?.label || 'the companion launcher'} to unlock the season download.`
+        : requiresSignIn
+          ? 'Step 2 — sign in to unlock the season download.'
+          : hasDownloadSource
+            ? `Ready — ${downloadSizeLabel ? `${downloadSizeLabel} download. ` : ''}Download Season unlocks the exact 14.60 build.`
+            : 'No download source is configured for this season yet.'
+      : runtimeRequired && !runtime?.installed
+        ? `Install ${runtime?.label || 'the companion launcher'} first.`
+        : requiresSignIn
+          ? 'Sign in to unlock Download Season.'
+          : hasDownloadSource
       ? downloadSizeLabel
         ? `Not on this PC yet — ${downloadSizeLabel} download.`
         : 'Not on this PC yet — download it to play.'
@@ -530,11 +595,13 @@ export function ActiveBuildCard({
         ? `Download paused at ${download.percent}% — continue where it left off.`
         : 'Download paused — continue where it left off.',
     downloading:
-      download?.phase === 'extracting'
-        ? 'Unpacking the build…'
-        : download?.phase === 'verifying'
-          ? 'Verifying the archive checksum…'
-          : 'Downloading the build…',
+      download?.phase === 'runtime'
+        ? 'Downloading and verifying the provider runtime…'
+        : download?.phase === 'extracting'
+          ? 'Unpacking the build…'
+          : download?.phase === 'verifying'
+            ? 'Verifying the archive checksum…'
+            : 'Downloading the build…',
     ready:
       discordLocked
         ? `Ready — join ${discordGate?.label || 'the community Discord'} to unlock online play.`
@@ -569,6 +636,9 @@ export function ActiveBuildCard({
         ? 'No live server was available — try again shortly.'
         : 'Could not start the client. Check the build path and try again.',
   }
+  const effectiveStatusText = archived
+    ? 'Archive-only 14.50 build. Online play uses the separate 14.60 card and Retrac’s official launcher.'
+    : statusText[state]
 
   return (
     <section className="relative isolate flex h-full flex-col overflow-hidden rounded-3xl border border-line bg-panel shadow-[0_30px_80px_-40px_rgba(0,0,0,0.9)]">
@@ -818,13 +888,15 @@ export function ActiveBuildCard({
                 <span className="text-fog">
                   {download.phase === 'paused'
                     ? 'Interrupted — your partial download is kept'
-                    : download.phase === 'extracting'
-                      ? 'Unpacking archive…'
-                      : download.phase === 'verifying'
-                        ? 'Verifying checksum…'
-                        : rateLabel
-                          ? `Downloading build… · ${rateLabel}`
-                          : 'Downloading build…'}
+                    : download.phase === 'runtime'
+                      ? 'Preparing the signed provider runtime…'
+                      : download.phase === 'extracting'
+                        ? 'Unpacking archive…'
+                        : download.phase === 'verifying'
+                          ? 'Verifying checksum…'
+                          : rateLabel
+                            ? `Downloading build… · ${rateLabel}`
+                            : 'Downloading build…'}
                 </span>
                 <span className="font-mono font-semibold text-emerald-300">
                   {download.percent != null ? `${download.percent}%` : '…'}
@@ -1001,7 +1073,7 @@ export function ActiveBuildCard({
             ) : (
               <Check className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
             )}
-            <p className={cx('transition-colors duration-300', pill.text)}>{statusText[state]}</p>
+            <p className={cx('transition-colors duration-300', pill.text)}>{effectiveStatusText}</p>
           </div>
         </div>
       </div>
@@ -1011,6 +1083,142 @@ export function ActiveBuildCard({
       <div className="relative shrink-0 pt-4">
         <div className="rounded-2xl border border-white/10 bg-ink/90 p-2 shadow-[0_36px_70px_-22px_rgba(0,0,0,0.95),0_10px_26px_-12px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl">
                 <div className="relative flex flex-wrap items-center gap-2">
+                  {setupSequence ? (
+                    <div className="flex min-w-0 flex-1 flex-col gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {runtimeRequired && !runtimeReady && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              if (!runtimeBusy) onInstallRuntime?.()
+                            }}
+                            disabled={runtimeBusy || !onInstallRuntime}
+                            title={
+                              runtimeBusy
+                                ? `Installing ${runtime?.label || 'the companion launcher'}…`
+                                : `Download and silently install ${runtime?.label || 'the companion launcher'}`
+                            }
+                            className={cx(
+                              'inline-flex items-center gap-2 rounded-xl px-4 py-3 text-[12.5px] font-semibold text-white shadow-[0_14px_34px_-16px_rgba(124,140,255,0.65)] transition-all duration-200',
+                              runtimeBusy
+                                ? 'cursor-progress opacity-85'
+                                : 'hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]',
+                            )}
+                            style={{ background: 'linear-gradient(120deg, #7c8cff, #4752c4)' }}
+                          >
+                            {runtimeBusy ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Download className="h-4 w-4" />
+                            )}
+                            <span>
+                              {runtimeBusy
+                                ? `${runtime?.phase === 'installing' ? 'Installing' : 'Downloading'} ${
+                                    runtime?.label || 'runtime'
+                                  }${runtime?.percent != null ? ` · ${runtime.percent}%` : '…'}`
+                                : runtime?.phase === 'error'
+                                  ? `Retry ${runtime?.label || 'runtime'}`
+                                  : `Download ${runtime?.label || 'runtime'}`}
+                            </span>
+                          </button>
+                        )}
+
+                        {requiresSignIn && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onSignIn?.()
+                            }}
+                            title={`Sign in to unlock Download Season for ${season.label}`}
+                            className="inline-flex items-center gap-2 rounded-xl border border-emerald-300/35 bg-emerald-400/[0.1] px-4 py-3 text-[12.5px] font-semibold text-emerald-100 transition-colors duration-200 hover:border-emerald-300/65 hover:bg-emerald-400/15 hover:text-white"
+                          >
+                            <LogIn className="h-4 w-4" />
+                            Sign in to Download
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            if (downloadUnlocked) onPrimary()
+                          }}
+                          disabled={!downloadUnlocked}
+                          aria-disabled={!downloadUnlocked}
+                          title={
+                            !hasDownloadSource
+                              ? 'No download source is available for this season.'
+                              : !runtimeReady
+                                ? `Install ${runtime?.label || 'the companion launcher'} first.`
+                                : requiresSignIn
+                                  ? 'Sign in to unlock the season download.'
+                                  : busy
+                                    ? 'A download is already running.'
+                                    : `Download ${season.label}`
+                          }
+                          className={cx(
+                            'inline-flex items-center gap-2 rounded-xl px-4 py-3 text-[12.5px] font-semibold transition-all duration-200',
+                            downloadUnlocked
+                              ? 'bg-gradient-to-r from-emerald-400 to-emerald-600 text-void shadow-[0_14px_34px_-14px_rgba(16,185,129,0.8)] hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]'
+                              : 'cursor-not-allowed border border-white/10 bg-white/[0.04] text-fog/55',
+                          )}
+                        >
+                          <Download className="h-4 w-4" />
+                          <span>
+                            Download Season
+                            {downloadSizeLabel ? ` · ${downloadSizeLabel}` : ''}
+                          </span>
+                        </button>
+                      </div>
+
+                      {runtimeRequired && !runtimeReady && (
+                        <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.1em]">
+                          <span className={runtimeReady ? 'text-emerald-300' : 'text-fog'}>
+                            1 · Runtime
+                          </span>
+                          <span className="text-fog/40">→</span>
+                          <span className={!requiresSignIn ? 'text-emerald-300' : 'text-fog'}>
+                            2 · Sign in
+                          </span>
+                          <span className="text-fog/40">→</span>
+                          <span className={downloadUnlocked ? 'text-emerald-300' : 'text-fog'}>
+                            3 · Download
+                          </span>
+                        </div>
+                      )}
+
+                      {runtimeRequired &&
+                        !runtimeReady &&
+                        (runtime?.phase === 'downloading' || runtime?.phase === 'installing') && (
+                          <div className="w-full max-w-md">
+                            <div className="flex items-center justify-between text-[10px] text-fog">
+                              <span>
+                                {runtime.phase === 'installing'
+                                  ? 'Installing verified runtime…'
+                                  : 'Downloading verified runtime…'}
+                              </span>
+                              <span className="font-mono">
+                                {runtime.percent != null ? `${runtime.percent}%` : 'starting…'}
+                              </span>
+                            </div>
+                            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-black/40">
+                              <div
+                                className="h-full rounded-full bg-gradient-to-r from-arc to-emerald-400 transition-all duration-300"
+                                style={{ width: `${Math.max(2, Math.min(100, runtime.percent ?? 4))}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                      {runtime?.error && (
+                        <p className="max-w-xl text-[10.5px] leading-relaxed text-rose-200" role="alert">
+                          {runtime.error}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
                   <div
                     className={cx(
                       'inline-flex overflow-hidden rounded-xl transition-all duration-300',
@@ -1069,6 +1277,7 @@ export function ActiveBuildCard({
                     </button>
 
                   </div>
+                  )}
 
                   {showLocateExisting && (
                     <button

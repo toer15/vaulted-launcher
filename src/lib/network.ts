@@ -585,6 +585,8 @@ export interface BuildSource {
   onlineProvider?: OnlineProviderConfig
   /** providers selectable for this season in the server dropdown */
   onlineProviders?: OnlineProviderConfig[]
+  /** archive-only card; no Play route is offered */
+  archived?: boolean
   /** extra seasons can declare their own chapter/season metadata */
   chapter?: number
   season?: number

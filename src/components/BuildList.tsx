@@ -90,11 +90,13 @@ export function BuildList({
                 .join(' · ')
             : download.phase === 'paused'
               ? `Paused${downloadPercent !== null ? ` · ${downloadPercent}%` : ''}`
-              : download.phase === 'extracting'
-                ? 'Unpacking…'
-                : download.phase === 'verifying'
-                  ? 'Verifying…'
-                  : null
+              : download.phase === 'runtime'
+                ? 'Preparing runtime…'
+                : download.phase === 'extracting'
+                  ? 'Unpacking…'
+                  : download.phase === 'verifying'
+                    ? 'Verifying…'
+                    : null
           : null
         const isLive = playMode.online || playMode.globalOnline === true
         const isChecking =
