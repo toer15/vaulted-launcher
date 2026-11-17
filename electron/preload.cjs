@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld('arc', {
     clear: () => ipcRenderer.invoke('arc:clear-session'),
   },
   launchOnlineProvider: (payload) => ipcRenderer.invoke('arc:online-provider-launch', payload),
+  openProviderLauncher: (providerId) => ipcRenderer.invoke('arc:open-provider-launcher', providerId),
   window: {
     minimize: () => ipcRenderer.invoke('win:minimize'),
     toggleMaximize: () => ipcRenderer.invoke('win:toggle-maximize'),

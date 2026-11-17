@@ -695,7 +695,9 @@ export default function App() {
     setBuilds((prev) => {
       let changed = false
       const next = prev.map((build) => {
-        const key = artKeyFor(build.season)
+        // Extra cards such as the 14.60 handoff share a catalogue season with
+        // the archive card, so their own manifest id wins over the art key.
+        const key = seasonManifest[build.id] ? build.id : artKeyFor(build.season)
         const entry = key ? seasonManifest[key] : undefined
         const provider = entry?.onlineProvider
         const providers = entry?.onlineProviders ?? (provider ? [provider] : undefined)
@@ -937,18 +939,18 @@ export default function App() {
           era: source.era ?? 'Added from the live season feed',
           accent: accentForChapter(chapter),
           known: true,
-          artKey: source.artKey ?? key,
+          artKey: source.artKey ?? `ch${chapter}-s${source.season}`,
         }
-        return { key, season, version: source.version ?? '' }
+        return { key, season, version: source.buildVersion || source.version || '' }
       })
 
     if (extras.length === 0) return
 
     setBuilds((prev) => {
-      const present = new Set(prev.map((build) => artKeyFor(build.season)))
+      const present = new Set(prev.map((build) => build.id))
       const additions = extras
         .filter((entry) => !present.has(entry.key))
-        .map((entry) => buildForSeason(entry.season, entry.version, entry.key))
+        .map((entry) => buildForSeason(entry.season, entry.version, entry.key, entry.key, entry.key))
       return additions.length > 0 ? sortBuilds([...prev, ...additions]) : prev
     })
   }, [])
@@ -3147,8 +3149,39 @@ export default function App() {
       return
     }
 
+    // Chapter 2 Season 4 moved to Retrac's 14.60 client. Retrac owns its
+    // signed Alea service and launcher; do not pass a 14.50 Tellurium login
+    // to an endpoint that now requires -alea-auth.
+    if (build.onlineProvider?.id === 'retrac-official') {
+      setPhase('launching')
+      setLaunchStage('Opening Retrac 14.60…')
+      try {
+        const result = await window.arc?.openProviderLauncher?.('retrac-official')
+        if (!result?.opened) throw new Error(result?.error || 'Retrac could not be opened.')
+        pushToast({
+          tone: 'info',
+          title: 'Retrac 14.60 opened',
+          description: result.path
+            ? 'Sign in to Retrac and press Play there. Retrac owns its Alea client and matchmaking.'
+            : 'Install Retrac’s official launcher, sign in, and press Play there.',
+        })
+        setPhase('idle')
+        setLaunchStage(null)
+        return
+      } catch (error) {
+        setPhase('error')
+        setLaunchStage(null)
+        pushToast({
+          tone: 'error',
+          title: 'Retrac 14.60 could not be opened',
+          description: error instanceof Error ? error.message : 'Unknown error.',
+        })
+        return
+      }
+    }
+
     await startBuild(build, undefined, { promptOnEmpty: true })
-  }, [activeBuild, downloads, phase, providerOnly, pushToast, runningId, signedIn, startBuild])
+  }, [activeBuild, downloads, installed, phase, providerOnly, pushToast, runningId, signedIn, startBuild])
 
   const handlePlayChallengeBuild = useCallback(
     (buildId: string) => {

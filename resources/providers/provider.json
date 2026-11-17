@@ -69,39 +69,6 @@
       ]
     },
     {
-      "id": "retrac",
-      "name": "Retrac",
-      "label": "Retrac",
-      "mode": "global_live",
-      "backendUrl": "https://retrac.site/",
-      "website": "https://retrac.site/",
-      "signInUrl": "https://retrac.site/",
-      "auth": "oauth",
-      "discordAuth": true,
-      "oauth": {
-        "authorizeUrl": "https://oauth-service-prod.retr.ac/oauth/authorise",
-        "tokenUrl": "https://oauth-service-prod.retr.ac/oauth/token",
-        "clientId": "01K5FQWCFHYHK3PNW357RE9YRZ",
-        "scope": "",
-        "redirectUri": "retrac://callback",
-        "fixedRedirect": true,
-        "tokenFormat": "json"
-      },
-      "apiBaseUrl": "https://retrac.site",
-      "profilePath": "/api/auth/me",
-      "statusUrl": "https://retrac.site/api/status",
-      "population": {
-        "kind": "discord",
-        "invite": "retrac",
-        "label": "Discord"
-      },
-      "global": true,
-      "launchHandshakePending": true,
-      "seasons": [
-        "ch2-s4"
-      ]
-    },
-    {
       "id": "ezfn",
       "name": "EZFN",
       "label": "EZFN",
@@ -254,6 +221,22 @@
       "global": true,
       "seasons": [
         "ch1-s4"
+      ]
+    },
+    {
+      "id": "retrac-official",
+      "name": "Retrac",
+      "label": "Retrac official launcher",
+      "mode": "external",
+      "launchKind": "official",
+      "backendUrl": "https://retrac.site/",
+      "website": "https://retrac.site/",
+      "launchUrl": "https://retrac.site/",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch2-s4-1460"
       ]
     }
   ]

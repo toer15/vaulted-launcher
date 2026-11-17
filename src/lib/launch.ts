@@ -316,6 +316,13 @@ export interface LauncherBridge {
     save(value: string): Promise<boolean>
     clear(): Promise<boolean>
   }
+  /** open a signed third-party launcher that owns its own anticheat/runtime */
+  openProviderLauncher?(providerId: string): Promise<{
+    opened: boolean
+    path?: string
+    url?: string
+    error?: string
+  }>
   /** launch a downloaded season through its bundled provider profile */
   launchOnlineProvider?(payload: {
     id: string

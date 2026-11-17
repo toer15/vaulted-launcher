@@ -86,7 +86,7 @@ function testLiveProviderMappings() {
   // A season with a real hosted backend must never silently default to a
   // lobby-only local backend such as Neonite. The hosted providers serve the
   // seasons mapped to them; local providers are only for unmapped seasons.
-  const liveProviders = new Set(['era', 'stellar', 'ezfn', 'retrac'])
+  const liveProviders = new Set(['era', 'stellar', 'ezfn'])
   const catalogById = new Map(providerCatalog().map((provider) => [provider.id, provider]))
   for (const [seasonId, season] of Object.entries(seasonManifest)) {
     const providers = season.onlineProviders ?? (season.onlineProvider ? [season.onlineProvider] : [])
@@ -107,11 +107,17 @@ function testLiveProviderMappings() {
       `${seasonId} must not offer a local fallback beside a live provider`,
     )
   }
-  assert.equal(seasonManifest['ch2-s4']?.onlineProvider?.id, 'retrac')
-  assert.deepEqual(
-    seasonManifest['ch2-s4']?.onlineProviders?.map((provider) => provider.id),
-    ['retrac'],
-  )
+  // Retrac's current 14.60 client uses its signed Alea launcher. The archived
+  // 14.50 card must not offer Retrac, and the 14.60 card hands off to the
+  // official launcher instead of faking -alea-auth in Tellurium.
+  assert.equal(seasonManifest['ch2-s4']?.onlineProvider, undefined)
+  assert.equal(seasonManifest['ch2-s4']?.onlineProviders, undefined)
+  assert.equal(seasonManifest['ch2-s4-1460']?.buildVersion, '14.60')
+  assert.equal(seasonManifest['ch2-s4-1460']?.onlineProvider?.id, 'retrac-official')
+  const official = providerCatalog().find((provider) => provider.id === 'retrac-official')
+  assert.equal(official?.mode, 'external')
+  assert.equal(official?.auth, 'none')
+  assert.equal(official?.launchKind, 'official')
   const authSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'providerAuth.cjs'), 'utf8')
   assert.match(authSource, /authorisation_code/)
   assert.match(authSource, /anticheat_token/)

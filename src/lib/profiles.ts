@@ -243,7 +243,7 @@ export async function pickDefaultBuildsRoot(): Promise<string | null> {
 }
 
 export function profileKeyForBuild(build: Build): string {
-  return artKeyFor(build.season) ?? build.id
+  return build.profileKey ?? artKeyFor(build.season) ?? build.id
 }
 
 export function profileForBuild(profiles: ProfilesFile, build: Build): BuildProfile | undefined {

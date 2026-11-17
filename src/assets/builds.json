@@ -428,7 +428,7 @@
     },
     "ch2-s4": {
       "id": "ch2-s4",
-      "title": "Chapter 2 Season 4",
+      "title": "Chapter 2 Season 4 (14.50 archive)",
       "chapter": 2,
       "season": 4,
       "buildVersion": "14.50",
@@ -448,17 +448,46 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 28769341535,
-            "onlineProvider": {
-        "id": "retrac",
+      "sizeBytes": 28769341535
+    },
+
+    "ch2-s4-1460": {
+      "id": "ch2-s4-1460",
+      "title": "Chapter 2 Season 4 · 14.60",
+      "label": "Chapter 2 Season 4 · 14.60",
+      "short": "CH2 · S4 · 14.60",
+      "era": "2020 · nexus war on Retrac's signed 14.60 client",
+      "artKey": "ch2-s4",
+      "chapter": 2,
+      "season": 4,
+      "buildVersion": "14.60",
+      "sizeGB": 30.1,
+      "downloadUrl": "https://archive.org/download/fn-v14-archive/builds%2F14.60-CL-14786821.7z",
+      "runtimeProfile": "modern",
+      "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s4-1460",
+      "url": "https://archive.org/download/fn-v14-archive/builds%2F14.60-CL-14786821.7z",
+      "version": "14.60",
+      "servers": [
+        {
+          "name": "Retrac (official launcher)",
+          "url": "https://retrac.site/"
+        },
+        {
+          "name": "Carbon",
+          "url": "https://builds.cbn.lol/"
+        }
+      ],
+      "sizeBytes": 30100476531,
+      "onlineProvider": {
+        "id": "retrac-official",
         "name": "Retrac",
-        "label": "Retrac"
+        "label": "Retrac official launcher"
       },
       "onlineProviders": [
         {
-          "id": "retrac",
+          "id": "retrac-official",
           "name": "Retrac",
-          "label": "Retrac"
+          "label": "Retrac official launcher"
         }
       ]
     },

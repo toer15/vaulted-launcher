@@ -5269,6 +5269,29 @@ function registerIpc() {
     launchOnlineProvider(payload),
   )
 
+  // Retrac's 14.60 client is launched by its signed Alea launcher, not by the
+  // Tellurium redirect. Never fake -alea-auth or bypass the anticheat service.
+  ipcMain.handle('arc:open-provider-launcher', async (_event, providerId) => {
+    if (providerId !== 'retrac-official') {
+      return { opened: false, error: 'That provider does not use an official launcher.' }
+    }
+    const localAppData = process.env.LOCALAPPDATA || ''
+    const programFiles = process.env.PROGRAMFILES || ''
+    const candidates = [
+      path.join(localAppData, 'Programs', 'Retrac', 'Retrac.exe'),
+      path.join(localAppData, 'Retrac', 'Retrac.exe'),
+      path.join(programFiles, 'Retrac', 'Retrac.exe'),
+    ].filter(Boolean)
+    const executable = candidates.find((candidate) => fs.existsSync(candidate))
+    if (executable) {
+      const error = await shell.openPath(executable)
+      if (!error) return { opened: true, path: executable }
+      return { opened: false, error }
+    }
+    await shell.openExternal('https://retrac.site/')
+    return { opened: true, url: 'https://retrac.site/' }
+  })
+
   ipcMain.handle('arc:provider-catalog', () => providerCatalog())
 
   // Discord-gated communities are verified from their public invite metadata.

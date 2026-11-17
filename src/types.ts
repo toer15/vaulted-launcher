@@ -144,6 +144,8 @@ export interface Build {
   path: string
   /** resolved client executable inside the build */
   executable: string
+  /** distinct profile key for a second card on the same season, e.g. 14.60 */
+  profileKey?: string
   /** launcher/provider label inherited from the global profile settings */
   providerLabel?: string
   /** bundled provider that hosts this season directly */

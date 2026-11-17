@@ -332,8 +332,11 @@ export function ActiveBuildCard({
   const showLocateExisting = !busy && state !== 'running' && !isOnlineProvider
   const isInstalled = Boolean(installed?.[build.id])
   const signedOut = signedIn === false
+  // The official Retrac launcher owns its own sign-in and 14.60 client, so the
+  // archive card must never gate it behind a VAULTED account or a download.
+  const officialExternal = build?.onlineProvider?.id === 'retrac-official'
   const requiresSignIn =
-    signedOut && ['missing', 'paused', 'ready', 'error'].includes(state)
+    !officialExternal && signedOut && ['missing', 'paused', 'ready', 'error'].includes(state)
   // Only offer the account prompt for an installed season. A missing build
   // still uses the normal Download path, then asks for the account before Play.
   const accountConnectRequired = Boolean(
@@ -414,7 +417,14 @@ export function ActiveBuildCard({
     : []
 
   const statePrimary = {
-    missing: hasDownloadSource
+    missing: officialExternal
+      ? {
+          label: 'Open Retrac 14.60',
+          icon: Globe2,
+          background: 'linear-gradient(120deg, #7c8cff, #4752c4)',
+          glow: 'rgba(124,140,255,0.55)',
+        }
+      : hasDownloadSource
       ? {
           label: `Download ${season.label}${downloadSizeLabel ? ` · ${downloadSizeLabel}` : ''}`,
           icon: Download,
@@ -503,12 +513,14 @@ export function ActiveBuildCard({
   const primaryDisabled =
     !requiresSignIn &&
     !accountConnectRequired &&
-    (busy || (state === 'missing' && !hasDownloadSource))
+    (busy || (state === 'missing' && !hasDownloadSource && !officialExternal))
 
   const PrimaryIcon = primary.icon
 
   const statusText: Record<BuildState, string> = {
-    missing: hasDownloadSource
+    missing: officialExternal
+      ? 'This card opens Retrac’s official launcher. Its signed 14.60 client, Alea service and matchmaking stay inside Retrac.'
+      : hasDownloadSource
       ? downloadSizeLabel
         ? `Not on this PC yet — ${downloadSizeLabel} download.`
         : 'Not on this PC yet — download it to play.'
