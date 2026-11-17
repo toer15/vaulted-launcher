@@ -358,7 +358,10 @@ internal static class VaultedInjector
      */
     private static bool WaitForGameReady(PROCESS_INFORMATION process, string logPath, long logBaseline, string logFingerprint, DateTime processStartedUtc, out string detail)
     {
-        const int timeoutMs = 25000;
+        // Cold starts can spend well over a minute mounting the Era pak files
+        // and building the shader library. Wait for the client's own post-unpack
+        // marker rather than killing a healthy launch at 25 seconds.
+        const int timeoutMs = 90000;
         var started = Stopwatch.StartNew();
         while (started.ElapsedMilliseconds < timeoutMs)
         {

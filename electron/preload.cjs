@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('arc', {
   fetchCommunityServers: (query) => ipcRenderer.invoke('arc:community-servers', query),
   providerCatalog: () => ipcRenderer.invoke('arc:provider-catalog'),
   providerLiveStatus: () => ipcRenderer.invoke('arc:provider-live-status'),
+  providerBuilds: (providerId) => ipcRenderer.invoke('arc:provider-builds', providerId),
   providerAuth: {
     status: () => ipcRenderer.invoke('arc:provider-auth-status'),
     login: (providerId, method) => ipcRenderer.invoke('arc:provider-auth-login', providerId, method),

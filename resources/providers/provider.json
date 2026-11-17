@@ -30,6 +30,7 @@
       "exchangeCodePath": "/launcher/v1/game/exchange-code",
       "profilePath": "/launcher/v1/me",
       "global": true,
+      "dynamicSeasons": true,
       "seasons": [
         "ch1-s6"
       ]

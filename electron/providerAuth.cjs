@@ -14,6 +14,12 @@ const REALTIME_VERIFY_TIMEOUT_MS = 20_000
 const REALTIME_RECONNECT_BASE_MS = 1_000
 const REALTIME_RECONNECT_MAX_MS = 15_000
 const REALTIME_PROCESS_POLL_MS = 2_000
+// Era's gateway treats a socket as dead after 45s without traffic. Refresh
+// in-game presence well inside that window so a long matchmaking queue cannot
+// age the client out of the session.
+const REALTIME_KEEPALIVE_MS = 20_000
+const REALTIME_DEAD_AFTER_MS = 45_000
+const REALTIME_TOKEN_REFRESH_MARGIN_MS = 90_000
 const TOKEN_FILE = 'provider-auth.bin'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const BUILD_VERIFICATION_STATUS = 'build_verification_required'
@@ -160,6 +166,49 @@ function isVerificationFailure(error) {
 /** Provider sessions are global to an account, never to a season/build. */
 function normalizeProviderId(value) {
   return safeText(value, 120).toLowerCase().split(':')[0].trim()
+}
+
+/**
+ * Era returns a build's major version and, when available, a human season
+ * number. Convert both forms to the stable season key used by VAULTED's build
+ * catalogue so newly published seasons do not need another provider entry.
+ */
+function seasonIdForBuild(build) {
+  const name = safeText(build?.name, 160)
+  const version = safeText(build?.version, 40)
+  const versionMajor = Number(version.split('.')[0])
+  const declaredSeason = Number(build?.season)
+  const chapterSeason = /chapter\s+(\d{1,2})\s+season\s+(\d{1,2})/i.exec(name)
+  const miniSeason = /chapter\s+(\d{1,2})\s+mini\s+season\s+(\d{1,2})/i.exec(name)
+
+  if (miniSeason) return `ch${Number(miniSeason[1])}-mini${Number(miniSeason[2])}`
+  if (/fortnite\s+og/i.test(name)) return 'ch4-s5'
+  if (chapterSeason) return `ch${Number(chapterSeason[1])}-s${Number(chapterSeason[2])}`
+
+  const major = Number.isInteger(versionMajor) && versionMajor > 0
+    ? versionMajor
+    : Number.isInteger(declaredSeason) && declaredSeason > 0
+      ? declaredSeason
+      : 0
+  if (major >= 1 && major <= 10) return `ch1-s${major}`
+  if (major >= 11 && major <= 18) return `ch2-s${major - 10}`
+  if (major >= 19 && major <= 22) return `ch3-s${major - 18}`
+  if (major >= 23 && major <= 26) return `ch4-s${major - 22}`
+  if (major === 27) return 'ch4-s5'
+  if (major >= 28 && major <= 31) return `ch5-s${major - 27}`
+  if (major === 32) return 'ch5-remix'
+  if (major === 33 || major === 34) return `ch6-s${major - 32}`
+  if (major === 35) return 'ch6-mini1'
+  if (major === 36 || major === 37) return `ch6-s${major - 33}`
+  if (major === 38) return 'ch6-mini2'
+  if (major >= 39 && major <= 42) return `ch7-s${major - 38}`
+  if (major === 43) return 'ch7-mini1'
+  return ''
+}
+
+function buildList(payload) {
+  if (Array.isArray(payload?.data)) return payload.data
+  return Array.isArray(payload) ? payload : []
 }
 
 function escapeHtml(value) {
@@ -791,7 +840,7 @@ function createProviderAuth({
     }
   }
 
-  async function accessToken(config) {
+  async function accessToken(config, options = {}) {
     const store = readStore()
     const record = store[config.id]
     if (!record || typeof record !== 'object') {
@@ -799,7 +848,11 @@ function createProviderAuth({
     }
 
     const access = safeText(record.access_token, 8192)
-    if (access && (!Number.isFinite(record.expires_at) || record.expires_at - 60_000 > Date.now())) {
+    if (
+      options.force !== true &&
+      access &&
+      (!Number.isFinite(record.expires_at) || record.expires_at - 60_000 > Date.now())
+    ) {
       return access
     }
 
@@ -1109,6 +1162,10 @@ function createProviderAuth({
     }
 
     const season = seasonNumber(seasonId)
+    // Era's `season` field is not consistent across chapters (some builds use
+    // the chapter-relative number, others the lifetime season number). Match
+    // the same normalized key used by live discovery first.
+    const mappedSeason = available.filter((build) => seasonIdForBuild(build) === seasonId)
     const matchingSeason =
       season == null ? [] : available.filter((build) => Number(build?.season) === season)
     const exactVersion = String(version || '')
@@ -1116,7 +1173,12 @@ function createProviderAuth({
       ? available.filter((build) => String(build?.version || '') === exactVersion)
       : []
 
-    let candidates = matchingSeason.length > 0 ? matchingSeason : matchingVersion
+    let candidates =
+      mappedSeason.length > 0
+        ? mappedSeason
+        : matchingSeason.length > 0
+          ? matchingSeason
+          : matchingVersion
     if (candidates.length === 0) {
       candidates = available.filter((build) => {
         const name = String(build?.name || '').toLowerCase()
@@ -1450,6 +1512,11 @@ function createProviderAuth({
       let reconnectTimer = null
       let reconnectDelay = REALTIME_RECONNECT_BASE_MS
       let processTimer = null
+      let keepaliveTimer = null
+      let deadTimer = null
+      let keepaliveBusy = false
+      let socketVerified = false
+      let forceTokenRefresh = false
       let gamePid = null
       let nextRef = 0
 
@@ -1474,13 +1541,28 @@ function createProviderAuth({
         processTimer = null
       }
 
+      function clearKeepaliveTimer() {
+        if (!keepaliveTimer) return
+        clearInterval(keepaliveTimer)
+        keepaliveTimer = null
+      }
+
+      function clearDeadTimer() {
+        if (!deadTimer) return
+        clearTimeout(deadTimer)
+        deadTimer = null
+      }
+
       function close(reason = 'requested') {
         if (closed) return
         closed = true
         verified = false
+        socketVerified = false
         clearVerificationTimer()
         clearReconnectTimer()
         clearProcessTimer()
+        clearKeepaliveTimer()
+        clearDeadTimer()
         const current = socket
         socket = null
         try {
@@ -1489,6 +1571,70 @@ function createProviderAuth({
           /* already closed */
         }
         log(`closed (${reason})`)
+      }
+
+      /**
+       * The gateway pings every ~15s and treats 45s of silence as a dead link.
+       * Reset this watchdog on every frame so a half-open socket reconnects
+       * instead of silently leaving matchmaking registered to a dead session.
+       */
+      function touch() {
+        clearDeadTimer()
+        if (closed) return
+        deadTimer = setTimeout(() => {
+          deadTimer = null
+          if (closed) return
+          log(`no gateway traffic for ${REALTIME_DEAD_AFTER_MS}ms; reconnecting`)
+          try {
+            socket?.terminate()
+          } catch {
+            /* already gone */
+          }
+        }, REALTIME_DEAD_AFTER_MS)
+        deadTimer.unref?.()
+      }
+
+      async function keepaliveTick() {
+        if (closed || keepaliveBusy || !gamePid || !processIsAlive(gamePid)) return
+        keepaliveBusy = true
+        try {
+          // Refresh just before expiry so a reconnect also carries a valid
+          // token. The live socket stays authenticated; the next reconnect
+          // uses this rotated token.
+          const record = readStore()[config.id]
+          if (
+            Number.isFinite(record?.expires_at) &&
+            record.expires_at - Date.now() <= REALTIME_TOKEN_REFRESH_MARGIN_MS
+          ) {
+            try {
+              currentToken = await accessToken(config)
+            } catch (error) {
+              log(
+                `token refresh failed during in-game keepalive: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              )
+            }
+          }
+          if (closed || !socketVerified) return
+          sendInGamePresence()
+          const ws = socket
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            try {
+              ws.ping()
+            } catch {
+              /* the close handler will schedule the reconnect */
+            }
+          }
+        } finally {
+          keepaliveBusy = false
+        }
+      }
+
+      function startKeepalive() {
+        if (closed || keepaliveTimer) return
+        keepaliveTimer = setInterval(() => void keepaliveTick(), REALTIME_KEEPALIVE_MS)
+        keepaliveTimer.unref?.()
       }
 
       const session = {
@@ -1513,8 +1659,30 @@ function createProviderAuth({
             if (closed) return
             if (!processIsAlive(gamePid)) close(`game process ${gamePid} exited`)
           }, REALTIME_PROCESS_POLL_MS)
+          startKeepalive()
           sendInGamePresence()
           log(`tracking game process ${gamePid}`)
+        },
+        /**
+         * Drop the gateway socket and let the normal reconnect path build a
+         * fresh Era session. Used after the game's login kills all other
+         * account-client sessions, which otherwise leaves an open-looking but
+         * revoked launcher socket whose presence Era ignores.
+         */
+        refresh(reason = 'requested') {
+          if (closed) return
+          log(`refreshing gateway session (${reason})`)
+          clearDeadTimer()
+          const ws = socket
+          if (!ws) {
+            scheduleReconnect(reason)
+            return
+          }
+          try {
+            ws.close(1000)
+          } catch {
+            scheduleReconnect(reason)
+          }
         },
         close(reason = 'requested') {
           close(reason)
@@ -1536,9 +1704,12 @@ function createProviderAuth({
         settled = true
         closed = true
         verified = false
+        socketVerified = false
         clearVerificationTimer()
         clearReconnectTimer()
         clearProcessTimer()
+        clearKeepaliveTimer()
+        clearDeadTimer()
         const current = socket
         socket = null
         try {
@@ -1557,6 +1728,7 @@ function createProviderAuth({
         if (settled) return
         settled = true
         verified = true
+        socketVerified = true
         clearVerificationTimer()
         reconnectDelay = REALTIME_RECONNECT_BASE_MS
         if (reply && typeof reply === 'object') {
@@ -1580,10 +1752,17 @@ function createProviderAuth({
         reconnectTimer = setTimeout(async () => {
           reconnectTimer = null
           if (closed) return
+          const force = forceTokenRefresh
+          forceTokenRefresh = false
           try {
-            currentToken = await accessToken(config)
+            currentToken = await accessToken(config, { force })
           } catch (error) {
-            log(`token refresh failed during reconnect: ${error instanceof Error ? error.message : error}`)
+            const message = error instanceof Error ? error.message : String(error)
+            log(`token refresh failed during reconnect: ${message}`)
+            if (force && /expired|sign in again/i.test(message)) {
+              close('session expired')
+              return
+            }
             scheduleReconnect('token refresh failed')
             return
           }
@@ -1612,7 +1791,7 @@ function createProviderAuth({
        */
       function sendInGamePresence() {
         const ws = socket
-        if (closed || !ws || ws.readyState !== WebSocket.OPEN) return
+        if (closed || !socketVerified || !ws || ws.readyState !== WebSocket.OPEN) return
         try {
           ws.send(
             JSON.stringify({
@@ -1656,6 +1835,7 @@ function createProviderAuth({
           return
         }
         socket = ws
+        socketVerified = false
         let sent = false
         const ref = String(++nextRef)
         const isCurrent = () => id === connectionId && socket === ws && !closed
@@ -1677,14 +1857,21 @@ function createProviderAuth({
 
         ws.on('open', () => {
           if (!isCurrent()) return
+          touch()
           log('gateway socket open')
         })
         ws.on('ping', () => {
           // ws has already queued the matching pong.
-          if (isCurrent()) log('gateway ping (pong sent)')
+          if (!isCurrent()) return
+          touch()
+          log('gateway ping (pong sent)')
+        })
+        ws.on('pong', () => {
+          if (isCurrent()) touch()
         })
         ws.on('message', (raw) => {
           if (!isCurrent()) return
+          touch()
           let frame
           try {
             frame = JSON.parse(raw.toString())
@@ -1693,6 +1880,21 @@ function createProviderAuth({
           }
           if (frame?.op === 'ping' || frame?.op === 'heartbeat') {
             replyToHeartbeat(ws, frame)
+            return
+          }
+          if (frame?.op === 'session.revoked') {
+            const reason = safeText(frame.d?.reason, 40) || 'revoked'
+            if (reason === 'replaced' || reason === 'logout' || reason === 'banned') {
+              close(`session ${reason}`)
+            } else {
+              // token_revoked: reconnect with a freshly rotated access token.
+              forceTokenRefresh = true
+              try {
+                ws.close(1000)
+              } catch {
+                /* already closed */
+              }
+            }
             return
           }
           if (frame?.op === 'welcome' && !sent) {
@@ -1722,6 +1924,7 @@ function createProviderAuth({
           }
           if (settled) {
             verified = true
+            socketVerified = true
             clearVerificationTimer()
             reconnectDelay = REALTIME_RECONNECT_BASE_MS
             // A reconnect starts a new gateway session. Re-assert the game
@@ -1743,12 +1946,19 @@ function createProviderAuth({
           if (socket === ws) socket = null
           if (!isCurrent() && (closed || id !== connectionId)) return
           clearVerificationTimer()
+          clearDeadTimer()
+          socketVerified = false
           const detail = `${code || 'unknown'}${reason ? ` ${reason}` : ''}`
           if (closed) return
           if (!settled) {
             fail(new Error(`${config.label} closed the game-file check connection (${detail}).`))
             return
           }
+          if (code === 4409) {
+            close('session replaced on another computer')
+            return
+          }
+          if (code === 4401 || code === 4403) forceTokenRefresh = true
           scheduleReconnect(detail)
         })
       }
@@ -2209,6 +2419,45 @@ function createProviderAuth({
     // Keep the verified code for the launch that normally follows sign-in, so
     // the immediate Play/auto-launch does not spend a second exchange request.
     cacheVerificationCode(config, build, result)
+  }
+
+  /**
+   * Live builds available to the signed-in provider account. The renderer
+   * uses this only to widen a provider's supported season keys; launch and
+   * manifest resolution still go through the authenticated main process.
+   */
+  async function listBuilds(providerId) {
+    const config = providerConfig(providerId)
+    const token = await accessToken(config)
+    const payload = await requestJson(
+      new URL(config.buildsPath, config.apiBaseUrl),
+      {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+          'User-Agent': providerUserAgent,
+        },
+      },
+      `${config.label} could not list its live builds.`,
+    )
+    const seen = new Set()
+    const builds = []
+    for (const build of buildList(payload)) {
+      const id = safeText(build?.id, 64)
+      const seasonId = seasonIdForBuild(build)
+      if (!UUID.test(id) || !seasonId || build?.access === 'restricted' || seen.has(seasonId)) continue
+      seen.add(seasonId)
+      builds.push({
+        id,
+        name: safeText(build?.name, 160) || safeText(build?.version, 40) || 'Era build',
+        version: safeText(build?.version, 40),
+        seasonId,
+        ...(Number.isFinite(Number(build?.size_bytes)) && Number(build.size_bytes) > 0
+          ? { sizeBytes: Number(build.size_bytes) }
+          : {}),
+      })
+    }
+    return builds.sort((a, b) => a.seasonId.localeCompare(b.seasonId))
   }
 
   async function buildManifest(providerId, options = {}) {
@@ -2818,6 +3067,7 @@ function createProviderAuth({
     logout,
     exchangeCode,
     verifyAccount,
+    listBuilds,
     buildManifest,
     verifyBuildManifest,
     resourceHeaders,

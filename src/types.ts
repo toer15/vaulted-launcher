@@ -52,9 +52,19 @@ export interface GlobalBackend extends OnlineProviderConfig {
   /** global_live means VAULTED signs in and fetches game codes natively */
   mode?: 'download' | 'global_live'
   global: boolean
+  /** discover additional live seasons from the provider account at runtime */
+  dynamicSeasons?: boolean
   supportedSeasons: string[]
   /** refreshed by the main-process health poll */
   live?: ProviderLiveStatus
+}
+
+export interface ProviderBuild {
+  id: string
+  name: string
+  version: string
+  seasonId: string
+  sizeBytes?: number
 }
 
 export interface ProviderAuthStatus {

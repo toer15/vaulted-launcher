@@ -184,6 +184,7 @@ function catalogData() {
       verificationUrl:
         typeof entry.verificationUrl === 'string' ? entry.verificationUrl.trim() : '',
       global: entry.global !== false,
+      dynamicSeasons: entry.dynamicSeasons === true,
       seasons,
       redirectDllName:
         typeof entry.redirectDllName === 'string' && SAFE_DLL_NAME.test(entry.redirectDllName)
@@ -219,6 +220,7 @@ function providerCatalog() {
     auth: entry.auth,
     mode: entry.mode,
     global: entry.global,
+    dynamicSeasons: entry.dynamicSeasons,
     supportedSeasons: entry.seasons,
   }))
 }
@@ -359,6 +361,7 @@ function providerProfile(id) {
       (typeof raw?.signInUrl === 'string' && raw.signInUrl.trim()) || catalogEntry?.signInUrl || '',
     website: (typeof raw?.website === 'string' && raw.website.trim()) || catalogEntry?.website || '',
     supportedSeasons: catalogEntry?.seasons || [],
+    dynamicSeasons: catalogEntry?.dynamicSeasons === true,
     global: catalogEntry?.global === true,
   }
 }

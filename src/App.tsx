@@ -107,6 +107,7 @@ import type {
   GlobalBackend,
   LaunchPhase,
   ProviderAuthStatus,
+  ProviderBuild,
   ProviderLiveStatus,
   SeasonInfo,
   ToastMessage,
@@ -377,6 +378,7 @@ export default function App() {
   const [communityServers, setCommunityServers] = useState<CommunityServer[]>([])
   const [providerCatalog, setProviderCatalog] = useState<GlobalBackend[]>([])
   const [providerLiveStatus, setProviderLiveStatus] = useState<Record<string, ProviderLiveStatus>>({})
+  const [providerBuilds, setProviderBuilds] = useState<Record<string, ProviderBuild[]>>({})
   const [manualServers, setManualServers] = useState<Record<string, ManualServerRecord[]>>(() =>
     readManualServers(),
   )
@@ -397,8 +399,17 @@ export default function App() {
         .filter(
           (provider) => provider.global && provider.auth === 'oauth' && provider.mode === 'global_live',
         )
-        .map((provider) => ({ ...provider, live: providerLiveStatus[provider.id] })),
-    [providerCatalog, providerLiveStatus],
+        .map((provider) => {
+          const discovered =
+            provider.dynamicSeasons && providerAuthStatus[provider.id]?.signedIn
+              ? providerBuilds[provider.id] ?? []
+              : []
+          const supportedSeasons = Array.from(
+            new Set([...provider.supportedSeasons, ...discovered.map((build) => build.seasonId)]),
+          )
+          return { ...provider, supportedSeasons, live: providerLiveStatus[provider.id] }
+        }),
+    [providerAuthStatus, providerBuilds, providerCatalog, providerLiveStatus],
   )
   const providerVerified = useMemo(
     () => verifiedOAuthProviders.some((provider) => providerAuthStatus[provider.id]?.signedIn),
@@ -962,6 +973,44 @@ export default function App() {
   useEffect(() => {
     void refreshProviderAuthStatus()
   }, [refreshProviderAuthStatus])
+
+  // Era publishes its live build list per account. Merge those season keys
+  // into the catalog only after the provider is signed in; the renderer never
+  // gets the token, manifest or any provider URL.
+  const dynamicProviderIds = useMemo(
+    () =>
+      providerCatalog
+        .filter((provider) => provider.dynamicSeasons && provider.auth === 'oauth' && provider.mode === 'global_live')
+        .map((provider) => provider.id),
+    [providerCatalog],
+  )
+  const signedDynamicProviderKey = dynamicProviderIds
+    .filter((providerId) => providerAuthStatus[providerId]?.signedIn)
+    .join('|')
+  useEffect(() => {
+    if (!signedDynamicProviderKey) {
+      setProviderBuilds({})
+      return
+    }
+    if (!window.arc?.providerBuilds) return
+    let cancelled = false
+    const providerIds = signedDynamicProviderKey.split('|')
+    void Promise.all(
+      providerIds.map(async (providerId) => {
+        try {
+          const builds = await window.arc!.providerBuilds!(providerId)
+          return [providerId, Array.isArray(builds) ? builds : []] as const
+        } catch {
+          return [providerId, []] as const
+        }
+      }),
+    ).then((entries) => {
+      if (!cancelled) setProviderBuilds(Object.fromEntries(entries))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [signedDynamicProviderKey])
 
   // Switching seasons or a dropdown row is a user-visible selection change:
   // refresh immediately instead of waiting for the next 10-second tick.

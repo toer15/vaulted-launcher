@@ -1474,7 +1474,13 @@ function normalizeProviderAuthCode(value) {
   return /^[A-Za-z0-9._~+/=-]+$/.test(code) ? code : ''
 }
 
-function providerFortniteArgs(backendUrl, authCode = '') {
+function providerFortniteArgs(backendUrl, authCode = '', providerId = '') {
+  // Era's official launcher marks the game as a backend client. Its native
+  // era.dll uses that launch shape when registering the process for
+  // matchmaking; without -frombe the game can load the DLL but Era still
+  // answers the athena profile and matchmaking with "The Era client isn't
+  // running."
+  const era = providerId === 'era'
   const args = [
     '-epicapp=Fortnite',
     '-epicenv=Prod',
@@ -1484,7 +1490,8 @@ function providerFortniteArgs(backendUrl, authCode = '') {
     '-nobe',
     '-nouac',
     '-nocodeguards',
-    '-fromfl=eac',
+    `-fromfl=${era ? 'be' : 'eac'}`,
+    ...(era ? ['-frombe'] : []),
     `-caldera=${LEGACY_CALDERA}`,
     '-fltoken=7a848a93a74ba68876c36C1c',
     '-skippatchcheck',
@@ -1597,7 +1604,7 @@ function launchInjectedGame(payload, options = {}) {
     const timer = setTimeout(() => {
       finishError('The redirect DLL timed out while attaching to Fortnite.')
       void killProcessTree(child.pid)
-    }, 30_000)
+    }, 120_000)
 
     child.stdout?.on('data', (chunk) => {
       appendLog('stdout', chunk)
@@ -4740,6 +4747,8 @@ async function launchOnlineProvider(payload) {
         upstream: profile.backendUrl,
         accountId: account.accountId || '',
         displayName: account.displayName || '',
+        onSessionKilled: () =>
+          realtimeSession?.refresh('game login killed the launcher session'),
       })
       backendUrl = eraBridge.url
     } catch (error) {
@@ -4759,7 +4768,7 @@ async function launchOnlineProvider(payload) {
     launched = await launchInjectedGame(launchPayload, {
       injector: runtime.injector,
       dll: redirectDll,
-      args: providerFortniteArgs(backendUrl, authCode),
+      args: providerFortniteArgs(backendUrl, authCode, providerId),
       env: {
         VAULTED_PROVIDER_ID: providerId,
         // Retained for diagnostics; the redirect itself receives -backend= below.
@@ -4792,10 +4801,11 @@ async function launchOnlineProvider(payload) {
   realtimeSession?.attachGameProcess(launched.pid)
 
   if (eraClientDll) {
-    // Let the redirect DLL finish unpacking and take the login request before
-    // the native client joins the same process. Loading it at process start
-    // races the game's network stack; eight seconds is after login but before
-    // Era's first lobby verification in the live 6.21 build.
+    // launchInjectedGame resolves only after the packed client has unpacked and
+    // written its ready marker. The Era client must join before the game sends
+    // its exchange-code login and registration; waiting even a few seconds can
+    // miss that request and makes matchmaking answer "The Era client isn't
+    // running."
     eraClientTimer = setTimeout(() => {
       void injectDll(launched.pid, eraClientDll).catch((error) => {
         console.warn(
@@ -4804,7 +4814,7 @@ async function launchOnlineProvider(payload) {
           }`,
         )
       })
-    }, 8_000)
+    }, 250)
     eraClientTimer.unref?.()
   }
 
@@ -5169,6 +5179,10 @@ function registerIpc() {
   // Backend health is deliberately checked in main, where the provider catalog
   // is trusted and the renderer cannot turn this into an arbitrary URL fetch.
   ipcMain.handle('arc:provider-live-status', () => fetchProviderLiveStatuses(providerCatalog()))
+
+  // Live build discovery is authenticated in main. The renderer supplies only
+  // a provider id, never a URL or a season/build id.
+  ipcMain.handle('arc:provider-builds', (_event, providerId) => providerAuth.listBuilds(providerId))
 
   const broadcastProviderAuth = (status) => {
     if (!status?.providerId) return

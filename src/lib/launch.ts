@@ -4,6 +4,7 @@ import type {
   BuildExitInfo,
   BuildVerifyReport,
   GlobalBackend,
+  ProviderBuild,
   OnlineProviderConfig,
   ProviderAuthStatus,
   ProviderLiveStatus,
@@ -250,6 +251,8 @@ export interface LauncherBridge {
   providerCatalog?(): Promise<GlobalBackend[]>
   /** health and population sampled from the configured global backends */
   providerLiveStatus?(): Promise<Record<string, ProviderLiveStatus>>
+  /** live provider builds for providers with runtime season discovery */
+  providerBuilds?(providerId: string): Promise<ProviderBuild[]>
   /** native provider account link for global_live backends */
   providerAuth?: {
     status(): Promise<Record<string, ProviderAuthStatus>>

@@ -13,10 +13,27 @@ const REQUEST_TIMEOUT_MS = 60_000
  * every request to Era and keeps the small account/verify reads stable after
  * the backend stops treating the launcher's own OAuth token as a game client.
  */
-function createEraBridge({ upstream, accountId, displayName }) {
+function createEraBridge({ upstream, accountId, displayName, onSessionKilled }) {
   const target = new URL(upstream)
   const transport = target.protocol === 'http:' ? http : https
   const accountCache = new Map()
+  let sessionKillNotified = false
+
+  /**
+   * The game signs in with `sessions/kill?killType=OTHERS_ACCOUNT_CLIENT_SERVICE`,
+   * which revokes the launcher's gateway session too. Tell the launcher after
+   * that request finishes so it can reconnect and re-assert presence instead of
+   * sending heartbeats on a revoked socket.
+   */
+  const notifySessionKilled = () => {
+    if (sessionKillNotified) return
+    sessionKillNotified = true
+    try {
+      onSessionKilled?.()
+    } catch {
+      /* a bridge callback must not break the game's login request */
+    }
+  }
 
   const server = http.createServer((request, response) => {
     const chunks = []
@@ -75,6 +92,13 @@ function createEraBridge({ upstream, accountId, displayName }) {
           const responseHeaders = { ...upstreamResponse.headers }
           delete responseHeaders.connection
           delete responseHeaders['transfer-encoding']
+
+          if (
+            pathname === '/account/api/oauth/sessions/kill' &&
+            String(request.method || '').toUpperCase() === 'DELETE'
+          ) {
+            upstreamResponse.once('end', notifySessionKilled)
+          }
 
           const cacheable = pathname.startsWith('/account/api/public/account')
           if (!cacheable) {
