@@ -450,16 +450,11 @@
       ],
       "sizeBytes": 28769341535,
             "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
+        "id": "retrac",
+        "name": "Retrac",
+        "label": "Retrac"
       },
       "onlineProviders": [
-        {
-          "id": "reboot",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        },
         {
           "id": "retrac",
           "name": "Retrac",

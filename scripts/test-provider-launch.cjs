@@ -23,8 +23,9 @@ const {
   providerFortniteArgs,
   providerLaunchDiagnostic,
 } = require('../electron/providerLaunchArgs.cjs')
-const { createProviderAuth } = require('../electron/providerAuth.cjs')
+const { createProviderAuth, retracCodeFromMessage } = require('../electron/providerAuth.cjs')
 const { providerCatalog, providerProfile } = require('../electron/onlineProviders.cjs')
+const seasonManifest = require('../src/assets/builds.json').seasons
 
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-provider-launch-'))
 const tokenFile = path.join(temporaryRoot, 'provider-auth.bin')
@@ -79,6 +80,63 @@ function jsonResponse(status, body, raw = null) {
     headers: { 'content-type': 'application/json' },
     text: async () => (raw === null ? JSON.stringify(body) : raw),
   }
+}
+
+function testLiveProviderMappings() {
+  // A season with a real hosted backend must never silently default to a
+  // lobby-only local backend such as Neonite. The hosted providers serve the
+  // seasons mapped to them; local providers are only for unmapped seasons.
+  const liveProviders = new Set(['era', 'stellar', 'ezfn', 'retrac'])
+  const catalogById = new Map(providerCatalog().map((provider) => [provider.id, provider]))
+  for (const [seasonId, season] of Object.entries(seasonManifest)) {
+    const providers = season.onlineProviders ?? (season.onlineProvider ? [season.onlineProvider] : [])
+    const live = providers.filter((provider) => liveProviders.has(provider.id))
+    if (live.length === 0) continue
+    assert.equal(
+      season.onlineProvider?.id,
+      live[0].id,
+      `${seasonId} must default to its live provider ${live[0].id}`,
+    )
+    const localFallback = providers.filter((provider) => {
+      const entry = catalogById.get(provider.id)
+      return entry?.mode === 'download' && entry?.auth === 'none'
+    })
+    assert.deepEqual(
+      localFallback,
+      [],
+      `${seasonId} must not offer a local fallback beside a live provider`,
+    )
+  }
+  assert.equal(seasonManifest['ch2-s4']?.onlineProvider?.id, 'retrac')
+  assert.deepEqual(
+    seasonManifest['ch2-s4']?.onlineProviders?.map((provider) => provider.id),
+    ['retrac'],
+  )
+  const authSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'providerAuth.cjs'), 'utf8')
+  assert.match(authSource, /authorisation_code/)
+  assert.match(authSource, /anticheat_token/)
+  assert.match(
+    authSource,
+    /RETRAC_LAUNCHER_SOCKET = 'wss:\/\/launcher-service-prod\.retr\.ac\/websocket\/launcher'/,
+  )
+}
+
+function testRetracCodeReply() {
+  const current = retracCodeFromMessage({
+    id: 'code',
+    authorisation_code: 'a17-current-code',
+    anticheat_token: 'current-anticheat-token',
+  })
+  assert.deepEqual(current, {
+    code: 'a17-current-code',
+    anticheatToken: 'current-anticheat-token',
+  })
+  assert.deepEqual(retracCodeFromMessage({ id: 'code', code: 'legacy-code' }), {
+    code: 'legacy-code',
+    anticheatToken: '',
+  })
+  assert.equal(retracCodeFromMessage({ id: 'code', authorisation_code: '' }), null)
+  assert.equal(retracCodeFromMessage({ id: 'code', code: '' }), null)
 }
 
 function testLaunchArguments() {
@@ -278,6 +336,8 @@ async function testStellarExchangeTimeout() {
 }
 
 async function main() {
+  testLiveProviderMappings()
+  testRetracCodeReply()
   writeTokenStore()
   testLaunchArguments()
   await testStellarExchangeSuccess()

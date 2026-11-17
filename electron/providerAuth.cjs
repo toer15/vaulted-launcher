@@ -40,6 +40,21 @@ function safeText(value, limit = 300) {
   return typeof value === 'string' ? value.trim().slice(0, limit) : ''
 }
 
+/**
+ * Retrac's code reply uses `authorisation_code`/`anticheat_token`; older
+ * launchers used `code`. Keep both shapes so a previous server revision does
+ * not turn a valid session into an empty-code failure.
+ */
+function retracCodeFromMessage(message) {
+  if (!message || typeof message !== 'object') return null
+  const code = safeText(message.authorisation_code ?? message.code, 4096)
+  if (!code) return null
+  return {
+    code,
+    anticheatToken: safeText(message.anticheat_token, 8192),
+  }
+}
+
 /** Keep provider/account errors useful without echoing bearer tokens to logs. */
 function redactDiagnosticText(value, secrets = []) {
   let text = safeText(value, 500)
@@ -2746,12 +2761,12 @@ function createProviderAuth({
           return
         }
         if (message.id !== 'code') return
-        const code = safeText(message.code, 4096)
-        if (!code) {
+        const response = retracCodeFromMessage(message)
+        if (!response) {
           finish(new Error(`${config.label} returned an empty game code.`))
           return
         }
-        finish(null, code)
+        finish(null, response)
       })
       socket.once('error', (error) => {
         finish(new Error(`${config.label} launcher socket failed: ${error instanceof Error ? error.message : String(error)}`))
@@ -2840,10 +2855,14 @@ function createProviderAuth({
     // Era's build-list and realtime build.verify flow. Keep their handshakes
     // isolated so the proven Era path above is unchanged.
     if (config.id === 'retrac') {
-      const code = await withSessionRefresh((fresh) => retracGameCode(config, fresh))
-      const launchToken = await accessToken(config).catch(() => token)
+      const handshake = await withSessionRefresh((fresh) => retracGameCode(config, fresh))
+      // The game expects the one-time code and the anticheat token issued with
+      // it. The OAuth access token is only the launcher-socket credential and
+      // is not interchangeable with Retrac's anticheat token.
+      const launchToken =
+        handshake.anticheatToken || (await accessToken(config).catch(() => token))
       const result = {
-        code,
+        code: handshake.code,
         expiresIn: 300,
         buildId: '',
         buildName: safeText(`${seasonId || 'Retrac'} ${version || ''}`, 120),
@@ -3896,4 +3915,4 @@ function createProviderAuth({
   }
 }
 
-module.exports = { createProviderAuth }
+module.exports = { createProviderAuth, retracCodeFromMessage }
