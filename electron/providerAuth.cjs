@@ -169,6 +169,13 @@ function createProviderAuth({
   getParentWindow,
   listProviders,
   profileForId,
+  // Injectable only so the focused verification harness can use local fakes
+  // and short poll intervals. Production callers keep the real fetch/timings.
+  fetchImpl = fetch,
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
+  loginTimeoutMs = LOGIN_TIMEOUT_MS,
+  verificationTimeoutMs = VERIFICATION_TIMEOUT_MS,
+  verificationPollMs = VERIFICATION_POLL_MS,
 }) {
   if (!app || !safeStorage || !BrowserWindow) throw new Error('Provider authentication requires Electron.')
   if (typeof listProviders !== 'function' || typeof profileForId !== 'function') {
@@ -179,6 +186,9 @@ function createProviderAuth({
   const activeLogins = new Map()
   /** providerId|buildId -> short-lived code created by the post-login check */
   const verificationCodes = new Map()
+  /** providerId|buildId -> verification URL/diagnostic awaiting an explicit Verify Account click */
+  const pendingVerifications = new Map()
+  const loggedVerificationResponses = new Set()
   let tokenCache = null
 
   function tokenFilePath() {
@@ -322,8 +332,12 @@ function createProviderAuth({
       buildsPath: safePath(profile.buildsPath, '/launcher/v1/builds'),
       exchangeCodePath: safePath(profile.exchangeCodePath, '/launcher/v1/game/exchange-code'),
       profilePath: safeText(profile.profilePath, 220),
-      verificationUrl:
-        httpsUrl(profile.verificationUrl) || (profile.id === 'era' ? 'https://discord.gg/erafn' : ''),
+      // Era's game host is used for the silent token/profile refresh. It is
+      // never opened as a browser or embedded invite page.
+      gameBaseUrl:
+        httpsUrl(profile.backendUrl) ||
+        httpsUrl(profile.gameBaseUrl) ||
+        (id === 'era' ? 'https://game.erafn.dev' : ''),
       supportedSeasons: Array.isArray(profile.supportedSeasons)
         ? profile.supportedSeasons.filter((season) => /^ch\d{1,2}(?:-s\d{1,2}|-remix|-mini\d+)$/.test(season))
         : [],
@@ -335,15 +349,16 @@ function createProviderAuth({
     const id = normalizeProviderId(providerId)
     const record = readStore()[id]
     if (!record || typeof record !== 'object') {
-            return {
+      return {
         providerId: id,
         signedIn: false,
-      displayName: null,
-      avatarUrl: null,
-      accountId: null,
-      expiresAt: null,
+        displayName: null,
+        avatarUrl: null,
+        accountId: null,
+        expiresAt: null,
+        verificationCompleted: false,
+      }
     }
-  }
     const signedIn = Boolean(
       safeText(record.refresh_token, 4096) ||
         (safeText(record.access_token, 8192) &&
@@ -356,6 +371,7 @@ function createProviderAuth({
       avatarUrl: safeText(record.avatar_url, 2048) || null,
       accountId: safeText(record.account_id, 120) || null,
       expiresAt: Number.isFinite(record.expires_at) ? record.expires_at : null,
+      verificationCompleted: record.verificationCompleted === true,
     }
   }
 
@@ -370,9 +386,9 @@ function createProviderAuth({
 
   async function fetchWithTimeout(url, options = {}) {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+    const timer = setTimeout(() => controller.abort(), requestTimeoutMs)
     try {
-      return await fetch(url, { ...options, signal: controller.signal })
+      return await fetchImpl(url, { ...options, signal: controller.signal })
     } catch (error) {
       if (error?.name === 'AbortError') throw new Error('The provider did not answer in time. Try again.')
       throw new Error(`Could not reach the provider: ${error instanceof Error ? error.message : String(error)}`)
@@ -381,10 +397,38 @@ function createProviderAuth({
     }
   }
 
-  function responseError(json, status, fallback) {
+  function responseHeaderSnapshot(headers) {
+    const snapshot = {}
+    try {
+      if (headers && typeof headers.forEach === 'function') {
+        headers.forEach((value, key) => {
+          snapshot[String(key)] = /^(?:set-cookie|authorization)$/i.test(String(key))
+            ? '[redacted]'
+            : String(value)
+        })
+      } else if (headers && typeof headers.entries === 'function') {
+        for (const [key, value] of headers.entries()) {
+          snapshot[String(key)] = /^(?:set-cookie|authorization)$/i.test(String(key))
+            ? '[redacted]'
+            : String(value)
+        }
+      } else if (headers && typeof headers === 'object') {
+        for (const [key, value] of Object.entries(headers)) {
+          snapshot[String(key)] = /^(?:set-cookie|authorization)$/i.test(String(key))
+            ? '[redacted]'
+            : String(value)
+        }
+      }
+    } catch {
+      /* diagnostics must never hide the provider error */
+    }
+    return snapshot
+  }
+
+  function responseError(json, status, fallback, headers = null) {
     const detail =
       (json && typeof json.error === 'object' && (json.error.message || json.error.detail)) ||
-      (typeof json?.error === 'string' && json.error) ||
+      (typeof json?.error === 'string' && (json?.message || json?.error)) ||
       json?.errorMessage ||
       json?.message ||
       json?.detail ||
@@ -392,28 +436,79 @@ function createProviderAuth({
     const error = new Error(String(detail || `The provider answered HTTP ${status}.`))
     error.status = status
     const accountStatus = accountStatusFor(json, status, String(detail || ''))
+    const requiredAction =
+      json?.required_action ??
+      json?.requiredAction ??
+      json?.details?.required_action ??
+      (json?.error && typeof json.error === 'object' ? json.error.required_action : null)
+    const requiredActionUrl =
+      typeof requiredAction === 'string'
+        ? requiredAction
+        : requiredAction && typeof requiredAction === 'object'
+          ? requiredAction.verification_url || requiredAction.verificationUrl || requiredAction.url
+          : ''
     if (accountStatus) {
       error.code = accountStatus
       error.accountStatus = accountStatus
       error.verificationRequired = isVerificationStatus(accountStatus)
     }
     // Some providers attach the exact interactive verification destination to
-    // the rejection. Use it when it is a safe HTTPS URL; otherwise the provider
-    // profile supplies the default page.
-    const verificationUrl = httpsUrl(
+    // the rejection. Use only that safe HTTPS URL; never fall back to a
+    // bundled Discord invite.
+    const suppliedVerificationUrl = verificationUrl(
       json?.verification_url ||
         json?.verificationUrl ||
         json?.details?.verification_url ||
         json?.details?.verificationUrl ||
+        requiredActionUrl ||
         (json?.error && typeof json.error === 'object'
           ? json.error.verification_url || json.error.verificationUrl
           : ''),
     )
-    if (verificationUrl) error.verificationUrl = verificationUrl
+    if (suppliedVerificationUrl) error.verificationUrl = suppliedVerificationUrl
+    if (accountStatus && isVerificationStatus(accountStatus)) {
+      error.verificationDetails = {
+        status,
+        headers: responseHeaderSnapshot(headers),
+        error: json?.error ?? null,
+        message: detail,
+        verification_url: suppliedVerificationUrl || null,
+        required_action: requiredAction || null,
+        body: json ?? null,
+      }
+    }
     return error
   }
 
-  async function requestJson(url, options = {}, fallback = 'The provider rejected the request.') {
+  function logVerificationResponse(config, error) {
+    if (!error?.verificationDetails) return
+    const details = error.verificationDetails
+    let key
+    try {
+      key = `${config.id}|${details.status}|${JSON.stringify(details.body)}`
+    } catch {
+      key = `${config.id}|${details.status}|${details.message}`
+    }
+    if (loggedVerificationResponses.has(key)) return
+    loggedVerificationResponses.add(key)
+    if (loggedVerificationResponses.size > 20) {
+      const oldest = loggedVerificationResponses.values().next().value
+      if (oldest) loggedVerificationResponses.delete(oldest)
+    }
+    try {
+      console.warn(
+        `[provider-auth] ${config.label} verification response: ${JSON.stringify(details)}`,
+      )
+    } catch {
+      /* logging must not affect the account flow */
+    }
+  }
+
+  async function requestJsonWithMeta(
+    url,
+    options = {},
+    fallback = 'The provider rejected the request.',
+  ) {
     const response = await fetchWithTimeout(url, options)
     const text = await response.text()
     let json = null
@@ -421,12 +516,16 @@ function createProviderAuth({
       try {
         json = JSON.parse(text)
       } catch {
-        if (!response.ok) throw responseError(null, response.status, fallback)
+        if (!response.ok) throw responseError(null, response.status, fallback, response.headers)
         throw new Error('The provider returned an unreadable response. Try again.')
       }
     }
-    if (!response.ok) throw responseError(json, response.status, fallback)
-    return json
+    if (!response.ok) throw responseError(json, response.status, fallback, response.headers)
+    return { json, headers: response.headers }
+  }
+
+  async function requestJson(url, options = {}, fallback = 'The provider rejected the request.') {
+    return (await requestJsonWithMeta(url, options, fallback)).json
   }
 
   async function tokenRequest(config, params) {
@@ -467,12 +566,15 @@ function createProviderAuth({
       display_name: safeText(previous.display_name, 120) || null,
       avatar_url: httpsUrl(previous.avatar_url),
       account_id: safeText(previous.account_id, 120) || null,
-      // Remember how the OAuth session was created so an interactive Era
-      // verification step can open the account-link page for Google sessions
-      // and the Discord server page for Discord sessions.
+      // Keep the OAuth method for diagnostics. Verification pages are only
+      // taken from the provider's verification_required response, never from
+      // this method or a bundled invite.
       auth_method: ['discord', 'google'].includes(previous.auth_method)
         ? previous.auth_method
         : null,
+      // Persist account-wide verified state so later Play clicks never force
+      // the Discord/account-link step again.
+      verificationCompleted: previous.verificationCompleted === true,
       updated_at: Date.now(),
     }
   }
@@ -485,6 +587,25 @@ function createProviderAuth({
     } catch {
       return null
     }
+  }
+
+  function verificationUrl(value) {
+    const url = httpsUrl(value)
+    if (!url) return null
+    try {
+      const host = new URL(url).hostname.toLowerCase()
+      if (
+        host === 'discord.com' ||
+        host === 'discord.gg' ||
+        host.endsWith('.discord.com') ||
+        host.endsWith('.discord.gg')
+      ) {
+        return null
+      }
+    } catch {
+      return null
+    }
+    return url
   }
 
   function firstText(...values) {
@@ -628,6 +749,85 @@ function createProviderAuth({
     return next.access_token
   }
 
+  /**
+   * Force a rotating refresh-token grant so a Discord/Google account linked on
+   * Era after login is picked up without any browser window. The existing
+   * access token is kept if the refresh endpoint is temporarily unavailable.
+   */
+  async function refreshAccessToken(config, record) {
+    const refresh = safeText(record?.refresh_token, 4096)
+    if (!refresh) return null
+    try {
+      const token = await tokenRequest(config, {
+        grant_type: 'refresh_token',
+        refresh_token: refresh,
+      })
+      const next = tokenRecord(config, token, record)
+      writeStore({ ...readStore(), [config.id]: next })
+      return next.access_token
+    } catch {
+      // The caller can still retry the exchange with the current token. A
+      // failed silent refresh must not sign the player out or open a window.
+      return null
+    }
+  }
+
+  async function silentVerificationRefresh(config, token) {
+    let access = token
+    const record = readStore()[config.id]
+    if (record?.refresh_token) {
+      const refreshed = await refreshAccessToken(config, record)
+      if (refreshed) access = refreshed
+    }
+
+    // These are deliberately best-effort side effects: the exchange endpoint
+    // remains the authoritative gate. Fetching the profile and validating the
+    // token on the game host gives Era a chance to observe newly linked
+    // Discord/Google accounts before we retry the exchange.
+    const identity = await fetchProfile(config, access)
+    if (identity.displayName || identity.avatarUrl || identity.accountId) {
+      const current = readStore()[config.id]
+      if (current && typeof current === 'object') {
+        writeStore({
+          ...readStore(),
+          [config.id]: {
+            ...current,
+            display_name: identity.displayName || current.display_name || null,
+            avatar_url: identity.avatarUrl || current.avatar_url || null,
+            account_id: identity.accountId || current.account_id || null,
+            updated_at: Date.now(),
+          },
+        })
+      }
+    }
+    if (config.gameBaseUrl) {
+      try {
+        await requestJson(
+          new URL('/account/api/oauth/verify', config.gameBaseUrl),
+          {
+            headers: {
+              Accept: 'application/json',
+              Authorization: `Bearer ${access}`,
+            },
+          },
+          `${config.label} could not refresh the game session.`,
+        )
+      } catch {
+        /* a game-host refresh is advisory, not a launch blocker */
+      }
+    }
+    return access
+  }
+
+  async function trySilentVerificationRecovery(config, token, build) {
+    const access = await silentVerificationRefresh(config, token)
+    try {
+      return { result: await gameCode(config, access, build), error: null }
+    } catch (error) {
+      return { result: null, error }
+    }
+  }
+
   function seasonNumber(seasonId) {
     const match = /^ch(\d{1,2})-s(\d{1,2})$/.exec(String(seasonId || ''))
     return match ? Number(match[2]) : null
@@ -697,7 +897,7 @@ function createProviderAuth({
   async function gameCode(config, token, build) {
     let response
     try {
-      response = await requestJson(
+      response = await requestJsonWithMeta(
         new URL(config.exchangeCodePath, config.apiBaseUrl),
         {
           method: 'POST',
@@ -715,7 +915,10 @@ function createProviderAuth({
       // fixable account state, not an expired session, so preserve the
       // structured status for the interactive verification flow instead of
       // clearing the token or surfacing a raw provider code.
-      if (error?.accountStatus || error?.verificationRequired) throw error
+      if (error?.accountStatus || error?.verificationRequired) {
+        logVerificationResponse(config, error)
+        throw error
+      }
       if (error?.status === 401 || error?.status === 403) {
         clearToken(config.id)
         throw new Error(`Your ${config.label} session expired. Sign in again from the season card.`)
@@ -723,7 +926,7 @@ function createProviderAuth({
       throw error
     }
 
-    const payload = response?.data ?? response
+    const payload = response.json?.data ?? response.json
     // Some APIs return an account-status error in a 200 envelope. Preserve it
     // before failing on the missing one-time code.
     if (payload?.error || accountStatusFor(payload, 200, '')) {
@@ -731,8 +934,12 @@ function createProviderAuth({
         payload,
         200,
         `${config.label} could not create a game login code.`,
+        response.headers,
       )
-      if (envelopeError.accountStatus) throw envelopeError
+      if (envelopeError.accountStatus) {
+        logVerificationResponse(config, envelopeError)
+        throw envelopeError
+      }
     }
     const code = safeText(payload?.code, 4096)
     if (!code || !/^[A-Za-z0-9._~+/=-]{8,4096}$/.test(code)) {
@@ -766,19 +973,11 @@ function createProviderAuth({
     )
   }
 
-  function verificationPageFor(config, method, error = null) {
-    const supplied = httpsUrl(error?.verificationUrl)
-    if (supplied) return supplied
-    // Era's launcher OAuth has no separate verification endpoint. The public
-    // exchange endpoint is the authoritative gate. If it reports a pending
-    // account, use Era's own sign-in-methods page for a Google session (to
-    // confirm/link Discord) and the official Discord invite for a Discord
-    // session (to complete the guild step). Both run in the branded embedded
-    // window; the poll below decides when the account is actually ready.
-    if (config.id === 'era') {
-      return method === 'google' ? 'https://id.erafn.dev/logins' : 'https://discord.gg/erafn'
-    }
-    return config.verificationUrl
+  function verificationPageFor(_config, _method, error = null) {
+    // Only a URL returned by Era's verification_required response may be
+    // opened. There is intentionally no Discord/Era fallback here: Play must
+    // never launch an embedded invite page on its own.
+    return verificationUrl(error?.verificationUrl)
   }
 
   function openVerificationWindow(config, url, parentWindow = null) {
@@ -986,9 +1185,9 @@ function createProviderAuth({
     if (!url) throw originalError
     const window = openVerificationWindow(config, url, parentWindow)
     try {
-      const deadline = Date.now() + VERIFICATION_TIMEOUT_MS
+      const deadline = Date.now() + verificationTimeoutMs
       while (Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, VERIFICATION_POLL_MS))
+        await new Promise((resolve) => setTimeout(resolve, verificationPollMs))
         if (window.failure) throw window.failure
         if (window.closed) {
           throw new Error(`${config.label} verification was closed before it finished.`)
@@ -1037,8 +1236,39 @@ function createProviderAuth({
     })
   }
 
-  async function verifyAfterLogin(config, token, parentWindow = null) {
-    if (!config.verificationUrl) return
+  function markVerificationCompleted(config) {
+    const store = { ...readStore() }
+    const record = store[config.id]
+    if (!record || typeof record !== 'object' || record.verificationCompleted === true) return
+    try {
+      writeStore({
+        ...store,
+        [config.id]: { ...record, verificationCompleted: true, updated_at: Date.now() },
+      })
+    } catch {
+      // A failed persistence write must not undo a successful launch code.
+    }
+  }
+
+  function rememberVerification(config, build, error) {
+    const url = verificationUrl(error?.verificationUrl)
+    if (!url) return null
+    const key = codeCacheKey(config, build)
+    pendingVerifications.set(key, { url, error, createdAt: Date.now() })
+    return url
+  }
+
+  function takePendingVerification(config, build) {
+    const key = codeCacheKey(config, build)
+    const pending = pendingVerifications.get(key)
+    if (!pending) return null
+    pendingVerifications.delete(key)
+    if (Date.now() - pending.createdAt > VERIFICATION_TIMEOUT_MS) return null
+    if (!verificationUrl(pending.url)) return null
+    return pending
+  }
+
+  async function verifyAfterLogin(config, token, _parentWindow = null) {
     let build = null
     try {
       const buildsJson = await requestJson(
@@ -1068,8 +1298,15 @@ function createProviderAuth({
       result = await gameCode(config, token, build)
     } catch (error) {
       if (!isVerificationFailure(error)) return
-      result = await completeVerification(config, token, build, error, parentWindow)
+      logVerificationResponse(config, error)
+      // Try to recognize a Discord/Google link completed on Era without
+      // showing any window. If it still needs interaction, leave the session
+      // signed in and let the explicit Verify Account action handle it.
+      const recovery = await trySilentVerificationRecovery(config, token, build)
+      if (!recovery.result) return
+      result = recovery.result
     }
+    markVerificationCompleted(config)
     // Keep the verified code for the launch that normally follows sign-in, so
     // the immediate Play/auto-launch does not spend a second exchange request.
     cacheVerificationCode(config, build, result)
@@ -1102,10 +1339,75 @@ function createProviderAuth({
     if (cached) return cached
 
     try {
-      return await gameCode(config, token, build)
+      const result = await gameCode(config, token, build)
+      markVerificationCompleted(config)
+      return result
     } catch (error) {
-      if (!isVerificationFailure(error) || !verificationPageFor(config, '', error)) throw error
-      return await completeVerification(config, token, build, error)
+      if (!isVerificationFailure(error)) throw error
+      logVerificationResponse(config, error)
+      const recovery = await trySilentVerificationRecovery(config, token, build)
+      if (recovery.result) {
+        markVerificationCompleted(config)
+        return recovery.result
+      }
+      const finalError =
+        recovery.error && isVerificationFailure(recovery.error) ? recovery.error : error
+      if (!finalError.verificationUrl && error?.verificationUrl) {
+        finalError.verificationUrl = error.verificationUrl
+      }
+      logVerificationResponse(config, finalError)
+      // Remember the exact provider-supplied HTTPS page for the explicit
+      // Verify Account action. Do not open it from Play.
+      rememberVerification(config, build, finalError)
+      throw finalError
+    }
+  }
+
+  async function verifyAccount(providerId, options = {}) {
+    const config = providerConfig(providerId)
+    const token = await accessToken(config)
+    const seasonId = safeText(options.seasonId, 40)
+    const version = safeText(options.version, 40)
+
+    const buildsJson = await requestJson(
+      new URL(config.buildsPath, config.apiBaseUrl),
+      {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+      },
+      `${config.label} could not list its live builds.`,
+    )
+    const builds = Array.isArray(buildsJson?.data)
+      ? buildsJson.data
+      : Array.isArray(buildsJson)
+        ? buildsJson
+        : []
+    const build = chooseBuild(builds, config, seasonId, version)
+    const pending = takePendingVerification(config, build)
+    if (!pending) {
+      throw new Error(
+        `${config.label} did not return a verification page for this launch. Press Play again and use Verify Account only if Era provides one.`,
+      )
+    }
+
+    try {
+      const result = await completeVerification(config, token, build, pending.error)
+      markVerificationCompleted(config)
+      cacheVerificationCode(config, build, result)
+      return result
+    } catch (caught) {
+      // Keep the provider-supplied page available when the player closes or
+      // times out the explicit window, so Verify Account can be retried without
+      // forcing another Play attempt.
+      rememberVerification(config, build, pending.error)
+      const error = caught instanceof Error ? caught : new Error(String(caught))
+      if (pending?.url) {
+        error.verificationUrl = pending.url
+        error.verificationRequired = true
+      }
+      throw error
     }
   }
 
@@ -1119,6 +1421,9 @@ function createProviderAuth({
     const config = providerConfig(id)
     for (const key of verificationCodes.keys()) {
       if (key.startsWith(`${id}|`)) verificationCodes.delete(key)
+    }
+    for (const key of pendingVerifications.keys()) {
+      if (key.startsWith(`${id}|`)) pendingVerifications.delete(key)
     }
     const state = crypto.randomBytes(32).toString('base64url')
     const verifier = crypto.randomBytes(64).toString('base64url')
@@ -1187,12 +1492,10 @@ function createProviderAuth({
           writeStore({ ...readStore(), [id]: record })
           // Check the account immediately after the OAuth handoff. Era's
           // exchange endpoint is the only public endpoint that distinguishes a
-          // valid-but-unverified account from a normal session. If it asks for
-          // verification, keep this whole sign-in operation pending while the
-          // embedded verification window is open.
-          // Keep the branded sign-in modal open behind the verification page;
-          // the verification window is parented to it so closing the modal
-          // also cancels the pending check.
+          // valid-but-unverified account from a normal session. A verification
+          // response triggers a silent refresh/retry only; the sign-in modal
+          // closes without opening an invite page. Explicit Verify Account is
+          // the only path that can show the embedded provider page.
           await verifyAfterLogin(config, record.access_token, win)
           settle(null, tokenStatus(id))
         } catch (error) {
@@ -1490,7 +1793,7 @@ function createProviderAuth({
 
         timer = setTimeout(() => {
           settle(new Error(`${config.label} sign-in timed out. Try again.`))
-        }, LOGIN_TIMEOUT_MS)
+        }, loginTimeoutMs)
       })
     })
 
@@ -1506,6 +1809,9 @@ function createProviderAuth({
     for (const key of verificationCodes.keys()) {
       if (key.startsWith(`${id}|`)) verificationCodes.delete(key)
     }
+    for (const key of pendingVerifications.keys()) {
+      if (key.startsWith(`${id}|`)) pendingVerifications.delete(key)
+    }
     return tokenStatus(config.id)
   }
 
@@ -1519,6 +1825,7 @@ function createProviderAuth({
     login,
     logout,
     exchangeCode,
+    verifyAccount,
   }
 }
 

@@ -64,6 +64,8 @@ export interface ProviderAuthStatus {
   avatarUrl?: string | null
   accountId?: string | null
   expiresAt?: number | null
+  /** Account-wide Era/Discord verification was accepted and stored. */
+  verificationCompleted?: boolean
 }
 
 export interface Build {

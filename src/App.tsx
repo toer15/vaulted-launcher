@@ -127,28 +127,6 @@ function lobbyTarget(address: string): { host: string; port: number } | null {
   return host ? { host, port } : null
 }
 
-/** Open the provider's verification page in the desktop browser, with a web fallback. */
-function openExternalUrl(rawUrl: string) {
-  const url = /^https?:\/\//i.test(rawUrl) ? rawUrl : 'https://erafn.dev'
-  const fallback = () => {
-    try {
-      window.open(url, '_blank', 'noopener,noreferrer')
-    } catch {
-      /* the browser blocked the popup; the URL is still available in the banner */
-    }
-  }
-  const bridge = window.arc?.openExternal
-  if (!bridge) {
-    fallback()
-    return
-  }
-  void bridge(url)
-    .then((result) => {
-      if (!result?.ok) fallback()
-    })
-    .catch(fallback)
-}
-
 const MANUAL_SERVERS_KEY = 'vaulted.manualServers.v1'
 
 interface ManualServerRecord {
@@ -353,6 +331,7 @@ export default function App() {
     message: string
     local?: boolean
     verificationUrl?: string
+    providerId?: string
   } | null>(null)
   const [launchStage, setLaunchStage] = useState<string | null>(null)
   const localSessionRef = useRef<string | null>(null)
@@ -657,6 +636,8 @@ export default function App() {
   const activeLaunchFailureLocal = launchFailure?.id === activeBuild?.id && launchFailure.local === true
   const activeLaunchVerificationUrl =
     launchFailure?.id === activeBuild?.id ? launchFailure.verificationUrl ?? null : null
+  const activeLaunchProviderId =
+    launchFailure?.id === activeBuild?.id ? launchFailure.providerId ?? null : null
 
   const providerIdentity = useMemo(() => {
     const providersSignedIn = verifiedOAuthProviders.filter(
@@ -765,6 +746,16 @@ export default function App() {
         activeGlobalBackends[0] ??
         null
       : null
+  const verificationProvider =
+    (activeLaunchProviderId
+      ? activeGlobalBackends.find((provider) => provider.id === activeLaunchProviderId) ?? null
+      : null) ??
+    (activeBuild?.onlineProvider?.id
+      ? providerCatalog.find((provider) => provider.id === activeBuild.onlineProvider?.id) ?? null
+      : null) ??
+    autoGlobalBackend ??
+    selectedGlobalBackend ??
+    null
 
   // validate a cached session once; a 401 sends the user back to the gate
   useEffect(() => {
@@ -1835,6 +1826,60 @@ export default function App() {
   )
 
   /** Launch a downloaded season directly through its bundled provider profile. */
+  const handleVerifyAccount = useCallback(
+    async (build: Build, provider: GlobalBackend) => {
+      const verify = window.arc?.providerAuth?.verifyAccount
+      if (!verify) {
+        pushToast({
+          tone: 'error',
+          title: 'Verification needs the desktop app',
+          description: 'Run "npm run app" to verify a provider account.',
+        })
+        return
+      }
+      if (phase === 'launching') return
+      setPhase('launching')
+      setLaunchStage(`Waiting for ${provider.label} verification…`)
+      try {
+        await verify(provider.id, {
+          seasonId: artKeyFor(build.season) ?? build.id,
+          version: build.version,
+        })
+        await refreshProviderAuthStatus()
+        setLaunchFailure(null)
+        setPhase('idle')
+        setLaunchStage(null)
+        pushToast({
+          tone: 'success',
+          title: 'Verification complete',
+          description: `${provider.label} is verified. Press Play to launch ${build.season.label}.`,
+        })
+      } catch (error) {
+        const parsed = parseProviderAccountIssue(error)
+        const message =
+          parsed?.message ||
+          (error instanceof Error ? error.message : `${provider.label} verification failed.`)
+        const verificationUrl =
+          parsed?.issue?.verificationRequired === true ? parsed.issue.verificationUrl : undefined
+        setLaunchFailure({
+          id: build.id,
+          message,
+          providerId: provider.id,
+          ...(verificationUrl ? { verificationUrl } : {}),
+        })
+        setPhase('error')
+        setLaunchStage(null)
+        pushToast({
+          tone: 'error',
+          title: `${provider.label} verification failed`,
+          description: message,
+        })
+      }
+    },
+    [phase, pushToast, refreshProviderAuthStatus],
+  )
+
+  /** Launch a downloaded season directly through its bundled provider profile. */
   const startOnlineProvider = useCallback(
     async (
       build: Build,
@@ -1932,11 +1977,12 @@ export default function App() {
             (error instanceof Error ? error.message : `${providerLabel} could not be started.`)
           const verificationUrl =
             providerIssue?.verificationRequired === true
-              ? providerIssue.website || (providerIssue.providerId === 'era' ? 'https://erafn.dev' : '')
+              ? providerIssue.verificationUrl
               : undefined
           setLaunchFailure({
             id: build.id,
             message,
+            providerId: provider.id,
             ...(verificationUrl ? { verificationUrl } : {}),
           })
           setPhase('error')
@@ -1953,15 +1999,12 @@ export default function App() {
             ...(verificationUrl
               ? {
                   action: {
-                    label: `Open ${providerLabel} & retry`,
+                    label: 'Verify Account',
                     onClick: () => {
-                      openExternalUrl(verificationUrl)
-                      // The toast is a one-click recovery path: open the
-                      // verification page and immediately retry the launch.
-                      void startOnlineProvider(build, provider, server)
+                      void handleVerifyAccount(build, provider)
                     },
                   },
-                  ttlMs: 20_000,
+                  ttlMs: 30_000,
                 }
               : {}),
           })
@@ -1969,7 +2012,14 @@ export default function App() {
         return false
       }
     },
-    [launchAttempts, pushToast, refreshProviderAuthStatus, session?.user.providerId, shop.sets],
+    [
+      handleVerifyAccount,
+      launchAttempts,
+      pushToast,
+      refreshProviderAuthStatus,
+      session?.user.providerId,
+      shop.sets,
+    ],
   )
 
   /** Re-scan every configured external directory immediately before Play. */
@@ -3266,7 +3316,11 @@ export default function App() {
                 launchError={activeLaunchFailure}
                 launchErrorLocal={activeLaunchFailureLocal}
                 launchVerificationUrl={activeLaunchVerificationUrl}
-                onOpenVerification={openExternalUrl}
+                onOpenVerification={() => {
+                  if (activeBuild && verificationProvider) {
+                    void handleVerifyAccount(activeBuild, verificationProvider)
+                  }
+                }}
                 onRetryLaunch={() => void handlePrimary()}
                 hostedLobby={activeBuild && hostedLobby?.buildId === activeBuild.id ? hostedLobby : null}
                 verify={activeVerifyJob}

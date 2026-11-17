@@ -91,7 +91,8 @@ interface ActiveBuildCardProps {
   launchErrorLocal?: boolean
   /** provider account verification URL for an actionable launch failure */
   launchVerificationUrl?: string | null
-  onOpenVerification?: (url: string) => void
+  /** explicit action; the embedded provider page is never opened by Play */
+  onOpenVerification?: () => void
   onRetryLaunch?: () => void
   /** this PC's currently published lobby, if it is hosting this build */
   hostedLobby?: { address: string; port: number; public: boolean; label: string; players?: number } | null
@@ -993,12 +994,12 @@ export function ActiveBuildCard({
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => onOpenVerification(launchVerificationUrl)}
-                        title={`Open ${launchVerificationUrl}`}
+                        onClick={onOpenVerification}
+                        title="Open the verification page Era supplied"
                         className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300/40 bg-amber-300/15 px-2.5 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.05em] text-amber-100 transition-colors duration-200 hover:border-amber-200/70 hover:bg-amber-300/25 hover:text-white"
                       >
-                        <Globe2 className="h-3.5 w-3.5" />
-                        Open {build.onlineProvider?.name || build.onlineProvider?.label || 'verification page'}
+                        <ShieldCheck className="h-3.5 w-3.5" />
+                        Verify Account
                       </button>
                       {onRetryLaunch && (
                         <button

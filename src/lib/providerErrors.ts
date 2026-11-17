@@ -7,7 +7,10 @@ export interface ProviderAccountIssue {
   providerLabel?: string
   providerName?: string
   website?: string
+  /** Provider-supplied HTTPS page shown only from an explicit Verify Account action. */
+  verificationUrl?: string
   verificationRequired: boolean
+  verificationCompleted?: boolean
 }
 
 export interface ParsedProviderAccountIssue {
@@ -18,6 +21,27 @@ export interface ParsedProviderAccountIssue {
 function safeWebsite(value: unknown): string {
   const raw = typeof value === 'string' ? value.trim() : ''
   return /^https?:\/\//i.test(raw) ? raw : ''
+}
+
+function safeVerificationUrl(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!/^https:\/\//i.test(raw)) return ''
+  try {
+    const url = new URL(raw)
+    if (url.username || url.password) return ''
+    const host = url.hostname.toLowerCase()
+    if (
+      host === 'discord.com' ||
+      host === 'discord.gg' ||
+      host.endsWith('.discord.com') ||
+      host.endsWith('.discord.gg')
+    ) {
+      return ''
+    }
+    return url.toString()
+  } catch {
+    return ''
+  }
 }
 
 /**
@@ -42,7 +66,9 @@ export function parseProviderAccountIssue(error: unknown): ParsedProviderAccount
         providerLabel: typeof parsed.providerLabel === 'string' ? parsed.providerLabel : undefined,
         providerName: typeof parsed.providerName === 'string' ? parsed.providerName : undefined,
         website: safeWebsite(parsed.website),
+        verificationUrl: safeVerificationUrl(parsed.verificationUrl),
         verificationRequired: parsed.verificationRequired === true,
+        verificationCompleted: parsed.verificationCompleted === true,
       }
     }
   } catch {

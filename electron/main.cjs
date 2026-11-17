@@ -3537,6 +3537,28 @@ async function verifyBuild(payload) {
 
 const PROVIDER_ACCOUNT_STATUS_PREFIX = 'VAULTED_PROVIDER_ACCOUNT_STATUS:'
 
+/** Only an explicit, non-Discord HTTPS verification page may open in VAULTED. */
+function providerVerificationUrl(value) {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!/^https:\/\//i.test(raw)) return ''
+  try {
+    const url = new URL(raw)
+    if (url.username || url.password) return ''
+    const host = url.hostname.toLowerCase()
+    if (
+      host === 'discord.com' ||
+      host === 'discord.gg' ||
+      host.endsWith('.discord.com') ||
+      host.endsWith('.discord.gg')
+    ) {
+      return ''
+    }
+    return url.toString()
+  } catch {
+    return ''
+  }
+}
+
 /** Turn a structured provider account status into an actionable launch error. */
 function providerAccountIssue(profile, error) {
   // Only let providerAuth's structured account status through this path. A
@@ -3556,20 +3578,16 @@ function providerAccountIssue(profile, error) {
       ? 'https://erafn.dev'
       : ''
   const isEra = profile?.id === 'era'
-  const accountLabel = isEra ? 'Discord/Era' : providerLabel
-  const destination = isEra
-    ? "Project Era's official Discord server"
-    : `${providerName}'s official account page`
+  const accountLabel = isEra ? 'Project Era' : providerLabel
+  const destination = isEra ? 'Project Era' : `${providerName}'s account page`
+  const verificationUrl = providerVerificationUrl(error?.verificationUrl)
 
   let message
   if (verification) {
-    const link = website ? ` (${website})` : ''
-    const open = website
-      ? ` Open ${website}, complete verification, then press Retry.`
-      : ' Complete verification, then press Retry.'
-    message =
-      `Your signed-in ${accountLabel} account needs one-time verification in ` +
-      `${destination}${link} before ${issuer} will issue game launch codes.${open}`
+    const action = verificationUrl
+      ? ` Use Verify Account to open the page ${providerName} supplied.`
+      : ` Link or verify the account on ${providerName}, then press Retry.`
+    message = `Your signed-in ${accountLabel} account needs account verification in ${destination} before ${issuer} will issue game launch codes.${action}`
   } else {
     const link = website ? ` Check ${website}, then press Retry.` : ' Check your account, then press Retry.'
     let reason = 'The provider rejected this account status.'
@@ -3591,6 +3609,7 @@ function providerAccountIssue(profile, error) {
     providerLabel,
     providerName,
     website,
+    verificationUrl: verificationUrl || undefined,
     verificationRequired: verification,
     message,
   }
@@ -4098,6 +4117,31 @@ function registerIpc() {
     const status = await providerAuth.login(providerId, { method })
     broadcastProviderAuth(status)
     return status
+  })
+
+  // Opening the embedded verification view is never part of Play. It is only
+  // reached after the renderer's explicit Verify Account action, and
+  // providerAuth requires a pending provider-supplied HTTPS URL for this launch.
+  ipcMain.handle('arc:provider-auth-verify-account', async (_event, providerId, options) => {
+    try {
+      const result = await providerAuth.verifyAccount(providerId, options || {})
+      broadcastProviderAuth(providerAuth.status(providerId))
+      return result
+    } catch (error) {
+      let profile = null
+      try {
+        profile = providerProfile(providerId)
+      } catch {
+        /* the provider profile may not exist for an invalid id */
+      }
+      const issue = providerAccountIssue(profile, error)
+      if (issue) {
+        throw new Error(
+          `${issue.message}\n${PROVIDER_ACCOUNT_STATUS_PREFIX}${JSON.stringify(issue)}`,
+        )
+      }
+      throw error
+    }
   })
 
   ipcMain.handle('arc:provider-auth-logout', async (_event, providerId) => {

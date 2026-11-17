@@ -221,6 +221,11 @@ export interface LauncherBridge {
   providerAuth?: {
     status(): Promise<Record<string, ProviderAuthStatus>>
     login(providerId: string, method?: 'discord' | 'google'): Promise<ProviderAuthStatus>
+    /** explicit account verification; never invoked by Play */
+    verifyAccount?(
+      providerId: string,
+      options?: { seasonId?: string; version?: string },
+    ): Promise<{ code: string; expiresIn: number; buildId: string; buildName: string }>
     logout(providerId: string): Promise<ProviderAuthStatus>
     /** main broadcasts a provider-wide status after any account link change */
     onProviderAuthChanged?(callback: (status: ProviderAuthStatus) => void): () => void

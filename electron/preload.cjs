@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('arc', {
   providerAuth: {
     status: () => ipcRenderer.invoke('arc:provider-auth-status'),
     login: (providerId, method) => ipcRenderer.invoke('arc:provider-auth-login', providerId, method),
+    verifyAccount: (providerId, options) =>
+      ipcRenderer.invoke('arc:provider-auth-verify-account', providerId, options),
     logout: (providerId) => ipcRenderer.invoke('arc:provider-auth-logout', providerId),
     onProviderAuthChanged: (callback) => subscribe('arc:provider-auth-changed', callback),
   },

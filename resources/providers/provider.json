@@ -28,7 +28,6 @@
       "buildsPath": "/launcher/v1/builds",
       "exchangeCodePath": "/launcher/v1/game/exchange-code",
       "profilePath": "/launcher/v1/me",
-      "verificationUrl": "https://discord.gg/erafn",
       "global": true,
       "seasons": ["ch1-s6"]
     }
