@@ -43,7 +43,15 @@ const tellurium = read('runtime/Tellurium.dll')
 assert.ok(tellurium.includes(Buffer.from('-backend=', 'utf16le')), 'Tellurium has no -backend= support')
 assert.ok(tellurium.includes(Buffer.from('HOOK_READY')), 'Tellurium has no hook-ready marker')
 
-const injector = read('runtime/VaultedInjector.exe')
+const injectorFile = 'runtime/VaultedInjector.exe'
+const providerInjectorFile = 'resources/providers/runtime/VaultedInjector.exe'
+assert.equal(
+  hash(providerInjectorFile),
+  hash(injectorFile),
+  'the shared provider runtime has a stale VaultedInjector.exe',
+)
+
+const injector = read(injectorFile)
 for (const marker of ['HOOK_VERIFIED', 'MODULE_VERIFIED', 'VAULTED_HOOK_TOKEN', 'FORWARDED=']) {
   assert.ok(
     injector.includes(Buffer.from(marker, 'utf16le')) || injector.includes(Buffer.from(marker)),
