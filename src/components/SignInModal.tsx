@@ -1,47 +1,28 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowRight, Globe2, Loader2, LockKeyhole, MessageCircle, ShieldCheck, UserRound, X } from 'lucide-react'
+import { ArrowRight, Loader2, LockKeyhole, ShieldCheck, UserRound, X } from 'lucide-react'
 import { cx } from '../lib/cx'
 import { signIn, signUp, type RiftSession } from '../lib/network'
-import type { GlobalBackend, ProviderAuthStatus } from '../types'
 
 interface SignInModalProps {
   open: boolean
-  providers: GlobalBackend[]
   onClose: () => void
   onAuthenticated: (session: RiftSession) => void
-  /** Called after a verified provider link, before the session is handed to App. */
-  onProviderAuthenticated?: (providerId: string, status: ProviderAuthStatus) => void
 }
 
 type Mode = 'signin' | 'signup'
-type LinkMethod = 'discord' | 'google'
 
-export function SignInModal({
-  open,
-  providers,
-  onClose,
-  onAuthenticated,
-  onProviderAuthenticated,
-}: SignInModalProps) {
+export function SignInModal({ open, onClose, onAuthenticated }: SignInModalProps) {
   const [mode, setMode] = useState<Mode>('signin')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [busy, setBusy] = useState(false)
-  const [providerBusy, setProviderBusy] = useState<string | null>(null)
-  const [linkMethod, setLinkMethod] = useState<LinkMethod | null>(null)
   const [error, setError] = useState<string | null>(null)
   const busyRef = useRef(false)
-  busyRef.current = busy || Boolean(providerBusy)
+  busyRef.current = busy
   const closeRef = useRef(onClose)
   closeRef.current = onClose
-
-  const linkProviders = providers.filter(
-    (provider) => provider.auth !== 'none' && provider.mode === 'global_live',
-  )
-  const linkProvider = linkProviders[0] ?? null
-  const additionalProviders = linkProviders.filter((provider) => provider.id !== linkProvider?.id)
 
   useEffect(() => {
     if (!open) return
@@ -67,53 +48,8 @@ export function SignInModal({
     setConfirm('')
   }
 
-  const beginAccountLink = async (provider: GlobalBackend, method: LinkMethod) => {
-    if (busy || providerBusy) return
-    if (!provider) {
-      setError('Secure account linking is not configured yet. Use a VAULTED account below.')
-      return
-    }
-    if (!window.arc?.providerAuth?.login) {
-      setError('Secure account linking needs the desktop app. Use a VAULTED account below.')
-      return
-    }
-    setLinkMethod(method)
-    setProviderBusy(provider.id)
-    setError(null)
-    try {
-      const status = await window.arc.providerAuth.login(provider.id, method)
-      if (!status?.signedIn) throw new Error('The secure account link did not return a session. Try again.')
-      onProviderAuthenticated?.(provider.id, status)
-      const displayName = status.displayName?.trim() || `${provider.label} Player`
-      const accountId =
-        status.accountId?.trim() ||
-        displayName
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '')
-          .slice(0, 40) ||
-        provider.id
-      onAuthenticated({
-        token: '',
-        providerOnly: true,
-        user: {
-          id: `${provider.id}:${accountId}`,
-          username: displayName,
-          avatarUrl: status.avatarUrl || undefined,
-          providerId: provider.id,
-          providerLabel: provider.label,
-        },
-      })
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : 'The secure account link failed.')
-    } finally {
-      setProviderBusy(null)
-      setLinkMethod(null)
-    }
-  }
-
   const submit = async () => {
-    if (busy || providerBusy) return
+    if (busy) return
     setError(null)
 
     const name = username.trim()
@@ -145,7 +81,7 @@ export function SignInModal({
     <div
       className="fixed inset-0 z-[95] grid place-items-center overflow-y-auto bg-[#02070c]/88 px-4 py-6 backdrop-blur-md"
       onMouseDown={(event) => {
-        if (!busy && !providerBusy && event.target === event.currentTarget) onClose()
+        if (!busy && event.target === event.currentTarget) onClose()
       }}
       role="dialog"
       aria-modal="true"
@@ -168,14 +104,13 @@ export function SignInModal({
               VAULTED · SECURE ACCOUNT LINK
             </h2>
             <p className="mt-2 text-[12.5px] leading-relaxed text-fog">
-              Sign in to VAULTED or link a supported provider account. Provider sessions are encrypted on this PC and
-              unlock the seasons that provider hosts.
+              Sign in to VAULTED to download and play any season.
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            disabled={busy || Boolean(providerBusy)}
+            disabled={busy}
             aria-label="Close sign in"
             className="grid h-8 w-8 shrink-0 place-items-center rounded-xl border border-line bg-white/[0.03] text-fog transition-colors duration-200 hover:bg-white/[0.08] hover:text-white disabled:cursor-wait disabled:opacity-50"
           >
@@ -184,71 +119,7 @@ export function SignInModal({
         </header>
 
         <div className="relative p-6">
-          <div className="mb-5 space-y-2">
-            <button
-              type="button"
-              onClick={() => linkProvider && void beginAccountLink(linkProvider, 'discord')}
-              disabled={busy || Boolean(providerBusy)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-[#5865F2]/45 bg-[#5865F2]/15 px-4 py-3 text-[13px] font-semibold text-[#d9dcff] transition-all duration-200 hover:border-[#5865F2]/80 hover:bg-[#5865F2]/25 hover:text-white disabled:cursor-wait disabled:opacity-65"
-            >
-              {providerBusy === linkProvider?.id && linkMethod === 'discord' ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <MessageCircle className="h-4 w-4" />
-              )}
-              {providerBusy === linkProvider?.id && linkMethod === 'discord'
-                ? `Waiting for ${linkProvider?.label || 'provider'}…`
-                : linkProvider?.auth === 'oauth'
-                  ? 'Continue with Discord'
-                  : `Continue with ${linkProvider?.label || 'provider'}`}
-            </button>
-            {linkProvider?.auth === 'oauth' && (
-            <button
-              type="button"
-              onClick={() => linkProvider && void beginAccountLink(linkProvider, 'google')}
-              disabled={busy || Boolean(providerBusy)}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.06] px-4 py-3 text-[13px] font-semibold text-white/90 transition-all duration-200 hover:border-white/30 hover:bg-white/[0.12] hover:text-white disabled:cursor-wait disabled:opacity-65"
-            >
-              {providerBusy === linkProvider?.id && linkMethod === 'google' ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Globe2 className="h-4 w-4" />
-              )}
-              {providerBusy === linkProvider?.id && linkMethod === 'google'
-                ? 'Waiting for Google…'
-                : 'Continue with Google'}
-            </button>
-            )}
-            {additionalProviders.length > 0 && (
-              <div className="space-y-2 pt-1">
-                {additionalProviders.map((provider) => (
-                  <button
-                    key={provider.id}
-                    type="button"
-                    onClick={() => void beginAccountLink(provider, 'discord')}
-                    disabled={busy || Boolean(providerBusy)}
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-arc/35 bg-arc/10 px-4 py-3 text-[13px] font-semibold text-mist transition-all duration-200 hover:border-arc/70 hover:bg-arc/20 hover:text-white disabled:cursor-wait disabled:opacity-65"
-                  >
-                    {providerBusy === provider.id ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Globe2 className="h-4 w-4" />
-                    )}
-                    {providerBusy === provider.id
-                      ? `Waiting for ${provider.label}…`
-                      : provider.auth === 'embedded_web'
-                        ? `Continue with ${provider.label}`
-                        : `Continue with ${provider.label} (Discord)`}
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="flex items-center gap-3 pt-2 text-[9.5px] font-bold uppercase tracking-[0.18em] text-fog/60">
-              <span className="h-px flex-1 bg-line" />
-              or use a VAULTED account
-              <span className="h-px flex-1 bg-line" />
-            </div>
-          </div>
+          <p className="mb-4 text-[11px] text-fog">Use your VAULTED account to continue.</p>
 
           <div className="grid grid-cols-2 gap-1 rounded-2xl border border-line bg-black/30 p-1">
             {(['signin', 'signup'] as Mode[]).map((value) => (
@@ -347,7 +218,7 @@ export function SignInModal({
           <button
             type="button"
             onClick={() => void submit()}
-            disabled={busy || Boolean(providerBusy)}
+            disabled={busy}
             className={cx(
               'mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-[13px] font-semibold text-white transition-all duration-300',
               busy

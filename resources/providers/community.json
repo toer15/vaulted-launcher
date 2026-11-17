@@ -140,6 +140,12 @@
         "EZFN": { "id": "ezfn", "label": "EZFN", "url": "https://ezfn.dev/" },
         "Project Neo": { "id": "neo", "label": "Neo", "url": "https://projectneofn.dev/" },
         "Project Reboot": { "id": "reboot", "label": "Reboot", "url": "https://rebootmp.com/" },
+        "Project Eon": { "id": "eon", "label": "Eon", "url": "https://projecteon.dev/" },
+        "Hydro": { "id": "hydro", "label": "Hydro", "url": "https://hydromp.site/" },
+        "Project Interloop": { "id": "interloop", "label": "Interloop", "url": "https://interloopfn.org/" },
+        "Project Crystal": { "id": "crystal", "label": "Crystal", "url": "https://discord.gg/crystalfn" },
+        "Project Echo": { "id": "echo", "label": "Echo", "url": "https://echofn.org/" },
+        "ARC": { "id": "arc", "label": "ARC", "url": "https://discord.com/servers/arc-1462432577892647139" },
         "Erbium": { "id": "erbium", "label": "Erbium", "url": "https://github.com/plooshi/Erbium" }
       }
     }

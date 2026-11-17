@@ -13,7 +13,6 @@ interface TopBarProps {
   season: SeasonInfo | null
   version: string | null
   buildCount: number
-  native: boolean
   onlineStatus: OnlineStatus
   /** seasons with a hosted global backend that is currently online */
   communityOnline?: number
@@ -38,7 +37,6 @@ export function TopBar({
   season,
   version,
   buildCount,
-  native,
   onlineStatus,
   communityOnline,
   providerOnly = false,
@@ -100,14 +98,14 @@ export function TopBar({
             !signedIn
               ? 'Sign in to unlock Download and Play across every season.'
               : providerOnly
-                ? 'Provider account · global matchmaking ready. Friends and the VAULTED relay are gated.'
+                ? 'Global online matchmaking ready. Friends and the VAULTED relay are gated.'
                 : onlineStatus === 'connected'
-                ? `Matchmaking service connected${native ? ' · desktop bridge ready' : ' · desktop bridge unavailable'}`
+                ? 'Matchmaking service connected'
                 : (communityOnline ?? 0) > 0
-                  ? `${communityOnline} seasons have a live hosted backend${native ? ' · desktop bridge ready' : ''}`
+                  ? `${communityOnline} seasons have a live online server`
                   : onlineStatus === 'checking'
-                    ? 'Checking the configured online server…'
-                    : `Online server unreachable — local play only${native ? ' · desktop bridge ready' : ''}`
+                    ? 'Checking the online server…'
+                    : 'Online server unreachable — local play only'
           }
         >
           <Radio className="h-3 w-3" />
@@ -116,11 +114,11 @@ export function TopBar({
             : providerOnly
               ? 'Global play'
               : onlineStatus === 'connected'
-              ? 'Bridge connected'
+              ? 'Online'
               : (communityOnline ?? 0) > 0
-                ? 'Global live'
+                ? 'Online'
                 : onlineStatus === 'checking'
-                  ? 'Checking bridge…'
+                  ? 'Checking online…'
                   : 'Offline — Local Play only'}
         </span>
 
@@ -147,7 +145,7 @@ export function TopBar({
           disabled={friendsLocked}
           title={
             providerOnly
-              ? 'Friends and the VAULTED relay need a VAULTED account. Global provider play is still ready.'
+              ? 'Friends and the VAULTED relay need a VAULTED account. Global online play is still ready.'
               : !signedIn
                 ? 'Sign in to use Friends and the VAULTED relay.'
                 : 'Friends'

@@ -145,12 +145,11 @@
   <script>
     (() => {
       const params = new URLSearchParams(location.search)
-      const provider = params.get('provider') || 'live account'
       document.getElementById('provider-title').textContent = 'VAULTED · SECURE ACCOUNT LINK'
       document.getElementById('stage-copy').textContent =
         params.get('mode') === 'verification'
           ? 'Complete verification to continue…'
-          : 'Opening ' + provider + '’s secure sign-in page…'
+          : 'Opening the secure sign-in page…'
       document.getElementById('close').addEventListener('click', () => window.vaultedAuth?.close())
       document.addEventListener('keydown', (event) => {
         if (event.key === 'Escape') window.vaultedAuth?.close()

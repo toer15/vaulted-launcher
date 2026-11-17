@@ -87,7 +87,19 @@
         "id": "neo",
         "name": "Project Neo",
         "label": "Neo"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "neo",
+          "name": "Project Neo",
+          "label": "Neo"
+        },
+        {
+          "id": "echo",
+          "name": "Project Echo",
+          "label": "Echo"
+        }
+      ]
     },
     "ch1-s4": {
       "id": "ch1-s4",
@@ -116,7 +128,19 @@
         "id": "neo",
         "name": "Project Neo",
         "label": "Neo"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "neo",
+          "name": "Project Neo",
+          "label": "Neo"
+        },
+        {
+          "id": "arc",
+          "name": "ARC",
+          "label": "ARC"
+        }
+      ]
     },
     "ch1-s5": {
       "id": "ch1-s5",
@@ -365,6 +389,11 @@
           "id": "stellar",
           "name": "Stellar",
           "label": "Stellar"
+        },
+        {
+          "id": "interloop",
+          "name": "Project Interloop",
+          "label": "Interloop"
         }
       ]
     },
@@ -466,7 +495,24 @@
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        },
+        {
+          "id": "hydro",
+          "name": "Hydro",
+          "label": "Hydro"
+        },
+        {
+          "id": "crystal",
+          "name": "Project Crystal",
+          "label": "Crystal"
+        }
+      ]
     },
     "ch2-s6": {
       "id": "ch2-s6",
@@ -524,7 +570,19 @@
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
-      }
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        },
+        {
+          "id": "eon",
+          "name": "Project Eon",
+          "label": "Eon"
+        }
+      ]
     },
     "ch2-s8": {
       "id": "ch2-s8",

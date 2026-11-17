@@ -81,12 +81,8 @@ export function AccountChip({ account, onLogout }: AccountChipProps) {
         <span className="hidden text-left sm:block">
           <span className="block text-[13px] font-semibold leading-tight text-mist">{account.username}</span>
           <span className="flex items-center gap-1 text-[11px] leading-tight text-fog">
-            {account.providerLabel ? (
-              <ShieldCheck className="h-3 w-3 text-emerald-300" />
-            ) : (
-              <Sparkles className="h-3 w-3 text-amber-300" />
-            )}
-            {account.providerLabel ? `${account.providerLabel} account` : account.outfit}
+            <Sparkles className="h-3 w-3 text-amber-300" />
+            {account.outfit}
           </span>
         </span>
 
@@ -103,14 +99,14 @@ export function AccountChip({ account, onLogout }: AccountChipProps) {
               <p className="truncate text-sm font-semibold text-mist">{account.username}</p>
               <p className="flex items-center gap-1 text-[11px] text-emerald-300">
                 <ShieldCheck className="h-3 w-3" />
-                {account.providerLabel ? `Signed in with ${account.providerLabel}` : 'Signed in'}
+                Signed in
               </p>
             </div>
           </div>
 
           {account.providerOnly && (
             <p className="mt-2 rounded-xl border border-amber-400/20 bg-amber-400/[0.06] px-2.5 py-2 text-[10.5px] leading-relaxed text-amber-100/85">
-              Provider-only account. Global play is active; friends and the VAULTED relay are unavailable.
+              Global online play is active; friends and the VAULTED relay need a VAULTED account.
             </p>
           )}
 

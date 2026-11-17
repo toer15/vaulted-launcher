@@ -155,9 +155,9 @@ export function SettingsView({
         <div className="border-b border-line/70 p-4">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="min-w-0">
-              <p className="text-[12px] font-semibold text-mist">Global defaults</p>
+              <p className="text-[12px] font-semibold text-mist">Download defaults</p>
               <p className="mt-1 text-[11px] leading-relaxed text-fog">
-                Seasons with a live hosted backend download here, then Play launches into that provider. Other builds use this root and launch locally.
+                Seasons with a live online server download here, then Play launches straight in. Other builds use this root and launch locally.
               </p>
             </div>
             <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.06] px-2.5 py-1 text-[10px] font-semibold text-emerald-300">
@@ -258,13 +258,6 @@ export function SettingsView({
               </code>
             </label>
 
-            <label className="mt-3 block">
-              <span className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-fog">Provider</span>
-              <code className="mt-1.5 block truncate rounded-xl border border-line/70 bg-black/30 px-3.5 py-2.5 font-mono text-[11px] text-fog">
-                {build.onlineProvider?.name || build.providerLabel || 'Built-in Fortnite client'}
-              </code>
-            </label>
-
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -275,7 +268,7 @@ export function SettingsView({
               </button>
               <p className="text-[11px] leading-relaxed text-fog">
                 {build.onlineProvider ? (
-                  `Provider profile bundled for this season. Live server availability is shown on the season card; without a hosted backend, Play starts a local lobby.`
+                  `Online play is bundled for this season. Play connects to a live server when one is available.`
                 ) : (
                   <>
                     VAULTED launches{' '}

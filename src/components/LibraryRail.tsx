@@ -167,8 +167,8 @@ export function LibraryRail({
             <Radio className="mx-auto h-5 w-5 text-emerald-300/80" />
             <p className="mt-3 text-[13px] font-medium text-mist">No active players right now</p>
             <p className="mt-1 text-[12px] leading-relaxed text-fog">
-              No VAULTED relay lobby or global backend is reporting players. Switch back to all seasons and
-              press Play to start and publish one.
+              No season is reporting players right now. Switch back to all seasons and press Play to start
+              one.
             </p>
             <button
               type="button"
@@ -201,10 +201,9 @@ export function LibraryRail({
           <HardDrive className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             Every chapter and season. <span className="text-emerald-300">Installed</span> = on this PC and ready to
-            play. <span className="text-emerald-300">GLOBAL LIVE</span> = a hosted Era, EZFN, Stellar or Retrac
-            backend is online. <span className="text-sky-200">SELF-HOSTED</span> and{' '}
-            <span className="text-sky-200">DIRECTORY ONLY</span> seasons have no hosted server;{' '}
-            <span className="text-rose-200">UNSUPPORTED</span> seasons have no live backend at all.
+            play. <span className="text-emerald-300">ONLINE</span> = live servers are reporting.{" "}
+            <span className="text-sky-200">CHECKING</span> = verifying server status;{" "}
+            <span className="text-rose-200">OFFLINE</span> = no live server right now.
           </span>
         </p>
       </footer>

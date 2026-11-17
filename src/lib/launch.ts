@@ -69,6 +69,14 @@ export interface OnlineProviderLaunchResult {
   error?: string
 }
 
+export interface ProviderPrepareResult {
+  ok: boolean
+  providerId: string
+  label?: string
+  cached?: boolean
+  error?: string
+}
+
 export interface DownloadProgress {
   id: string
   received: number
@@ -251,6 +259,8 @@ export interface LauncherBridge {
   providerCatalog?(): Promise<GlobalBackend[]>
   /** health and population sampled from the configured global backends */
   providerLiveStatus?(): Promise<Record<string, ProviderLiveStatus>>
+  /** repair the bundled, hash-checked provider files before one-click launch */
+  providerPrepare?(providerId: string): Promise<ProviderPrepareResult>
   /** live provider builds for providers with runtime season discovery */
   providerBuilds?(providerId: string): Promise<ProviderBuild[]>
   /** native provider account link for global_live backends */
@@ -275,8 +285,6 @@ export interface LauncherBridge {
     method?: 'tcp' | 'icmp'
     error?: string
   }>
-  /** open a provider sign-in page in the default browser */
-  openExternal?(url: string): Promise<{ ok: boolean; error?: string }>
   /** configured install root where one-click downloads are unpacked */
   getBuildsRoot?(): Promise<string>
   scanBuilds?(roots?: string[]): Promise<string[]>

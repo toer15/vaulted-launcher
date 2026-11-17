@@ -224,9 +224,17 @@ function catalogData() {
     else if (entry.auth === 'deeplink' && deeplink) auth = 'deeplink'
     else if (entry.auth === 'embedded_web' && embeddedWeb) auth = 'embedded_web'
     else if (entry.auth === 'exchangeCode') auth = 'exchangeCode'
-    const mode = auth !== 'none' && entry.mode === 'global_live' ? 'global_live' : 'download'
+    const mode =
+      entry.mode === 'external'
+        ? 'external'
+        : auth !== 'none' && entry.mode === 'global_live'
+          ? 'global_live'
+          : 'download'
+    const launchKind =
+      mode === 'external' ? (entry.launchKind === 'discord' ? 'discord' : 'official') : undefined
     const apiBaseUrl = parseHttpUrl(entry.apiBaseUrl, true)
     const statusUrl = parseHttpUrl(entry.statusUrl)
+    const launchUrl = parseHttpUrl(entry.launchUrl) || parseHttpUrl(entry.website)
     const population =
       entry.population &&
       entry.population.kind === 'discord' &&
@@ -242,6 +250,21 @@ function catalogData() {
           }
         : undefined
 
+    // A provider can use Discord either through its own OAuth broker (Era),
+    // directly through Discord's authorize endpoint (Stellar), or through a
+    // fixed custom-scheme client (Retrac). Keep that capability separate from
+    // `auth` so the renderer can ask only for Discord-backed seasons.
+    let discordAuthorize = false
+    if (oauth?.methods?.discord) discordAuthorize = true
+    if (deeplink?.authorizeUrl) {
+      try {
+        discordAuthorize = new URL(deeplink.authorizeUrl).hostname === 'discord.com'
+      } catch {
+        discordAuthorize = false
+      }
+    }
+    const discordAuth = entry.discordAuth === true || discordAuthorize
+
     providers.push({
       id,
       name,
@@ -250,7 +273,11 @@ function catalogData() {
       website: typeof entry.website === 'string' ? entry.website.trim() : '',
       signInUrl: typeof entry.signInUrl === 'string' ? entry.signInUrl.trim() : '',
       auth,
+      discordAuth,
       mode,
+      external: mode === 'external' || entry.external === true,
+      launchKind,
+      launchUrl: launchUrl ? launchUrl.toString() : '',
       oauth,
       deeplink,
       embeddedWeb,
@@ -291,7 +318,7 @@ for (const entry of catalogData().providers) {
 
 /** Sanitised catalog consumed by the renderer and the provider launch path. */
 function providerCatalog() {
-  return catalogData().providers.map((entry) => ({
+  return [...catalogData().providers.map((entry) => ({
     id: entry.id,
     name: entry.name,
     label: entry.label,
@@ -299,14 +326,87 @@ function providerCatalog() {
     website: entry.website,
     signInUrl: entry.signInUrl,
     auth: entry.auth,
+    discordAuth: entry.discordAuth === true,
     mode: entry.mode,
+    external: entry.external === true,
+    launchKind: entry.launchKind,
+    launchUrl: entry.launchUrl,
     launchHandshakePending: entry.launchHandshakePending,
     statusUrl: entry.statusUrl,
     population: entry.population,
     global: entry.global,
     dynamicSeasons: entry.dynamicSeasons,
     supportedSeasons: entry.seasons,
-  }))
+  })), ...localProviderCatalog()]
+}
+
+/**
+ * Bundled local launchers (Reboot, Neo, EZFN Hybrid) are not global backends,
+ * but the renderer still needs their names and season mappings so every card
+ * can show a real launcher instead of a dead "unsupported" state. The launch
+ * path reads the same profile folder; no credentials are exposed here.
+ */
+function localProviderCatalog() {
+  const root = providerRoot()
+  const globalIds = new Set(catalogData().providers.map((entry) => entry.id))
+  const entries = []
+  let children = []
+  try {
+    children = fs.readdirSync(root, { withFileTypes: true })
+  } catch {
+    return entries
+  }
+  for (const child of children) {
+    if (!child.isDirectory() || child.name === 'runtime' || globalIds.has(child.name)) continue
+    const id = child.name
+    if (!SAFE_PROVIDER_ID.test(id)) continue
+    const raw = (() => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(root, id, 'provider.json'), 'utf8'))
+      } catch {
+        return null
+      }
+    })()
+    if (!raw || raw.id !== id) continue
+    const name = typeof raw.name === 'string' ? raw.name.trim() : ''
+    const label = typeof raw.label === 'string' ? raw.label.trim() : ''
+    const backendUrl = typeof raw.backendUrl === 'string' ? raw.backendUrl.trim() : ''
+    if (!name || !label || !backendUrl) continue
+    let origin
+    try {
+      const parsed = new URL(backendUrl)
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) continue
+      origin = parsed.origin
+    } catch {
+      continue
+    }
+    const seasons = new Set()
+    for (const season of Object.values(BUNDLED_MANIFEST.seasons || {})) {
+      for (const provider of [
+        season?.onlineProvider,
+        ...(Array.isArray(season?.onlineProviders) ? season.onlineProviders : []),
+      ]) {
+        if (provider?.id === id) seasons.add(season.id)
+      }
+    }
+    entries.push({
+      id,
+      name,
+      label,
+      backendUrl: origin,
+      website: typeof raw.website === 'string' ? raw.website.trim() : '',
+      signInUrl: '',
+      auth: 'none',
+      mode: 'download',
+      launchHandshakePending: false,
+      statusUrl: '',
+      population: undefined,
+      global: false,
+      dynamicSeasons: false,
+      supportedSeasons: [...seasons],
+    })
+  }
+  return entries
 }
 
 /** Repair destination for an installed app whose packaged resources are read-only. */
@@ -393,6 +493,7 @@ function providerProfile(id) {
   }
   const backendUrl = backend.origin
   const catalogEntry = catalogData().providers.find((entry) => entry.id === provider.id)
+  const localEntry = catalogEntry ? null : localProviderCatalog().find((entry) => entry.id === provider.id)
   const redirectDllName =
     typeof raw?.redirectDllName === 'string' && raw.redirectDllName.trim()
       ? raw.redirectDllName.trim()
@@ -426,11 +527,13 @@ function providerProfile(id) {
     root,
     configPath,
     auth: catalogEntry?.auth || (raw?.auth === 'exchangeCode' ? 'exchangeCode' : 'none'),
+    discordAuth: catalogEntry?.discordAuth === true,
     launchHandshakePending: catalogEntry?.launchHandshakePending === true,
     statusUrl: catalogEntry?.statusUrl || '',
     mode:
       catalogEntry?.mode ||
       (raw?.mode === 'global_live' && raw?.auth === 'oauth' ? 'global_live' : 'download'),
+    launchKind: catalogEntry?.launchKind || (raw?.launchKind === 'discord' ? 'discord' : undefined),
     oauth: catalogEntry?.oauth || parseOAuth(raw?.oauth),
     deeplink: catalogEntry?.deeplink || null,
     embeddedWeb: catalogEntry?.embeddedWeb || null,
@@ -448,7 +551,7 @@ function providerProfile(id) {
     signInUrl:
       (typeof raw?.signInUrl === 'string' && raw.signInUrl.trim()) || catalogEntry?.signInUrl || '',
     website: (typeof raw?.website === 'string' && raw.website.trim()) || catalogEntry?.website || '',
-    supportedSeasons: catalogEntry?.seasons || [],
+    supportedSeasons: catalogEntry?.seasons || localEntry?.supportedSeasons || [],
     dynamicSeasons: catalogEntry?.dynamicSeasons === true,
     global: catalogEntry?.global === true,
   }
@@ -552,6 +655,9 @@ function ensureProviderRedirects() {
         report.errors.push({ id, error: error instanceof Error ? error.message : String(error) })
         continue
       }
+      // External launchers use their own signed official launcher; VAULTED
+      // never injects a redirect DLL for them.
+      if (profile.mode === 'external') continue
 
       const local = path.join(profile.root, profile.redirectDllName)
       if (redirectDllMatchesProfile(local, profile)) continue

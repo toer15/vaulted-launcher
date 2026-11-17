@@ -77,6 +77,7 @@
       "website": "https://retrac.site/",
       "signInUrl": "https://retrac.site/",
       "auth": "oauth",
+      "discordAuth": true,
       "oauth": {
         "authorizeUrl": "https://oauth-service-prod.retr.ac/oauth/authorise",
         "tokenUrl": "https://oauth-service-prod.retr.ac/oauth/token",
@@ -127,6 +128,98 @@
       "launchHandshakePending": true,
       "seasons": [
         "ch2-s2"
+      ]
+    },
+    {
+      "id": "eon",
+      "name": "Project Eon",
+      "label": "Eon",
+      "mode": "external",
+      "backendUrl": "https://projecteon.dev/",
+      "website": "https://projecteon.dev/",
+      "launchUrl": "https://projecteon.dev/",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch2-s7"
+      ]
+    },
+    {
+      "id": "hydro",
+      "name": "Hydro",
+      "label": "Hydro",
+      "mode": "external",
+      "backendUrl": "https://hydromp.site/",
+      "website": "https://hydromp.site/",
+      "launchUrl": "https://hydromp.site/",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch2-s5"
+      ]
+    },
+    {
+      "id": "interloop",
+      "name": "Project Interloop",
+      "label": "Interloop",
+      "mode": "external",
+      "backendUrl": "https://interloopfn.org/",
+      "website": "https://interloopfn.org/",
+      "launchUrl": "https://interloopfn.org/download",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch2-s2"
+      ]
+    },
+    {
+      "id": "crystal",
+      "name": "Project Crystal",
+      "label": "Crystal",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/crystalfn",
+      "launchUrl": "https://discord.gg/crystalfn",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch2-s5"
+      ]
+    },
+    {
+      "id": "echo",
+      "name": "Project Echo",
+      "label": "Echo",
+      "mode": "external",
+      "backendUrl": "https://echofn.org/",
+      "website": "https://echofn.org/",
+      "launchUrl": "https://echofn.org/",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch1-s3"
+      ]
+    },
+    {
+      "id": "arc",
+      "name": "ARC",
+      "label": "ARC",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.com/servers/arc-1462432577892647139",
+      "launchUrl": "https://discord.com/servers/arc-1462432577892647139",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch1-s4"
       ]
     }
   ]

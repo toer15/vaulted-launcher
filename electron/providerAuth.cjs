@@ -38,6 +38,15 @@ function safeText(value, limit = 300) {
   return typeof value === 'string' ? value.trim().slice(0, limit) : ''
 }
 
+/** Keep provider/account errors useful without echoing bearer tokens to logs. */
+function redactDiagnosticText(value, secrets = []) {
+  let text = safeText(value, 500)
+  for (const secret of secrets) {
+    if (typeof secret === 'string' && secret.length >= 6) text = text.split(secret).join('[redacted]')
+  }
+  return text.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+}
+
 function processIsAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false
   try {
@@ -281,6 +290,9 @@ function createProviderAuth({
   // file hashes and Era realtime gateway.
   buildVerifyImpl = null,
   gameFileHashesImpl = null,
+  // Structured, redacted exchange diagnostics. Production defaults to the
+  // process log; the offline test harness captures the same objects.
+  diagnosticSink = null,
 }) {
   if (!app || !safeStorage || !BrowserWindow) throw new Error('Provider authentication requires Electron.')
   if (typeof listProviders !== 'function' || typeof profileForId !== 'function') {
@@ -289,6 +301,15 @@ function createProviderAuth({
   const providerUserAgent = `VAULTED-Launcher/${
     safeText(typeof app.getVersion === 'function' ? app.getVersion() : '', 40) || 'unknown'
   } (${process.platform}; ${process.arch})`
+
+  const emitDiagnostic = (diagnostic) => {
+    try {
+      if (typeof diagnosticSink === 'function') diagnosticSink(diagnostic)
+      else console.info('[provider-auth]', JSON.stringify(diagnostic))
+    } catch {
+      /* diagnostics must never affect the account flow */
+    }
+  }
 
   /** providerId -> in-flight login promise */
   const activeLogins = new Map()
@@ -714,7 +735,7 @@ function createProviderAuth({
       }
     }
     if (!response.ok) throw responseError(json, response.status, fallback, response.headers)
-    return { json, headers: response.headers }
+    return { json, headers: response.headers, status: response.status }
   }
 
   async function requestJson(url, options = {}, fallback = 'The provider rejected the request.') {
@@ -2682,7 +2703,7 @@ function createProviderAuth({
    * embedded sign-in already returned the account access token, so the launch
    * code is the same exchange code the shipped client would request.
    */
-  async function ezfnGameCode(config, token) {
+  async function ezfnGameCode(config, token, onResponse = null) {
     const exchange = await requestJsonWithMeta(
       new URL('/account/api/oauth/exchange', config.apiBaseUrl),
       {
@@ -2694,6 +2715,7 @@ function createProviderAuth({
       },
       `${config.label} could not create a game login code.`,
     )
+    if (typeof onResponse === 'function') onResponse(exchange.status)
     const payload = exchange.json?.data ?? exchange.json
     const code = safeText(payload?.code, 4096)
     if (!code) {
@@ -2731,6 +2753,59 @@ function createProviderAuth({
         configurable: true,
       })
       return result
+    }
+    if (config.id === 'stellar') {
+      // Stellar exposes the standard Epic OAuth exchange host route. The
+      // Discord callback already returned the account token, so this is the
+      // same one-time game code the official launcher requests before launch.
+      const endpoint = new URL('/account/api/oauth/exchange', config.apiBaseUrl).toString()
+      const startedAt = Date.now()
+      let responseStatus = null
+      const baseDiagnostic = {
+        event: 'provider_exchange',
+        schemaVersion: 1,
+        operation: 'stellar_oauth_exchange',
+        providerId: config.id,
+        endpoint,
+        method: 'GET',
+        request: {
+          accept: 'application/json',
+          authorization: 'Bearer [redacted]',
+          userAgent: providerUserAgent,
+          body: null,
+        },
+      }
+      try {
+        const result = await ezfnGameCode(config, token, (status) => {
+          responseStatus = status
+        })
+        emitDiagnostic({
+          ...baseDiagnostic,
+          ok: true,
+          status: responseStatus,
+          durationMs: Date.now() - startedAt,
+          codeLength: result.code.length,
+          expiresIn: result.expiresIn,
+        })
+        result.buildId = ''
+        result.buildName = safeText(`${seasonId || 'Stellar'} ${version || ''}`, 120)
+        return result
+      } catch (error) {
+        emitDiagnostic({
+          ...baseDiagnostic,
+          ok: false,
+          status: Number.isInteger(error?.status) ? error.status : responseStatus,
+          durationMs: Date.now() - startedAt,
+          error: {
+            name: safeText(error?.name, 80) || 'Error',
+            code: safeText(error?.code, 80) || null,
+            accountStatus: safeText(error?.accountStatus, 80) || null,
+            verificationRequired: error?.verificationRequired === true,
+            message: redactDiagnosticText(error?.message, [token]),
+          },
+        })
+        throw error
+      }
     }
     if (config.id === 'ezfn') {
       const result = await ezfnGameCode(config, token)

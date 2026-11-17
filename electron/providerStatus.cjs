@@ -172,6 +172,7 @@ async function probeProviderStatus(provider, options = {}) {
       providerId,
       online: false,
       servers: 0,
+      serverData: false,
       reason: 'No health endpoint is configured.',
       checkedAt,
     }
@@ -202,6 +203,7 @@ async function probeProviderStatus(provider, options = {}) {
         providerId,
         online: false,
         servers: 0,
+        serverData: false,
         pingMs,
         reason: `Health endpoint returned HTTP ${response.status}.`,
         checkedAt,
@@ -212,6 +214,7 @@ async function probeProviderStatus(provider, options = {}) {
         providerId,
         online: false,
         servers: 0,
+        serverData: false,
         pingMs,
         reason: 'Health endpoint did not return an HTTP status.',
         checkedAt,
@@ -220,7 +223,15 @@ async function probeProviderStatus(provider, options = {}) {
     const payload = await readPayload(response)
     const offlineReason = offlineReasonFromPayload(payload)
     if (offlineReason) {
-      return { providerId, online: false, servers: 0, pingMs, reason: offlineReason, checkedAt }
+      return {
+        providerId,
+        online: false,
+        servers: 0,
+        serverData: false,
+        pingMs,
+        reason: offlineReason,
+        checkedAt,
+      }
     }
     const players = playerCountFromPayload(payload)
     const reportedServers = serverCountFromPayload(payload)
@@ -234,6 +245,11 @@ async function probeProviderStatus(provider, options = {}) {
         populationLabel = provider?.population?.label || 'Discord'
       }
     }
+    // A homepage or health page can answer 200 without describing a game
+    // server. Only a positive player/server count is playable backend data.
+    const serverData =
+      (typeof players === 'number' && players > 0) ||
+      (typeof reportedServers === 'number' && reportedServers > 0)
     return {
       providerId,
       online: true,
@@ -241,7 +257,8 @@ async function probeProviderStatus(provider, options = {}) {
       communityPlayers,
       populationSource,
       populationLabel,
-      servers: reportedServers ?? 1,
+      servers: reportedServers ?? (serverData && players > 0 ? 1 : 0),
+      serverData,
       pingMs,
       checkedAt,
     }
@@ -251,6 +268,7 @@ async function probeProviderStatus(provider, options = {}) {
       providerId,
       online: false,
       servers: 0,
+      serverData: false,
       pingMs: Math.max(0, Date.now() - startedAt),
       reason: timedOut
         ? `Health check timed out after ${timeoutMs} ms.`

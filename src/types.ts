@@ -52,8 +52,10 @@ export interface ProviderLiveStatus {
   communityPlayers?: number
   populationSource?: 'provider' | 'discord' | 'directory'
   populationLabel?: string
-  /** Reachable backend count; at least 1 when a global backend is online. */
+  /** Reachable backend count; never fabricated from a homepage response. */
   servers: number
+  /** True only when the response reported a positive player or server count. */
+  serverData?: boolean
   pingMs?: number
   /** why a down probe failed, or the reachable HTTP status */
   reason?: string
@@ -66,8 +68,16 @@ export interface GlobalBackend extends OnlineProviderConfig {
   website?: string
   signInUrl?: string
   auth: 'none' | 'exchangeCode' | 'oauth' | 'deeplink' | 'embedded_web'
+  /** this provider's session is established through Discord OAuth */
+  discordAuth?: boolean
   /** global_live means VAULTED signs in and fetches game codes natively */
-  mode?: 'download' | 'global_live'
+  mode?: 'download' | 'global_live' | 'external'
+  /** external launchers are opened through their official launcher/site */
+  external?: boolean
+  /** official launcher, or a Discord community for projects without a site */
+  launchKind?: 'official' | 'discord'
+  /** official launcher, download page, or Discord invite opened when external */
+  launchUrl?: string
   /** signed in, but the provider's game-code handshake is not wired yet */
   launchHandshakePending?: boolean
   /** preferred health endpoint, resolved in main */

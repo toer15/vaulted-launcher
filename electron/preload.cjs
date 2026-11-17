@@ -42,6 +42,7 @@ contextBridge.exposeInMainWorld('arc', {
   fetchCommunityServers: (query) => ipcRenderer.invoke('arc:community-servers', query),
   providerCatalog: () => ipcRenderer.invoke('arc:provider-catalog'),
   providerLiveStatus: () => ipcRenderer.invoke('arc:provider-live-status'),
+  providerPrepare: (providerId) => ipcRenderer.invoke('arc:provider-prepare', providerId),
   providerBuilds: (providerId) => ipcRenderer.invoke('arc:provider-builds', providerId),
   providerAuth: {
     status: () => ipcRenderer.invoke('arc:provider-auth-status'),
@@ -52,7 +53,6 @@ contextBridge.exposeInMainWorld('arc', {
     onProviderAuthChanged: (callback) => subscribe('arc:provider-auth-changed', callback),
   },
   probeServer: (payload) => ipcRenderer.invoke('arc:probe-server', payload),
-  openExternal: (url) => ipcRenderer.invoke('arc:open-external', url),
   lanIp: () => ipcRenderer.invoke('arc:lan-ip'),
   publicAddress: () => ipcRenderer.invoke('arc:public-address'),
   sessionStatus: () => ipcRenderer.invoke('arc:session-status'),

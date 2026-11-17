@@ -73,27 +73,6 @@ export function BuildList({
         const art = seasonImageFor(build.season)
         const sourceKey = artKeyFor(build.season)
         const playMode = playModes[build.id] ?? DEFAULT_PLAY_MODE
-        const onlineProviderLabel =
-          playMode.globalProviderLabel ||
-          playMode.providerLabel ||
-          build.onlineProvider?.label ||
-          build.onlineProvider?.name ||
-          build.providerLabel
-        const communityPlayers = playMode.communityPlayerCount ?? 0
-        const communityProviderLabel = playMode.communityProviderLabel
-        const directoryProviders = playMode.directoryProviders ?? []
-        const communityDetail = [
-          communityPlayers > 0
-            ? `${communityProviderLabel || 'A community directory'} reports ${communityPlayers} player${communityPlayers === 1 ? '' : 's'}.`
-            : '',
-          directoryProviders.length > 0 ? `Directories list ${directoryProviders.join(', ')} for this season.` : '',
-        ]
-          .filter(Boolean)
-          .join(' ')
-        const directoryLabel =
-          directoryProviders.length > 0
-            ? `${directoryProviders.slice(0, 2).join(', ')}${directoryProviders.length > 2 ? ` +${directoryProviders.length - 2}` : ''}`
-            : ''
         // Real-time total across every live server for this season; no local
         // presence heartbeat and no synthetic player placeholder.
         const onlinePlayers = onlinePlayerCount(playMode)
@@ -120,16 +99,16 @@ export function BuildList({
         const isLive = playMode.online || playMode.globalOnline === true
         const isChecking =
           !isLive && playMode.availability === 'global' && playMode.globalOffline !== true
-        const isSelfHosted = playMode.availability === 'self-hosted'
+        const isLauncher = playMode.availability === 'launcher'
         const isDirectoryOnly = playMode.availability === 'directory'
-        const isMuted = !isLive && (isSelfHosted || isDirectoryOnly)
+        const isMuted = !isLive && (isLauncher || isDirectoryOnly)
         const onlineStatus = seasonStatusLabel(playMode)
         const chapterChanged = index === 0 || builds[index - 1].season.chapter !== build.season.chapter
         const hasSource = Boolean(sourceKey && sourceKeys?.has(sourceKey))
         const sizeLabel = sourceKey && sourceSizes?.[sourceKey] ? formatDownloadSize(sourceSizes[sourceKey]) : null
         const installedNow = installed?.[build.id] === true
         const diskSize = build.path ? diskSizes?.[build.path] : undefined
-        const playModeTitle = `${onlineStatus}${onlineProviderLabel ? ` · ${onlineProviderLabel}` : ''}.${communityDetail ? ` ${communityDetail}` : ''}`
+        const playModeTitle = onlineStatus
 
         return (
           <Fragment key={build.id}>
@@ -249,18 +228,10 @@ export function BuildList({
                       )}
                       title={downloadLabel || build.path || 'Not downloaded'}
                     >
-                      {downloadLabel ?? (onlineProviderLabel ? `via ${onlineProviderLabel}` : build.folderName)}
+                      {downloadLabel ?? (installed?.[build.id] ? 'Installed' : 'Not downloaded')}
                       {!downloadLabel && !build.onlineProvider && !installed?.[build.id] && hasSource && ` · ${sizeLabel ?? 'size unavailable'}`}
                     </span>
                   </span>
-                  {directoryLabel && (
-                    <span
-                      title={`External directories list ${directoryProviders.join(', ')} for this season.`}
-                      className="mt-1 block truncate text-[9px] font-medium uppercase tracking-[0.06em] text-sky-200/70"
-                    >
-                      Listed by {directoryLabel}
-                    </span>
-                  )}
                   {installedNow && build.path && (
                     <span className="mt-1 flex min-w-0 items-center gap-1 text-[9px] text-fog" title={build.path}>
                       <HardDrive className="h-2.5 w-2.5 shrink-0" />

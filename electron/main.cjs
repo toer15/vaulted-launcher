@@ -20,6 +20,14 @@ const {
 } = require('./onlineProviders.cjs')
 const { fetchCommunityServers, normalizeHostPort, probePing } = require('./communityServers.cjs')
 const { createProviderAuth } = require('./providerAuth.cjs')
+const {
+  LEGACY_CALDERA,
+  LEGACY_CALDERA_EOS,
+  LEGACY_FLTOKEN,
+  providerFortniteArgs,
+  providerLaunchDiagnostic,
+  logProviderLaunchDiagnostic,
+} = require('./providerLaunchArgs.cjs')
 const { createEraBridge } = require('./eraBridge.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
@@ -79,11 +87,6 @@ const MATCHMAKER_URL = `http://127.0.0.1:${MATCHMAKER_PORT}`
 const MATCHMAKER_PROTOCOL = 3
 const GAME_SERVER_PORT = 7777
 const BACKEND_PASSWORD = 'Rebooted'
-const LEGACY_FLTOKEN = '3db3ba5dcbd2e16703f3978d'
-const LEGACY_CALDERA =
-  'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50X2lkIjoiYmU5ZGE1YzJmYmVhNDQwN2IyZjQwZWJhYWQ4NTlhZDQiLCJnZW5lcmF0ZWQiOjE2Mzg3MTcyNzgsImNhbGRlcmFHdWlkIjoiMzgxMGI4NjMtMmE2NS00NDU3LTliNTgtNGRhYjNiNDgyYTg2IiwiYWNQcm92aWRlciI6IkVhc3lBbnRpQ2hlYXQiLCJub3RlcyI6IiIsImZhbGxiYWNrIjpmYWxzZX0.VAWQB67RTxhiWOxx7DBjnzDnXyyEnX7OljJm-j2d88G_WgwQ9wrE6lwMEHZHjBd1ISJdUO1UVUqkfLdU5nofBQ'
-const LEGACY_CALDERA_EOS =
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50X2lkIjoic2FyYWgiLCJnZW5lcmF0ZWQiOjE3NzQxMjEzNzksImNhbGRlcmFHdWlkIjoiZWYzMGE4MjUtMzFlNi00ZWRhLTlmM2EtZTI4YzgwNjYxODkxIiwiYWNQcm92aWRlciI6IkVhc3lBbnRpQ2hlYXRFT1MiLCJub3RlcyI6IiIsImZhbGxiYWNrIjpmYWxzZX0.f7EcDmsjj3XHzdbMl41YHyJE-LlAirjbjaqzcdqBB_Y'
 
 let backendInstallPromise = null
 let backendStartPromise = null
@@ -1472,47 +1475,6 @@ function normalizeProviderAuthCode(value) {
   // Exchange codes and one-time access tokens are URL-safe. Reject whitespace
   // or shell-looking text before it becomes a process argument.
   return /^[A-Za-z0-9._~+/=-]+$/.test(code) ? code : ''
-}
-
-function providerFortniteArgs(backendUrl, authCode = '', providerId = '', authToken = '') {
-  // Era's official launcher marks the game as a backend client. Its native
-  // era.dll uses that launch shape when registering the process for
-  // matchmaking; without -frombe the game can load the DLL but Era still
-  // answers the athena profile and matchmaking with "The Era client isn't
-  // running."
-  const era = providerId === 'era'
-  const retrac = providerId === 'retrac'
-  const args = [
-    '-epicapp=Fortnite',
-    '-epicenv=Prod',
-    '-epiclocale=en-us',
-    '-epicportal',
-    '-noeac',
-    '-nobe',
-    '-nouac',
-    '-nocodeguards',
-    `-fromfl=${era ? 'be' : 'eac'}`,
-    ...(era ? ['-frombe'] : []),
-    `-caldera=${LEGACY_CALDERA}`,
-    '-fltoken=7a848a93a74ba68876c36C1c',
-    '-skippatchcheck',
-  ]
-  if (authCode) {
-    args.push(
-      // Retrac's launcher identifies exchange-code logins with this sentinel.
-      retrac ? '-AUTH_LOGIN=retrac@.' : '-AUTH_LOGIN=unused',
-      `-AUTH_PASSWORD=${authCode}`,
-      '-AUTH_TYPE=exchangecode',
-    )
-  }
-  // Retrac's game process expects its OAuth token as the anticheat token. It
-  // stays in the process arguments only, matching the official launcher.
-  if (retrac && authToken) args.push(`-actoken=${authToken}`)
-  // Tellurium reads the value after -backend= from the raw command line, so
-  // this must remain the final argument. Values without whitespace stay
-  // unquoted, which also keeps the exchange code intact for FParse::Value.
-  if (backendUrl) args.push(`-backend=${backendUrl}`)
-  return args
 }
 
 function fortniteLaunchArgs(payload, options = {}) {
@@ -4645,6 +4607,13 @@ async function launchOnlineProvider(payload) {
   // below can turn it into a missing-DLL dialog.
   await ensureProviderRedirects()
   const profile = providerProfile(providerId)
+  if (profile.mode === 'external') {
+    const externalName =
+      profile.launchKind === 'discord' ? 'Discord community' : 'official launcher'
+    throw new Error(
+      `${profile.label} uses its ${externalName}. Open ${profile.website || profile.label} to get that build.`,
+    )
+  }
   const runtime = providerRuntime(profile)
   const redirectDll = runtime.dll
   let redirectReady = false
@@ -4680,12 +4649,27 @@ async function launchOnlineProvider(payload) {
   const launchPayload = { ...payload, path: folder, executable }
   assertBuild(launchPayload)
 
-  if (profile.launchHandshakePending) {
+  // Reboot, Neo and EZFN Hybrid ship local launcher profiles without an
+  // account exchange. They can still join an advertised server through their
+  // own redirect backend; only hosted providers need a game-code exchange.
+  const localLauncher = profile.auth === 'none'
+  // A verified Discord OAuth session is the authorization for this launch.
+  // Do not keep the pre-auth "handshake pending" gate in front of the live
+  // exchange attempt after the player has completed that sign-in.
+  let discordAuthorized = false
+  if (profile.discordAuth === true) {
+    try {
+      discordAuthorized = providerAuth.status(providerId).signedIn === true
+    } catch {
+      discordAuthorized = false
+    }
+  }
+  if (!localLauncher && profile.launchHandshakePending && !discordAuthorized) {
     throw new Error(
       `${profile.label} is signed in, but its launch handshake is pending. VAULTED has no verified game-code exchange for this provider yet.`,
     )
   }
-  if (!['oauth', 'embedded_web', 'deeplink'].includes(profile.auth)) {
+  if (!localLauncher && !['oauth', 'embedded_web', 'deeplink'].includes(profile.auth)) {
     throw new Error(
       `VAULTED requires verified in-app sign-in for ${profile.label}. Manual provider codes are no longer supported.`,
     )
@@ -4697,46 +4681,48 @@ async function launchOnlineProvider(payload) {
   // main-process handle until the client process exits; never send it to the
   // renderer or close it after build.verify.
   let realtimeSession = null
-  try {
-    const exchange = await providerAuth.exchangeCode(providerId, {
-      seasonId,
-      version,
-      // Era gates exchange-code on its realtime build.verify operation. Pass
-      // the exact installed folder so providerAuth can hash the same
-      // executable/PAK files the official launcher verifies.
-      buildPath: folder,
-    })
-    realtimeSession = exchange.realtimeSession || null
-    authToken = typeof exchange.authToken === 'string' ? exchange.authToken : ''
-    authCode = normalizeProviderAuthCode(exchange.code)
-    if (!authCode) {
-      realtimeSession?.close('invalid login code')
-      throw new Error('The provider returned an invalid login code.')
-    }
-  } catch (error) {
-    realtimeSession?.close('exchange failed')
-    const buildIssue = providerBuildIssue(profile, error)
-    if (buildIssue) {
-      // A build integrity rejection is not an account-status issue. Keep it
-      // separate so the card can offer the exact live-build repair instead of
-      // an account-verification button.
+  if (!localLauncher) {
+    try {
+      const exchange = await providerAuth.exchangeCode(providerId, {
+        seasonId,
+        version,
+        // Era gates exchange-code on its realtime build.verify operation. Pass
+        // the exact installed folder so providerAuth can hash the same
+        // executable/PAK files the official launcher verifies.
+        buildPath: folder,
+      })
+      realtimeSession = exchange.realtimeSession || null
+      authToken = typeof exchange.authToken === 'string' ? exchange.authToken : ''
+      authCode = normalizeProviderAuthCode(exchange.code)
+      if (!authCode) {
+        realtimeSession?.close('invalid login code')
+        throw new Error('The provider returned an invalid login code.')
+      }
+    } catch (error) {
+      realtimeSession?.close('exchange failed')
+      const buildIssue = providerBuildIssue(profile, error)
+      if (buildIssue) {
+        // A build integrity rejection is not an account-status issue. Keep it
+        // separate so the card can offer the exact live-build repair instead of
+        // an account-verification button.
+        throw new Error(
+          `${buildIssue.message}\n${PROVIDER_BUILD_STATUS_PREFIX}${JSON.stringify(buildIssue)}`,
+        )
+      }
+      const issue = providerAccountIssue(profile, error)
+      if (issue) {
+        // Keep the friendly explanation first, then carry an opaque marker so the
+        // renderer can offer the correct account action without exposing a raw
+        // verification code or losing the status through Electron IPC.
+        throw new Error(
+          `${issue.message}\n${PROVIDER_ACCOUNT_STATUS_PREFIX}${JSON.stringify(issue)}`,
+        )
+      }
       throw new Error(
-        `${buildIssue.message}\n${PROVIDER_BUILD_STATUS_PREFIX}${JSON.stringify(buildIssue)}`,
+        `VAULTED could not get a fresh ${profile.label} login code.\n\n` +
+          `${error instanceof Error ? error.message : String(error)}`,
       )
     }
-    const issue = providerAccountIssue(profile, error)
-    if (issue) {
-      // Keep the friendly explanation first, then carry an opaque marker so the
-      // renderer can offer the correct account action without exposing a raw
-      // verification code or losing the status through Electron IPC.
-      throw new Error(
-        `${issue.message}\n${PROVIDER_ACCOUNT_STATUS_PREFIX}${JSON.stringify(issue)}`,
-      )
-    }
-    throw new Error(
-      `VAULTED could not get a fresh ${profile.label} login code.\n\n` +
-        `${error instanceof Error ? error.message : String(error)}`,
-    )
   }
 
   const join = joinTargetFromPayload(payload)
@@ -4774,13 +4760,34 @@ async function launchOnlineProvider(payload) {
     }
   }
 
+  // Keep legacy 6.21 profiles on their original argument set. Chapter 4+
+  // local providers need the explicit non-exchange auth shape below or the
+  // client exits before the injector's ready marker.
+  const localAuth = localLauncher && Number(String(version).split('.')[0]) >= 11
+  const providerArgs = providerFortniteArgs(backendUrl, authCode, providerId, authToken, {
+    localAuth,
+  })
+  logProviderLaunchDiagnostic(
+    providerLaunchDiagnostic({
+      providerId,
+      buildId: id,
+      seasonId,
+      version,
+      args: providerArgs,
+      backendUrl,
+      authCode,
+      authToken,
+      localAuth,
+    }),
+  )
+
   const restoreEnvironment = applyProviderEnvironmentBypass()
   let launched
   try {
     launched = await launchInjectedGame(launchPayload, {
       injector: runtime.injector,
       dll: redirectDll,
-      args: providerFortniteArgs(backendUrl, authCode, providerId, authToken),
+      args: providerArgs,
       env: {
         VAULTED_PROVIDER_ID: providerId,
         // Retained for diagnostics; the redirect itself receives -backend= below.
@@ -5190,7 +5197,35 @@ function registerIpc() {
 
   // Backend health is deliberately checked in main, where the provider catalog
   // is trusted and the renderer cannot turn this into an arbitrary URL fetch.
-  ipcMain.handle('arc:provider-live-status', () => fetchProviderLiveStatuses(providerCatalog()))
+  // Local download engines are sampled too so every season can report its own
+  // live status without exposing which engine is behind it.
+  ipcMain.handle('arc:provider-live-status', () =>
+    fetchProviderLiveStatuses(
+      providerCatalog().filter((provider) => provider.mode !== 'external'),
+    ),
+  )
+
+  // Prepare the hash-checked bundled provider files before a one-click launch.
+  // This only repairs VAULTED's own signed resources into its app cache; it
+  // never downloads a DLL or patch from a third-party launcher.
+  ipcMain.handle('arc:provider-prepare', async (_event, providerId) => {
+    const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
+    if (!id) throw new Error('Invalid provider preparation request.')
+    const profile = providerProfile(id)
+    if (profile.mode === 'external') {
+      return { ok: false, providerId: id, label: profile.label, error: 'External launcher.' }
+    }
+    await ensureRuntimeInstalled()
+    await ensureProviderRedirects()
+    const runtime = providerRuntime(profile)
+    if (!fs.existsSync(runtime.injector)) {
+      throw new Error(`The bundled runtime injector for ${profile.label} is missing. Reinstall VAULTED.`)
+    }
+    if (!fs.existsSync(runtime.dll) || !redirectDllMatchesProfile(runtime.dll, profile)) {
+      throw new Error(`VAULTED could not verify the bundled ${profile.label} redirect DLL.`)
+    }
+    return { ok: true, providerId: id, label: profile.label, cached: true }
+  })
 
   // Live build discovery is authenticated in main. The renderer supplies only
   // a provider id, never a URL or a season/build id.
@@ -5248,19 +5283,6 @@ function registerIpc() {
   ipcMain.handle('arc:probe-server', (_event, payload) =>
     probeCommunityAddress(payload?.host, payload?.port),
   )
-
-  ipcMain.handle('arc:open-external', async (_event, rawUrl) => {
-    const url = String(rawUrl || '').trim()
-    if (!/^https?:\/\//i.test(url) || url.length > 2048) {
-      return { ok: false, error: 'Only http(s) links are supported.' }
-    }
-    try {
-      await shell.openExternal(url)
-      return { ok: true }
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : 'Could not open the link.' }
-    }
-  })
 
   /** Public community directories are allowlisted in resources/providers. */
   ipcMain.handle('arc:community-servers', async (_event, payload) => {
