@@ -18,6 +18,70 @@ function createEraBridge({ upstream, accountId, displayName, onSessionKilled }) 
   const transport = target.protocol === 'http:' ? http : https
   const accountCache = new Map()
   let sessionKillNotified = false
+  let catalogWarningLogged = false
+
+  /**
+   * Era's 6.21 catalog endpoint rejects both the launcher token and the game
+   * token with the generic "session expired" body even while the same token
+   * authenticates account and enabled-features calls. Confirm the bearer still
+   * works on the account route before treating a catalog 401 as the known
+   * upstream catalog limitation; a real 401 must still reach the game.
+   */
+  function tokenStillAuthenticates(authorization) {
+    const id = String(accountId || '').trim()
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+      return Promise.resolve(false)
+    }
+    const token = String(authorization || '').replace(/^Bearer\s+/i, '').trim()
+    if (!token) return Promise.resolve(false)
+    return new Promise((resolve) => {
+      const probe = transport.request(
+        {
+          hostname: target.hostname,
+          port: target.port || (target.protocol === 'http:' ? 80 : 443),
+          method: 'GET',
+          path: `/account/api/public/account/${encodeURIComponent(id)}`,
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${token}`,
+            'Accept-Encoding': 'identity',
+            'User-Agent': 'VAULTED-Launcher/era-bridge',
+          },
+          timeout: 10_000,
+        },
+        (response) => {
+          response.resume()
+          response.once('end', () => resolve(response.statusCode === 200))
+        },
+      )
+      probe.once('timeout', () => probe.destroy())
+      probe.once('error', () => resolve(false))
+      probe.end()
+    })
+  }
+
+  async function normalizeCatalogFailure(upstreamResponse, authorization) {
+    const chunks = []
+    for await (const chunk of upstreamResponse) chunks.push(chunk)
+    const body = Buffer.concat(chunks)
+    let json = null
+    try {
+      json = JSON.parse(body.toString('utf8'))
+    } catch {
+      return { body, empty: null }
+    }
+    if (json?.errorMessage !== 'Your session has expired. Sign in again.') {
+      return { body, empty: null }
+    }
+    if (!(await tokenStillAuthenticates(authorization))) return { body, empty: null }
+    if (!catalogWarningLogged) {
+      catalogWarningLogged = true
+      console.warn(
+        '[era-bridge] Era catalog rejected a valid account token upstream; returning an empty offer list for the 6.21 price check',
+      )
+    }
+    return { body, empty: Buffer.from('{}') }
+  }
 
   /**
    * The game signs in with `sessions/kill?killType=OTHERS_ACCOUNT_CLIENT_SERVICE`,
@@ -98,6 +162,34 @@ function createEraBridge({ upstream, accountId, displayName, onSessionKilled }) 
             String(request.method || '').toUpperCase() === 'DELETE'
           ) {
             upstreamResponse.once('end', notifySessionKilled)
+          }
+
+          if (
+            pathname === '/catalog/api/shared/bulk/offers' &&
+            String(request.method || '').toUpperCase() === 'GET' &&
+            status === 401
+          ) {
+            void normalizeCatalogFailure(
+              upstreamResponse,
+              request.headers.authorization,
+            ).then(({ body: originalBody, empty }) => {
+              if (empty) {
+                response.writeHead(200, {
+                  'content-type': 'application/json; charset=utf-8',
+                  'content-length': String(empty.length),
+                  'cache-control': 'no-store',
+                })
+                response.end(empty)
+                return
+              }
+              const headers = { ...responseHeaders, 'content-length': String(originalBody.length) }
+              response.writeHead(status, headers)
+              response.end(originalBody)
+            }).catch(() => {
+              if (!response.headersSent) response.writeHead(502, { 'content-type': 'text/plain' })
+              response.end('Era bridge catalog response failed')
+            })
+            return
           }
 
           const cacheable = pathname.startsWith('/account/api/public/account')
