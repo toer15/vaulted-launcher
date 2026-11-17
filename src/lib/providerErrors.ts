@@ -14,6 +14,8 @@ export interface ProviderAccountIssue {
   verificationUrl?: string
   verificationRequired: boolean
   verificationCompleted?: boolean
+  /** stale/expired token: open the native account prompt and resume Play */
+  reauthRequired?: boolean
 }
 
 export interface ParsedProviderAccountIssue {
@@ -90,6 +92,7 @@ export function parseProviderAccountIssue(error: unknown): ParsedProviderAccount
         verificationUrl: safeVerificationUrl(parsed.verificationUrl),
         verificationRequired: parsed.verificationRequired === true,
         verificationCompleted: parsed.verificationCompleted === true,
+        reauthRequired: parsed.reauthRequired === true,
       }
     }
   } catch {

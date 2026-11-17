@@ -246,7 +246,8 @@ async function probeProviderStatus(provider, options = {}) {
       }
     }
     // A homepage or health page can answer 200 without describing a game
-    // server. Only a positive player/server count is playable backend data.
+    // server. The reachable backend is still a live destination, so the badge
+    // reports at least one server even when the API omits a population count.
     const serverData =
       (typeof players === 'number' && players > 0) ||
       (typeof reportedServers === 'number' && reportedServers > 0)
@@ -257,7 +258,7 @@ async function probeProviderStatus(provider, options = {}) {
       communityPlayers,
       populationSource,
       populationLabel,
-      servers: reportedServers ?? (serverData && players > 0 ? 1 : 0),
+      servers: Math.max(1, reportedServers ?? 0),
       serverData,
       pingMs,
       checkedAt,

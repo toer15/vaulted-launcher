@@ -203,25 +203,22 @@ export function providerMatches(serverProviderId: string | undefined, buildProvi
   return candidate === target || candidate.replace(/-hybrid$/, '') === target.replace(/-hybrid$/, '')
 }
 
-/** Download-mode engines run on this PC and must not be inferred from a website. */
+/** Download-mode engines run on this PC and cannot be launched through a website. */
 export function isLocalEngine(provider: Pick<GlobalBackend, 'global' | 'mode'>): boolean {
   return provider.global !== true || provider.mode === 'download'
 }
 
 /**
- * A reachable homepage is not a playable backend for a local engine. Local
- * engines auto-route only when their probe reported a positive player/server
- * count, or when an exact live server target already exists for this season.
+ * The badge and Play use one rule: any mapped engine whose probe is reachable
+ * is routable. A missing population/server payload is not a reason to skip the
+ * engine while the UI is already showing that season as ONLINE.
  */
 export function providerCanAutoRoute(
-  provider: GlobalBackend,
+  _provider: GlobalBackend,
   live: ProviderLiveStatus | undefined,
-  exactServer?: CommunityServer | null,
+  _exactServer?: CommunityServer | null,
 ): boolean {
-  if (live?.online !== true) return false
-  if (!isLocalEngine(provider)) return true
-  if (live.serverData === true) return true
-  return Boolean(exactServer && providerMatches(exactServer.providerId, provider.id))
+  return live?.online === true
 }
 
 /** A public, fresh row with a real address can be joined directly. */
@@ -465,13 +462,9 @@ export function playModesForBuilds(
 ): Record<string, SeasonPlayMode> {
   const globalBySeason = new Map<string, GlobalBackend[]>()
   for (const backend of globalBackends) {
-    if (backend.mode === 'external') continue
-    const nativeEngine = backend.mode === 'global_live' || backend.mode === 'download'
-    if (!nativeEngine) continue
-    // Local engines are not a global live destination until their own probe
-    // reports playable server data. An exact server target is handled by the
-    // local-launcher route instead of pretending the homepage is a backend.
-    if (isLocalEngine(backend) && backend.live?.serverData !== true) continue
+    // Every mapped engine contributes to the season's live badge and count.
+    // Reachability is the only requirement; the probe already supplies one
+    // server when a backend does not publish a player or server count.
     for (const seasonId of backend.supportedSeasons) {
       const current = globalBySeason.get(seasonId) ?? []
       current.push(backend)
@@ -556,9 +549,7 @@ export function playModesForBuilds(
     if (backends.length > 0) {
       const existing = modes[build.id] ?? DEFAULT_PLAY_MODE
       const known = backends.filter((backend) => backend.live)
-      const onlineBackends = backends.filter((backend) =>
-        providerCanAutoRoute(backend, backend.live),
-      )
+      const onlineBackends = backends.filter((backend) => backend.live?.online === true)
       const globalOnline = onlineBackends.length > 0
       const globalOffline = known.length > 0 && onlineBackends.length === 0
       const backendPlayers = onlineBackends.reduce(

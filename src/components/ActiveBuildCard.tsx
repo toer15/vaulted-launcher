@@ -2,6 +2,7 @@ import {
   ArrowLeftRight,
   Ban,
   Check,
+  ChevronDown,
   CircleCheck,
   Download,
   FolderPlus,
@@ -13,6 +14,7 @@ import {
   LogIn,
   Pause,
   Play,
+  Server,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -27,6 +29,7 @@ import { formatDownloadSize, formatSpeed } from '../lib/downloadSize'
 import { lobbyPlayers } from '../lib/friends'
 import {
   onlinePlayerCount,
+  onlineStatusLabel,
   seasonServerCount,
   seasonStatusLabel,
   type SeasonPlayMode,
@@ -44,6 +47,11 @@ interface ActiveBuildCardProps {
   autoServer?: CommunityServer | null
   /** backend Play uses automatically when no exact server is live */
   autoGlobalBackend?: GlobalBackend | null
+  /** live external servers for this exact season */
+  serverOptions?: CommunityServer[]
+  /** explicitly selected external server address, null = Auto */
+  selectedServer?: string | null
+  onSelectServer?: (address: string | null) => void
   /** whether a VAULTED or verified provider session is active */
   signedIn?: boolean
   /** open the in-app VAULTED sign-in modal */
@@ -81,7 +89,14 @@ interface ActiveBuildCardProps {
   onRetryLaunch?: () => void
   /** this PC's currently published lobby, if it is hosting this build */
   hostedLobby?: { address: string; port: number; public: boolean; label: string; players?: number } | null
-  verify?: { phase: 'running' | 'done'; report?: BuildVerifyReport; error?: string } | null
+  verify?: {
+    phase: 'running' | 'done'
+    report?: BuildVerifyReport
+    error?: string
+    step?: 'game' | 'repair' | 'routing' | 'session' | 'done'
+    label?: string
+    progress?: number
+  } | null
   onVerify?: () => void
   /** optional: link a build folder that already exists on this PC */
   onLocateFolder?: () => void
@@ -226,6 +241,9 @@ export function ActiveBuildCard({
   playMode,
   autoServer,
   autoGlobalBackend,
+  serverOptions = [],
+  selectedServer = null,
+  onSelectServer,
   signedIn = true,
   onSignIn,
   accountAuthRequired = false,
@@ -325,12 +343,16 @@ export function ActiveBuildCard({
   const activeGlobalBackend = autoGlobalBackend ?? null
   const onlinePlayers = onlinePlayerCount(playMode)
   const onlineServers = seasonServerCount(playMode)
-  let liveServers = onlineServers
-  let livePlayers = onlinePlayers
-  if (autoServer) {
-    liveServers = 1
-    livePlayers = lobbyPlayers(autoServer)
-  }
+  // The hero, every sidebar card, and the selector all report the same
+  // season-wide total; picking one row changes the route, not the count.
+  const liveServers = onlineServers
+  const livePlayers = onlinePlayers
+  const selectedServerOption = selectedServer
+    ? serverOptions.find((server) => server.address === selectedServer) ?? null
+    : null
+  const serverBadge = liveServers > 0
+    ? `ONLINE · ${liveServers} ${liveServers === 1 ? 'SERVER' : 'SERVERS'}`
+    : 'OFFLINE'
   const activeBackendHealth = healthForBackend(activeGlobalBackend)
   const activeBackendOffline = activeBackendHealth.state === 'down'
   const heroHealth: ServerHealth | null = autoServer
@@ -338,28 +360,15 @@ export function ActiveBuildCard({
     : activeGlobalBackend
       ? activeBackendHealth
       : null
-  const heroPlayers =
-    livePlayers > 0
-      ? playerCountLabel(livePlayers)
-      : heroHealth?.players !== undefined
-        ? playerCountLabel(heroHealth.players)
-        : ''
   const heroCommunity =
     heroHealth?.communityPlayers !== undefined
       ? communityCountLabel(heroHealth.communityPlayers)
       : ''
   const activePopulationLabel = livePlayers > 0 ? playerCountLabel(livePlayers) : ''
   const activePopulationDetail = activePopulationLabel ? ` · ${activePopulationLabel}` : ''
-  const heroMeta = [
-    heroHealth?.state === 'up' ? heroPlayers : '',
-    heroHealth?.state === 'up' && liveServers > 0 ? serverCountLabel(liveServers) : '',
-    heroHealth?.state === 'up' && typeof heroHealth.pingMs === 'number'
-      ? `${Math.max(0, Math.round(heroHealth.pingMs))} ms`
-      : '',
-  ].filter(Boolean)
   const onlineStatus = heroHealth
     ? heroHealth.state === 'up'
-      ? ['ONLINE', ...heroMeta].join(' · ')
+      ? onlineStatusLabel(onlinePlayers, onlineServers)
       : heroHealth.state === 'down'
         ? 'OFFLINE'
         : 'CHECKING'
@@ -622,6 +631,95 @@ export function ActiveBuildCard({
             </div>
           )}
 
+          {onSelectServer && (
+            <details className="group relative mt-4 max-w-xl">
+              <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[10.5px] text-fog backdrop-blur transition-colors duration-200 hover:border-emerald-400/35 [&::-webkit-details-marker]:hidden">
+                <Server className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
+                <span className="min-w-0 flex-1 truncate font-semibold text-mist">
+                  {selectedServerOption ? selectedServerOption.address : 'Auto · best live server'}
+                </span>
+                <span
+                  className={cx(
+                    'inline-flex shrink-0 items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em]',
+                    liveServers > 0
+                      ? 'border-emerald-300/45 bg-emerald-400/20 text-emerald-200'
+                      : 'border-rose-400/25 bg-rose-500/[0.08] text-rose-200/80',
+                  )}
+                >
+                  <span
+                    className={cx(
+                      'h-1.5 w-1.5 rounded-full',
+                      liveServers > 0 ? 'bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]' : 'bg-rose-400/80',
+                    )}
+                  />
+                  {serverBadge}
+                </span>
+                <ChevronDown className="h-3.5 w-3.5 shrink-0 text-fog transition-transform duration-200 group-open:rotate-180" />
+              </summary>
+              <div className="absolute inset-x-0 z-40 mt-2 max-h-72 overflow-y-auto rounded-xl border border-line bg-[#0b131c] p-1.5 shadow-2xl shadow-black/70">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    onSelectServer(null)
+                    event.currentTarget.closest('details')?.removeAttribute('open')
+                  }}
+                  className={cx(
+                    'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                    !selectedServer ? 'bg-emerald-400/[0.09]' : 'hover:bg-white/[0.05]',
+                  )}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[11.5px] font-semibold text-mist">
+                      Auto · best live server
+                    </span>
+                    <span className="mt-0.5 block text-[9.5px] text-fog/80">
+                      {serverBadge} · Play connects automatically
+                    </span>
+                  </span>
+                </button>
+                {serverOptions.length > 0 && (
+                  <>
+                    <p className="px-2.5 pb-1 pt-2 text-[8.5px] font-bold uppercase tracking-[0.16em] text-fog/60">
+                      Live servers · this season
+                    </p>
+                    {serverOptions.map((server, index) => (
+                      <button
+                        key={`${server.address}-${server.id}`}
+                        type="button"
+                        onClick={(event) => {
+                          onSelectServer(server.address)
+                          event.currentTarget.closest('details')?.removeAttribute('open')
+                        }}
+                        className={cx(
+                          'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                          selectedServer === server.address
+                            ? 'bg-emerald-400/[0.09]'
+                            : 'hover:bg-white/[0.05]',
+                        )}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[11.5px] font-semibold text-mist">
+                            Live server {index + 1}
+                          </span>
+                          <span className="mt-0.5 block truncate text-[9.5px] text-fog/80">
+                            {server.address}
+                            {server.playersKnown === false
+                              ? ''
+                              : ` · ${lobbyPlayers(server)} player${lobbyPlayers(server) === 1 ? '' : 's'}`}
+                          </span>
+                        </span>
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-300/35 bg-emerald-400/15 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-[0.06em] text-emerald-200">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                          ONLINE · 1 SERVER
+                        </span>
+                      </button>
+                    ))}
+                  </>
+                )}
+              </div>
+            </details>
+          )}
+
           <div className="mt-4 flex flex-wrap items-center gap-2">
             {hostedLobby ? (
               <span
@@ -705,17 +803,31 @@ export function ActiveBuildCard({
                 <div className="min-w-0 flex-1">
                   <p className="font-semibold">
                     {verify.phase === 'running'
-                      ? 'Scanning every file…'
+                      ? verify.label || 'Checking game files…'
                       : verify.error
-                        ? 'Verify could not finish'
+                        ? verify.label || 'Verify could not finish'
                         : verifyReport?.verified
-                          ? 'All files verified — no corruption found'
+                          ? verify.label || 'All files verified — no corruption found'
                           : `${verifyReport?.issueCount ?? 0} problem${verifyReport?.issueCount === 1 ? '' : 's'} found`}
                   </p>
                   {verify.phase === 'running' ? (
-                    <p className="mt-0.5 text-[10.5px] text-fog">
-                      Checking executables, PAK files, empty files, the shared runtime and every folder in this install.
-                    </p>
+                    <>
+                      <p className="mt-0.5 text-[10.5px] text-fog">
+                        {verify.step === 'game'
+                          ? 'Checking required executables, PAK/UCAS/UTOC content and manifests.'
+                          : verify.step === 'repair'
+                            ? 'Downloading only missing or corrupted chunks from the live provider manifest.'
+                            : verify.step === 'routing'
+                              ? 'Verifying the redirect DLL, SSL bypass, exchange patch and VaultedInjector.'
+                              : 'Rotating the encrypted account token before online play.'}
+                      </p>
+                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/40">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-arc to-emerald-400 transition-all duration-300"
+                          style={{ width: `${Math.max(4, Math.min(100, verify.progress ?? 8))}%` }}
+                        />
+                      </div>
+                    </>
                   ) : verify.error ? (
                     <p className="mt-0.5 text-[10.5px] text-rose-200/80">{verify.error}</p>
                   ) : verifyReport ? (
@@ -972,8 +1084,8 @@ export function ActiveBuildCard({
                         onVerify?.()
                       }}
                       disabled={verify?.phase === 'running'}
-                      aria-label={`Verify ${season.label} files`}
-                      title={`Check ${season.label} for corrupted or missing files`}
+                      aria-label={`Verify and repair ${season.label} files`}
+                      title={`Scan ${season.label}, then automatically repair files, online routing, DLLs and the account session`}
                       className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.07] px-3.5 py-3 text-[12.5px] font-semibold text-emerald-200 transition-all duration-200 hover:border-emerald-400/60 hover:bg-emerald-400/15 hover:text-white disabled:cursor-wait disabled:opacity-60"
                     >
                       {verify?.phase === 'running' ? (
@@ -981,7 +1093,7 @@ export function ActiveBuildCard({
                       ) : (
                         <ShieldCheck className="h-3.5 w-3.5" />
                       )}
-                      {verify?.phase === 'running' ? 'Verifying…' : 'Verify files'}
+                      {verify?.phase === 'running' ? 'Repairing…' : 'Verify & Repair'}
                     </button>
                   )}
 

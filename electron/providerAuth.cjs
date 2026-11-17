@@ -21,6 +21,8 @@ const REALTIME_KEEPALIVE_MS = 20_000
 const REALTIME_DEAD_AFTER_MS = 45_000
 const REALTIME_TOKEN_REFRESH_MARGIN_MS = 90_000
 const TOKEN_FILE = 'provider-auth.bin'
+const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000
+const PROVIDER_SESSION_EXPIRED = 'provider_session_expired'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const BUILD_VERIFICATION_STATUS = 'build_verification_required'
 const GAME_VERIFY_MAX_FILES = 64
@@ -45,6 +47,31 @@ function redactDiagnosticText(value, secrets = []) {
     if (typeof secret === 'string' && secret.length >= 6) text = text.split(secret).join('[redacted]')
   }
   return text.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+}
+
+/** A hard auth rejection that needs a fresh interactive sign-in. */
+function isSessionExpiredError(error) {
+  if (!error || error.buildVerificationRequired === true) return false
+  if (error.accountStatus && error.accountStatus !== PROVIDER_SESSION_EXPIRED) return false
+  if (error.verificationRequired === true) return false
+  if (error.sessionExpired === true || error.code === PROVIDER_SESSION_EXPIRED) return true
+  if (error.status === 401) return true
+  if (Number(error.retracCloseCode) === 4002 || Number(error.code) === 4002) return true
+  const text = `${safeText(error.code, 80)} ${safeText(error.message, 500)}`
+  return /(?:invalid[ _-]?token|token[ _-]?expired|expired[ _-]?token|session (?:has )?expired|invalid[ _-]?session|unauthori[sz]ed|\b(?:4002|4401|4403)\b)/i.test(
+    text,
+  )
+}
+
+function sessionExpiredError(config, cause = null) {
+  const error = new Error(
+    `Your ${config.label} session expired. Connect the account again from the season card.`,
+  )
+  error.code = PROVIDER_SESSION_EXPIRED
+  error.sessionExpired = true
+  error.status = 401
+  if (cause) error.cause = cause
+  return error
 }
 
 function processIsAlive(pid) {
@@ -734,7 +761,19 @@ function createProviderAuth({
         throw new Error('The provider returned an unreadable response. Try again.')
       }
     }
-    if (!response.ok) throw responseError(json, response.status, fallback, response.headers)
+    if (!response.ok) {
+      const error = responseError(json, response.status, fallback, response.headers)
+      if (
+        response.status === 401 &&
+        !error.accountStatus &&
+        error.verificationRequired !== true &&
+        error.buildVerificationRequired !== true
+      ) {
+        error.code = PROVIDER_SESSION_EXPIRED
+        error.sessionExpired = true
+      }
+      throw error
+    }
     return { json, headers: response.headers, status: response.status }
   }
 
@@ -959,27 +998,22 @@ function createProviderAuth({
     const store = readStore()
     const record = store[config.id]
     if (!record || typeof record !== 'object') {
-      throw new Error(`Sign in to ${config.label} from the season card first.`)
+      throw sessionExpiredError(config)
     }
 
     const access = safeText(record.access_token, 8192)
     if (
       options.force !== true &&
       access &&
-      (!Number.isFinite(record.expires_at) || record.expires_at - 60_000 > Date.now())
+      (!Number.isFinite(record.expires_at) || record.expires_at - TOKEN_REFRESH_MARGIN_MS > Date.now())
     ) {
       return access
     }
 
     const refresh = safeText(record.refresh_token, 4096)
-    if (!refresh) {
+    if (!refresh || !config.oauth?.tokenUrl) {
       clearToken(config.id)
-      throw new Error(`Your ${config.label} session expired. Sign in again from the season card.`)
-    }
-
-    if (!config.oauth?.tokenUrl) {
-      clearToken(config.id)
-      throw new Error(`Your ${config.label} session expired. Sign in again from the season card.`)
+      throw sessionExpiredError(config)
     }
 
     let token
@@ -989,9 +1023,9 @@ function createProviderAuth({
         refresh_token: refresh,
       })
     } catch (error) {
-      if (error?.status === 400 || error?.status === 401) {
+      if (error?.status === 400 || error?.status === 401 || isSessionExpiredError(error)) {
         clearToken(config.id)
-        throw new Error(`Your ${config.label} session expired. Sign in again from the season card.`)
+        throw sessionExpiredError(config, error)
       }
       throw error
     }
@@ -999,6 +1033,32 @@ function createProviderAuth({
     const next = tokenRecord(config, token, record)
     writeStore({ ...readStore(), [config.id]: next })
     return next.access_token
+  }
+
+  /**
+   * Force one silent rotating refresh before an online operation. A 400/401
+   * from the refresh grant means the stored token is unusable, so clear it and
+   * return a structured re-auth signal instead of a generic launch failure.
+   */
+  async function refreshSession(providerId) {
+    const config = providerConfig(providerId)
+    const record = readStore()[config.id]
+    if (!record || typeof record !== 'object') throw sessionExpiredError(config)
+    // Direct embedded sessions (for example Stellar) have no refresh grant.
+    // A locally valid token is healthy; an expired one needs a fresh sign-in.
+    if (!safeText(record.refresh_token, 4096) || !config.oauth?.tokenUrl) {
+      const access = safeText(record.access_token, 8192)
+      if (
+        access &&
+        (!Number.isFinite(record.expires_at) || record.expires_at - TOKEN_REFRESH_MARGIN_MS > Date.now())
+      ) {
+        return { ...tokenStatus(config.id), refreshed: false }
+      }
+      clearToken(config.id)
+      throw sessionExpiredError(config)
+    }
+    await accessToken(config, { force: true })
+    return { ...tokenStatus(config.id), refreshed: true }
   }
 
   /**
@@ -2148,9 +2208,11 @@ function createProviderAuth({
         if (!error?.buildVerificationRequired) logVerificationResponse(config, error)
         throw error
       }
-      if (error?.status === 401 || error?.status === 403) {
-        clearToken(config.id)
-        throw new Error(`Your ${config.label} session expired. Sign in again from the season card.`)
+      if (isSessionExpiredError(error)) {
+        // Keep the encrypted refresh token until the caller has had one chance
+        // to rotate it. If rotation is rejected, accessToken clears the record
+        // and raises the structured re-auth signal.
+        throw sessionExpiredError(config, error)
       }
       throw error
     }
@@ -2675,8 +2737,12 @@ function createProviderAuth({
           return
         }
         if (!message || typeof message !== 'object') return
-        if (message.id === 'error' || message.error) {
-          finish(new Error(`${config.label} rejected the game-code request: ${safeText(message.error || message.message, 300) || 'unknown error'}`))
+        if (message.id === 'error' || message.error || message.code === 4002) {
+          const cause = new Error(
+            `${config.label} rejected the game-code request: ${safeText(message.error || message.message, 300) || 'unknown error'}`,
+          )
+          cause.code = message.code === 4002 ? 4002 : safeText(message.code, 80) || 'provider_error'
+          finish(isSessionExpiredError(cause) ? sessionExpiredError(config, cause) : cause)
           return
         }
         if (message.id !== 'code') return
@@ -2693,7 +2759,12 @@ function createProviderAuth({
       socket.once('close', (code, reason) => {
         if (settled) return
         const detail = `${code || 'unknown'}${reason?.length ? ` ${reason.toString()}` : ''}`
-        finish(new Error(`${config.label} closed the launcher socket before returning a game code (${detail}).`))
+        const cause = new Error(
+          `${config.label} closed the launcher socket before returning a game code (${detail}).`,
+        )
+        cause.retracCloseCode = code
+        cause.code = code
+        finish(isSessionExpiredError(cause) ? sessionExpiredError(config, cause) : cause)
       })
     })
   }
@@ -2731,8 +2802,37 @@ function createProviderAuth({
 
   async function exchangeCode(providerId, options = {}) {
     const config = providerConfig(providerId)
-    const token = await accessToken(config)
+    const stored = readStore()[config.id]
+    const shouldRefreshFirst =
+      Boolean(stored?.refresh_token && config.oauth?.tokenUrl) &&
+      (!Number.isFinite(stored?.expires_at) ||
+        stored.expires_at - TOKEN_REFRESH_MARGIN_MS <= Date.now())
+    let token = await accessToken(config, shouldRefreshFirst ? { force: true } : {})
     const seasonId = safeText(options.seasonId, 40)
+
+    /** Run a handshake, then rotate once if the backend hard-rejects the token. */
+    const withSessionRefresh = async (operation, initialToken = token) => {
+      try {
+        return await operation(initialToken)
+      } catch (error) {
+        if (!isSessionExpiredError(error)) throw error
+        let refreshed
+        try {
+          refreshed = await accessToken(config, { force: true })
+        } catch (refreshError) {
+          throw isSessionExpiredError(refreshError)
+            ? sessionExpiredError(config, refreshError?.cause || error)
+            : refreshError
+        }
+        try {
+          return await operation(refreshed)
+        } catch (retryError) {
+          throw isSessionExpiredError(retryError)
+            ? sessionExpiredError(config, retryError?.cause || retryError)
+            : retryError
+        }
+      }
+    }
     const version = safeText(options.version, 40)
     const buildPath = safeText(options.buildPath, 2048)
 
@@ -2740,7 +2840,8 @@ function createProviderAuth({
     // Era's build-list and realtime build.verify flow. Keep their handshakes
     // isolated so the proven Era path above is unchanged.
     if (config.id === 'retrac') {
-      const code = await retracGameCode(config, token)
+      const code = await withSessionRefresh((fresh) => retracGameCode(config, fresh))
+      const launchToken = await accessToken(config).catch(() => token)
       const result = {
         code,
         expiresIn: 300,
@@ -2748,7 +2849,7 @@ function createProviderAuth({
         buildName: safeText(`${seasonId || 'Retrac'} ${version || ''}`, 120),
       }
       Object.defineProperty(result, 'authToken', {
-        value: token,
+        value: launchToken,
         enumerable: false,
         configurable: true,
       })
@@ -2776,9 +2877,11 @@ function createProviderAuth({
         },
       }
       try {
-        const result = await ezfnGameCode(config, token, (status) => {
-          responseStatus = status
-        })
+        const result = await withSessionRefresh((fresh) =>
+          ezfnGameCode(config, fresh, (status) => {
+            responseStatus = status
+          }),
+        )
         emitDiagnostic({
           ...baseDiagnostic,
           ok: true,
@@ -2801,29 +2904,45 @@ function createProviderAuth({
             code: safeText(error?.code, 80) || null,
             accountStatus: safeText(error?.accountStatus, 80) || null,
             verificationRequired: error?.verificationRequired === true,
-            message: redactDiagnosticText(error?.message, [token]),
+            message: redactDiagnosticText(error?.cause?.message || error?.message, [token]),
           },
         })
         throw error
       }
     }
     if (config.id === 'ezfn') {
-      const result = await ezfnGameCode(config, token)
+      const result = await withSessionRefresh((fresh) => ezfnGameCode(config, fresh))
       result.buildId = ''
       result.buildName = safeText(`${seasonId || 'EZFN'} ${version || ''}`, 120)
       return result
     }
 
-    const buildsJson = await requestJson(
-      new URL(config.buildsPath, config.apiBaseUrl),
-      {
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token}`,
+    let buildsJson
+    try {
+      buildsJson = await requestJson(
+        new URL(config.buildsPath, config.apiBaseUrl),
+        {
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
         },
-      },
-      `${config.label} could not list its live builds.`,
-    )
+        `${config.label} could not list its live builds.`,
+      )
+    } catch (error) {
+      if (!isSessionExpiredError(error)) throw error
+      token = await accessToken(config, { force: true })
+      buildsJson = await requestJson(
+        new URL(config.buildsPath, config.apiBaseUrl),
+        {
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+        },
+        `${config.label} could not list its live builds.`,
+      )
+    }
     const builds = Array.isArray(buildsJson?.data)
       ? buildsJson.data
       : Array.isArray(buildsJson)
@@ -2846,12 +2965,24 @@ function createProviderAuth({
       return result
     }
 
+    // The realtime build.verify socket authenticates with the same OAuth
+    // token. Rotate once if it closes with an expiry code before the exchange.
+    const verifyWithSession = async () => {
+      try {
+        return await verifyLocalBuild(config, token, build, buildPath)
+      } catch (error) {
+        if (!isSessionExpiredError(error)) throw error
+        token = await accessToken(config, { force: true })
+        return await verifyLocalBuild(config, token, build, buildPath)
+      }
+    }
+
     if (cached) {
       // A cached code is still a real game launch. Re-open the verified
       // gateway session so Era does not see a running client with no client
       // connection and kick it after roughly a minute.
       if (buildPath && config.realtimeUrl) {
-        const verification = await verifyLocalBuild(config, token, build, buildPath)
+        const verification = await verifyWithSession()
         realtimeSession = verification.realtimeSession || null
       }
       return withRealtimeSession(cached)
@@ -2862,7 +2993,7 @@ function createProviderAuth({
     // exchange request just to be told the same gate applies.
     let buildVerified = false
     if (buildPath && config.realtimeUrl) {
-      const verification = await verifyLocalBuild(config, token, build, buildPath)
+      const verification = await verifyWithSession()
       realtimeSession = verification.realtimeSession || null
       buildVerified = true
     }
@@ -2872,13 +3003,43 @@ function createProviderAuth({
       markVerificationCompleted(config)
       return withRealtimeSession(result)
     } catch (error) {
+      // A backend can revoke an access token before its advertised expiry. If
+      // the exchange says the token is invalid, rotate it once and rebuild the
+      // verified gateway session before retrying the exchange.
+      if (isSessionExpiredError(error)) {
+        let freshToken
+        try {
+          freshToken = await accessToken(config, { force: true })
+        } catch (refreshError) {
+          realtimeSession?.close('session refresh required')
+          throw isSessionExpiredError(refreshError)
+            ? sessionExpiredError(config, refreshError)
+            : refreshError
+        }
+        realtimeSession?.close('session token rotated')
+        realtimeSession = null
+        if (buildPath && config.realtimeUrl) {
+          const verification = await verifyLocalBuild(config, freshToken, build, buildPath)
+          realtimeSession = verification.realtimeSession || null
+        }
+        try {
+          const result = await gameCode(config, freshToken, build)
+          markVerificationCompleted(config)
+          return withRealtimeSession(result)
+        } catch (retryError) {
+          realtimeSession?.close('session retry failed')
+          throw isSessionExpiredError(retryError)
+            ? sessionExpiredError(config, retryError)
+            : retryError
+        }
+      }
       // Era's exchange endpoint is gated on a successful realtime
       // `build.verify` for the installed files. This is not an account
       // verification state, so verify the build and retry the exchange once.
       if (error?.buildVerificationRequired) {
         if (!buildVerified) {
           realtimeSession?.close('build verification retry')
-          const verification = await verifyLocalBuild(config, token, build, buildPath)
+          const verification = await verifyWithSession()
           realtimeSession = verification.realtimeSession || null
         }
         const result = await gameCode(config, token, build)
@@ -3725,6 +3886,7 @@ function createProviderAuth({
     },
     login,
     logout,
+    refreshSession,
     exchangeCode,
     verifyAccount,
     listBuilds,

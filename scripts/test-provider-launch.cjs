@@ -212,7 +212,10 @@ async function testStellarExchangeHttpError() {
 
   await assert.rejects(auth.exchangeCode('stellar', { seasonId: 'ch2-s1' }), (error) => {
     assert.equal(error.status, 401)
-    assert.match(error.message, new RegExp(accessToken))
+    assert.equal(error.sessionExpired, true)
+    assert.match(error.message, /session expired/i)
+    // A rejected token must never be echoed back to the renderer or logs.
+    assert.equal(error.message.includes(accessToken), false)
     return true
   })
 
@@ -267,8 +270,11 @@ async function main() {
   writeTokenStore()
   testLaunchArguments()
   await testStellarExchangeSuccess()
+  writeTokenStore()
   await testStellarExchangeHttpError()
+  writeTokenStore()
   await testStellarExchangeInvalidPayload()
+  writeTokenStore()
   await testStellarExchangeTimeout()
   console.log(
     'provider launch smoke passed: Stellar exchange payload, 401/invalid/timeout diagnostics, and Stellar/Retrac/local launch arguments checked offline',

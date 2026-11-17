@@ -267,6 +267,8 @@ export interface LauncherBridge {
   providerAuth?: {
     status(): Promise<Record<string, ProviderAuthStatus>>
     login(providerId: string, method?: 'discord' | 'google'): Promise<ProviderAuthStatus>
+    /** silent rotating refresh; throws a re-auth marker when rejected */
+    refresh?(providerId: string): Promise<ProviderAuthStatus & { refreshed?: boolean }>
     /** explicit account verification; never invoked by Play */
     verifyAccount?(
       providerId: string,

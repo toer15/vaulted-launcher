@@ -246,6 +246,9 @@ interface VerifyJob {
   phase: 'running' | 'done'
   report?: BuildVerifyReport
   error?: string
+  step?: 'game' | 'repair' | 'routing' | 'session' | 'done'
+  label?: string
+  progress?: number
 }
 
 /** Only VAULTED-managed downloads can be checked against the builds root. */
@@ -427,15 +430,17 @@ export default function App() {
     }
     return next
   }, [directoryProviderPopulations, providerLiveStatus])
-  const nativeProviders = useMemo(
+  const seasonProviders = useMemo(
     () =>
-      providerCatalog
-        .filter((provider) => provider.mode !== 'external')
-        .map((provider) => ({
-          ...provider,
-          live: providerLiveStatusWithDirectories[provider.id],
-        })),
+      providerCatalog.map((provider) => ({
+        ...provider,
+        live: providerLiveStatusWithDirectories[provider.id],
+      })),
     [providerCatalog, providerLiveStatusWithDirectories],
+  )
+  const nativeProviders = useMemo(
+    () => seasonProviders.filter((provider) => provider.mode !== 'external'),
+    [seasonProviders],
   )
   const verifiedOAuthProviders = useMemo(
     () =>
@@ -462,7 +467,7 @@ export default function App() {
   const signedIn = Boolean(session) || providerVerified
   // Per-season manual choice from the hero server dropdown. A missing entry
   // means the external router's automatic best live server.
-  const [serverSelections] = useState<Record<string, string>>({})
+  const [serverSelections, setServerSelections] = useState<Record<string, string>>({})
   const [communityDirectories, setCommunityDirectories] = useState<CommunityDirectoryEntry[]>([])
   const [onlineStatus, setOnlineStatus] = useState<OnlineStatus>('checking')
   const [lanIp, setLanIp] = useState<string | null>(null)
@@ -683,12 +688,12 @@ export default function App() {
   const sourceKeys = useMemo(() => new Set(Object.keys(seasonManifest)), [seasonManifest])
   const onlineSeasonCount = useMemo(() => {
     const seasons = new Set<string>()
-    for (const provider of nativeProviders) {
-      if (!providerCanAutoRoute(provider, provider.live)) continue
+    for (const provider of seasonProviders) {
+      if (provider.live?.online !== true) continue
       for (const season of provider.supportedSeasons) seasons.add(season)
     }
     return seasons.size
-  }, [nativeProviders])
+  }, [seasonProviders])
   const readySeasonCount = useMemo(
     () => Object.values(profiles.builds).filter((profile) => profile.isInstalled).length,
     [profiles.builds],
@@ -780,7 +785,7 @@ export default function App() {
         account.username,
         communityStatuses,
         communityDirectories,
-        nativeProviders,
+        seasonProviders,
       ),
     [
       account.username,
@@ -790,7 +795,7 @@ export default function App() {
       discoverableLobbies,
       hostedLobby,
       lanIp,
-      nativeProviders,
+      seasonProviders,
     ],
   )
   const activePlayMode = activeBuild ? playModes[activeBuild.id] : undefined
@@ -1390,7 +1395,18 @@ export default function App() {
 
   const pushToast = useCallback((toast: Omit<ToastMessage, 'id'>) => {
     const id = uid()
-    setToasts((prev) => [...prev, { ...toast, id }])
+    setToasts((prev) => {
+      // Double-clicks and repeated Play retries can produce the same failure
+      // several times in one pass. Keep one visible copy instead of stacking
+      // identical panels on the right side.
+      const duplicate = prev.some(
+        (item) =>
+          item.tone === toast.tone &&
+          item.title === toast.title &&
+          (item.description ?? '') === (toast.description ?? ''),
+      )
+      return duplicate ? prev : [...prev, { ...toast, id }]
+    })
     window.setTimeout(() => {
       setToasts((prev) => prev.filter((item) => item.id !== id))
     }, toast.ttlMs ?? TOAST_TTL)
@@ -1960,8 +1976,10 @@ export default function App() {
         seasonId?: string
         buildId?: string
         launchAfter?: boolean
+        /** full Verify repair: keep the verify card instead of download toasts */
+        quiet?: boolean
       } = {},
-    ) => {
+    ): Promise<Build | null> => {
       const providerId = options.providerId || build.onlineProvider?.id
       const seasonId = options.seasonId || artKeyFor(build.season) || build.id
       const key = artKeyFor(build.season) ?? build.id
@@ -1971,7 +1989,7 @@ export default function App() {
           title: 'No online build for this season',
           description: 'VAULTED has no downloadable online build mapped to this card.',
         })
-        return
+        return null
       }
       if (!window.arc?.syncProviderBuild) {
         pushToast({
@@ -1979,7 +1997,7 @@ export default function App() {
           title: 'Build updates need the desktop app',
           description: 'Run "npm run app".',
         })
-        return
+        return null
       }
 
       pausedDownloadIds.current.delete(build.id)
@@ -2010,7 +2028,7 @@ export default function App() {
         },
       }))
       setPhase('idle')
-      setLaunchStage(`Updating ${build.season.label} to the live build…`)
+      if (!options.quiet) setLaunchStage(`Updating ${build.season.label} to the live build…`)
 
       try {
         const result = await syncProviderBuild({
@@ -2038,27 +2056,34 @@ export default function App() {
         setDiskSizes((prev) => ({ ...prev, [result.folder]: result.totalBytes }))
         setActiveId(build.id)
         rememberInstalledBuild(synced, result.folder)
-        pushToast({
-          tone: 'success',
-          title: result.buildVersion
-            ? `Updated to the live ${result.buildVersion} build`
-            : 'Live build updated',
-          description: `${build.season.label} is up to date — launching…`,
-        })
+        if (!options.quiet) {
+          pushToast({
+            tone: 'success',
+            title: result.buildVersion
+              ? `Updated to the live ${result.buildVersion} build`
+              : 'Live build updated',
+            description: `${build.season.label} is up to date — launching…`,
+          })
+        }
         if (options.launchAfter) {
           pendingProviderLaunchRef.current = { build: synced, forceProviderId: providerId }
-        } else {
+        } else if (!options.quiet) {
           setLaunchStage(null)
         }
+        return synced
       } catch (error) {
-        setLaunchStage(null)
-        if (pausedDownloadIds.current.has(build.id)) return
+        if (!options.quiet) setLaunchStage(null)
+        if (pausedDownloadIds.current.has(build.id)) return null
         const message = nativeMessage(error instanceof Error ? error.message : 'The live build could not be downloaded.')
-        if (/abort|cancel/i.test(message)) {
-          pushToast({ tone: 'info', title: 'Update cancelled', description: build.season.label })
-        } else {
-          pushToast({ tone: 'error', title: 'Live build update failed', description: message })
+        if (!options.quiet) {
+          if (/abort|cancel/i.test(message)) {
+            pushToast({ tone: 'info', title: 'Update cancelled', description: build.season.label })
+          } else {
+            pushToast({ tone: 'error', title: 'Live build update failed', description: message })
+          }
+          return null
         }
+        throw error
       } finally {
         const paused = pausedDownloadIds.current.delete(build.id)
         setDownloads((prev) => {
@@ -2370,6 +2395,33 @@ export default function App() {
               parsedIssue?.message ||
               (error instanceof Error ? error.message : 'Online play could not be started.'),
           )
+          if (providerIssue?.reauthRequired === true) {
+            // The backend rejected a stale/revoked token. Clear the cached
+            // renderer state, open the same native account prompt used by a
+            // first-time link, and let handleAccountContinue resume this Play.
+            setProviderAuthStatus((prev) => ({
+              ...prev,
+              [provider.id]: {
+                ...(prev[provider.id] ?? {
+                  providerId: provider.id,
+                  displayName: null,
+                  avatarUrl: null,
+                  accountId: null,
+                  expiresAt: null,
+                  verificationCompleted: false,
+                }),
+                signedIn: false,
+              },
+            }))
+            setLaunchFailure(null)
+            openAccountPrompt(build, provider, server)
+            pushToast({
+              tone: 'info',
+              title: 'Online account needs reconnecting',
+              description: 'Your session expired. Sign in once and VAULTED will resume this launch.',
+            })
+            return
+          }
           const verificationUrl =
             providerIssue?.verificationRequired === true
               ? providerIssue.verificationUrl
@@ -2629,6 +2681,9 @@ export default function App() {
         provider.auth === 'oauth' ||
         provider.auth === 'deeplink' ||
         provider.auth === 'embedded_web'
+      const mappedGlobal = build.onlineProvider
+        ? globalOptions.find((provider) => provider.id === build.onlineProvider?.id) ?? null
+        : null
       const autoGlobal =
         globalOptions.find(
           (provider) =>
@@ -2648,7 +2703,12 @@ export default function App() {
         globalOptions.find(
           (provider) => providerCanRoute(provider) && providerIsAutoRoutable(provider),
         ) ??
-        null
+        // The badge can be ONLINE through any mapped engine. If the mapped
+        // engine is the only route left, still attempt it instead of falling
+        // through to a dead-end "no live server" message.
+        (playModes[build.id]?.online || playModes[build.id]?.globalOnline
+          ? mappedGlobal ?? globalOptions[0] ?? null
+          : null)
       const chosen = join
         ? null
         : selectedGlobal
@@ -2662,8 +2722,13 @@ export default function App() {
         !join && chosenIsFallback && chosen
           ? `No live ${build.season.label} server — ${chosen.name} is a ${seasonLabelForId(chosen.seasonId)} server.`
           : null
+      // An explicit server pick still wins, but an automatic community row
+      // must not bypass the mapped online engine. Passing that row to the
+      // provider launch keeps its join address while still running the
+      // exchange/socket handshake for the season.
+      const preferredGlobal = selectedGlobal ?? (selectedIp || join ? null : autoGlobal)
       const globalTarget =
-        selectedGlobal?.mode === 'external' ? selectedGlobal : target ? null : selectedGlobal ?? autoGlobal
+        selectedGlobal?.mode === 'external' ? selectedGlobal : preferredGlobal
 
       // A season without a hosted backend still has a bundled launcher. When a
       // matching live server is selected, start the client through that
@@ -2820,6 +2885,7 @@ export default function App() {
       nativeProviders,
       providerCatalog,
       providerAuthStatus,
+      playModes,
       refreshCommunityServers,
       signedIn,
       builds,
@@ -3133,7 +3199,10 @@ export default function App() {
   }, [activeBuild, downloads, pushToast])
 
   const runBuildVerification = useCallback(
-    (build: Build, options: { automatic?: boolean } = {}): Promise<VerifyJob | null> => {
+    (
+      build: Build,
+      options: { automatic?: boolean; repair?: boolean } = {},
+    ): Promise<VerifyJob | null> => {
       if (!installed[build.id] || !isManagedBuild(build) || profileExecutableFor(build, profiles)) {
         return Promise.resolve(null)
       }
@@ -3143,10 +3212,27 @@ export default function App() {
       const existing = verificationPromises.current.get(build.id)
       if (existing) return existing
 
+      const repair = options.repair === true
+      const providerId = build.onlineProvider?.id || ''
+      const provider = providerId
+        ? providerCatalog.find((candidate) => candidate.id === providerId) ?? null
+        : null
+
       const promise = (async (): Promise<VerifyJob | null> => {
-        setVerifyJobs((prev) => ({ ...prev, [build.id]: { id: build.id, phase: 'running' } }))
+        const setStep = (
+          step: NonNullable<VerifyJob['step']>,
+          label: string,
+          progress: number,
+        ) => {
+          setVerifyJobs((prev) => ({
+            ...prev,
+            [build.id]: { ...(prev[build.id] ?? { id: build.id }), phase: 'running', step, label, progress },
+          }))
+        }
+        setLaunchFailure((current) => (current?.id === build.id ? null : current))
+        setStep('game', 'Checking game files…', 8)
         try {
-          const report = await verifyBuildFiles(build.id, build.path, build.executable)
+          let report = await verifyBuildFiles(build.id, build.path, build.executable)
           if (report.running) {
             setVerifyJobs((prev) => {
               const next = { ...prev }
@@ -3163,31 +3249,108 @@ export default function App() {
             return null
           }
 
-          const job: VerifyJob = { id: build.id, phase: 'done', report }
+          let effectiveBuild = build
+          if (repair && providerId && provider && provider.mode !== 'external') {
+            setStep('repair', 'Repairing game files and online routing…', 34)
+            const synced = await beginProviderSync(build, {
+              providerId,
+              seasonId: artKeyFor(build.season) ?? build.id,
+              quiet: true,
+            })
+            if (!synced) {
+              throw new Error('The installed files and online build could not be repaired automatically.')
+            }
+            effectiveBuild = synced
+            report = await verifyBuildFiles(synced.id, synced.path, synced.executable)
+
+            setStep('routing', 'Repairing redirect DLLs and injector…', 64)
+            const prepared = await window.arc?.providerPrepare?.(providerId)
+            if (prepared && prepared.ok === false) {
+              throw new Error('The redirect DLL, SSL bypass, or injector could not be repaired.')
+            }
+          }
+
+          if (repair && provider && provider.auth !== 'none') {
+            setStep('session', 'Verifying online session…', 86)
+            const refresh = window.arc?.providerAuth?.refresh
+            if (refresh) {
+              const status = await refresh(providerId)
+              if (!status?.signedIn) {
+                throw new Error('The online account needs to be connected again.')
+              }
+              setProviderAuthStatus((prev) => ({
+                ...prev,
+                [providerId]: { ...status, providerId },
+              }))
+            }
+          }
+
+          const job: VerifyJob = {
+            id: build.id,
+            phase: 'done',
+            report,
+            step: 'done',
+            label: report.verified
+              ? repair
+                ? 'Ready to play online'
+                : 'All files verified — no corruption found'
+              : 'Repair finished with remaining issues',
+            progress: 100,
+          }
           setVerifyJobs((prev) => ({ ...prev, [build.id]: job }))
           if (!options.automatic) {
-            pushToast(
-              report.verified
-                ? {
-                    tone: 'success',
-                    title: 'All files verified',
-                    description: `${report.files.toLocaleString()} files checked · no corruption found.`,
-                  }
-                : {
-                    tone: 'error',
-                    title: 'Verification found problems',
-                    description: verificationSummary(report),
-                  },
-            )
+            if (report.verified) {
+              setLaunchFailure(null)
+              pushToast({
+                tone: 'success',
+                title: repair ? 'Ready to play online' : 'All files verified',
+                description: `${effectiveBuild.season.label} · ${report.files.toLocaleString()} files checked${repair ? ' · game files, routing and session repaired' : ' · no corruption found'}.`,
+              })
+            } else {
+              pushToast({
+                tone: 'error',
+                title: 'Repair needs attention',
+                description: verificationSummary(report),
+              })
+            }
           }
           return job
         } catch (error) {
           const message = nativeMessage(
             error instanceof Error ? error.message : 'The build could not be verified.',
           )
-          const job: VerifyJob = { id: build.id, phase: 'done', error: message }
+          const parsed = parseProviderAccountIssue(error)
+          const job: VerifyJob = {
+            id: build.id,
+            phase: 'done',
+            error: message,
+            step: parsed?.issue?.reauthRequired ? 'session' : 'done',
+            label: parsed?.issue?.reauthRequired ? 'Connect the online account to finish' : 'Verify could not finish',
+            progress: parsed?.issue?.reauthRequired ? 86 : 100,
+          }
           setVerifyJobs((prev) => ({ ...prev, [build.id]: job }))
-          if (!options.automatic) {
+          if (parsed?.issue?.reauthRequired && provider && !options.automatic) {
+            setProviderAuthStatus((prev) => ({
+              ...prev,
+              [providerId]: {
+                ...(prev[providerId] ?? {
+                  providerId,
+                  displayName: null,
+                  avatarUrl: null,
+                  accountId: null,
+                  expiresAt: null,
+                  verificationCompleted: false,
+                }),
+                signedIn: false,
+              },
+            }))
+            openAccountPrompt(build, provider)
+            pushToast({
+              tone: 'info',
+              title: 'Online account needs reconnecting',
+              description: 'Sign in once and VAULTED will finish the online repair.',
+            })
+          } else if (!options.automatic) {
             pushToast({ tone: 'error', title: 'Verify failed', description: message })
           }
           return job
@@ -3202,7 +3365,7 @@ export default function App() {
       })
       return promise
     },
-    [installed, profiles, pushToast],
+    [beginProviderSync, installed, openAccountPrompt, profiles, providerCatalog, pushToast],
   )
   runBuildVerificationRef.current = runBuildVerification
 
@@ -3251,7 +3414,7 @@ export default function App() {
       })
       return
     }
-    void runBuildVerification(build)
+    void runBuildVerification(build, { repair: true })
   }, [activeBuild, installed, profiles, pushToast, runBuildVerification])
 
   const handleDeleteBuild = useCallback(async (target?: Build) => {
@@ -3707,6 +3870,21 @@ export default function App() {
                 playMode={activePlayMode}
                 autoServer={activeServerRoute?.exactServer ?? null}
                 autoGlobalBackend={autoGlobalBackend}
+                serverOptions={activeServerRoute?.exactOptions ?? []}
+                selectedServer={
+                  selectedServerValue && !selectedServerValue.startsWith('global:')
+                    ? selectedServerValue
+                    : null
+                }
+                onSelectServer={(address) => {
+                  if (!activeBuild) return
+                  setServerSelections((prev) => {
+                    const next = { ...prev }
+                    if (address) next[activeBuild.id] = address
+                    else delete next[activeBuild.id]
+                    return next
+                  })
+                }}
                 signedIn={signedIn}
                 onSignIn={() => setSignInOpen(true)}
                 accountAuthRequired={Boolean(

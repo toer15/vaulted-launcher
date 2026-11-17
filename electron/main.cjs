@@ -4370,6 +4370,14 @@ async function verifyBuild(payload) {
     addVerifyIssue(report, 'missing', 'FortniteGame/Content/Paks')
   }
 
+  // The launcher bootstrap is required even when the shipping client itself
+  // is present. Keep it in the required set so a partial provider update is
+  // repaired instead of failing after Play.
+  const launcherExe = path.join(path.dirname(executable), 'FortniteLauncher.exe')
+  if (!fs.existsSync(launcherExe)) {
+    addVerifyIssue(report, 'missing', path.relative(target, launcherExe) || 'FortniteLauncher.exe')
+  }
+
   const stack = [target]
   let stoppedAtLimit = false
 
@@ -4427,17 +4435,19 @@ async function verifyBuild(payload) {
         continue
       }
 
-      if (lowerName.endsWith('.pak')) {
+      if (/\.(?:pak|ucas|utoc)$/i.test(lowerName)) {
         const normalizedPaks = path.resolve(paksDir).toLowerCase()
-        if (full.toLowerCase().startsWith(`${normalizedPaks}${path.sep}`)) report.paks += 1
+        if (lowerName.endsWith('.pak') && full.toLowerCase().startsWith(`${normalizedPaks}${path.sep}`)) {
+          report.paks += 1
+        }
         if (stat.size < 1024) {
-          addVerifyIssue(report, 'corrupt', `${relative} (PAK is too small)`)
+          addVerifyIssue(report, 'corrupt', `${relative} (content file is too small)`)
           continue
         }
         try {
           const sample = await sampleFile(full, stat.size)
           if (sample.length === 0 || sample.every((byte) => byte === 0)) {
-            addVerifyIssue(report, 'corrupt', `${relative} (empty PAK data)`)
+            addVerifyIssue(report, 'corrupt', `${relative} (empty content data)`)
           }
         } catch {
           addVerifyIssue(report, 'unreadable', relative)
@@ -4502,6 +4512,28 @@ function providerBuildIssue(profile, error) {
 
 /** Turn a structured provider account status into an actionable launch error. */
 function providerAccountIssue(profile, error) {
+  const providerLabel = String(profile?.label || profile?.name || profile?.id || 'online service')
+  // An expired/revoked backend session is not a generic launch failure. The
+  // renderer uses this flag to clear the stale account and open the native
+  // Connect online account prompt, then resume the same Play automatically.
+  if (
+    error?.sessionExpired === true ||
+    error?.code === 'provider_session_expired' ||
+    (error?.status === 401 &&
+      !error?.accountStatus &&
+      error?.verificationRequired !== true &&
+      error?.buildVerificationRequired !== true)
+  ) {
+    return {
+      code: 'session_expired',
+      providerId: String(profile?.id || ''),
+      providerLabel,
+      providerName: String(profile?.name || providerLabel),
+      reauthRequired: true,
+      verificationRequired: false,
+      message: `Your ${providerLabel} session expired. Connect the account again to continue online play.`,
+    }
+  }
   // Only let providerAuth's structured account status through this path. A
   // transport error code such as ECONNRESET must keep its normal launch error.
   if (!error?.accountStatus && error?.verificationRequired !== true) return null
@@ -5200,9 +5232,7 @@ function registerIpc() {
   // Local download engines are sampled too so every season can report its own
   // live status without exposing which engine is behind it.
   ipcMain.handle('arc:provider-live-status', () =>
-    fetchProviderLiveStatuses(
-      providerCatalog().filter((provider) => provider.mode !== 'external'),
-    ),
+    fetchProviderLiveStatuses(providerCatalog()),
   )
 
   // Prepare the hash-checked bundled provider files before a one-click launch.
@@ -5242,6 +5272,31 @@ function registerIpc() {
     const status = await providerAuth.login(providerId, { method })
     broadcastProviderAuth(status)
     return status
+  })
+
+  // Called silently by Play and the full Verify repair pipeline before any
+  // socket/exchange handshake. It rotates the encrypted refresh token without
+  // opening a browser; a hard rejection returns the structured re-auth marker.
+  ipcMain.handle('arc:provider-auth-refresh', async (_event, providerId) => {
+    try {
+      const status = await providerAuth.refreshSession(providerId)
+      broadcastProviderAuth(status)
+      return status
+    } catch (error) {
+      let profile = null
+      try {
+        profile = providerProfile(providerId)
+      } catch {
+        /* invalid provider id keeps the original error */
+      }
+      const issue = providerAccountIssue(profile, error)
+      if (issue) {
+        throw new Error(
+          `${issue.message}\n${PROVIDER_ACCOUNT_STATUS_PREFIX}${JSON.stringify(issue)}`,
+        )
+      }
+      throw error
+    }
   })
 
   // Opening the embedded verification view is never part of Play. It is only
