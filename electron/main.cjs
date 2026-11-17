@@ -20,6 +20,7 @@ const {
 } = require('./onlineProviders.cjs')
 const { fetchCommunityServers, normalizeHostPort, probePing } = require('./communityServers.cjs')
 const { createProviderAuth } = require('./providerAuth.cjs')
+const { createEraBridge } = require('./eraBridge.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 
@@ -1623,6 +1624,79 @@ function launchInjectedGame(payload, options = {}) {
   })
 }
 
+/**
+ * The official Era client registers the running game with the backend. It is
+ * downloaded on demand instead of being bundled, so VAULTED ships no
+ * proprietary Era binaries. A cached copy is reused while the published
+ * version and SHA-256 still match it.
+ */
+async function ensureEraClientDll() {
+  const directory = path.join(app.getPath('userData'), 'era-client')
+  const target = path.join(directory, 'era.dll')
+  const sidecarPath = `${target}.json`
+  fs.mkdirSync(directory, { recursive: true })
+
+  let local = null
+  try {
+    const sidecar = JSON.parse(fs.readFileSync(sidecarPath, 'utf8'))
+    if (sidecar?.sha256) {
+      const digest = await sha256File(target, new AbortController().signal)
+      if (digest === sidecar.sha256) local = sidecar
+    }
+  } catch {
+    /* a missing or stale cache is downloaded below */
+  }
+
+  const headers = await providerAuth.resourceHeaders('era')
+  let check = null
+  try {
+    const response = await fetch('https://api.erafn.dev/launcher/v1/versions/client/era.dll', {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({ current: local?.version ?? null }),
+    })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const payload = await response.json()
+    check = payload?.data ?? payload
+  } catch (error) {
+    if (local) return target
+    throw new Error(
+      `VAULTED could not check the Era client registration DLL.\n\n${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+  }
+
+  if (local && check?.update_required !== true) {
+    if (!check?.sha256 || String(check.sha256).toLowerCase() === local.sha256) return target
+  }
+
+  const downloadUrl =
+    typeof check?.download_url === 'string' && /^https?:\/\//i.test(check.download_url)
+      ? check.download_url
+      : 'https://api.erafn.dev/launcher/v1/downloads/client/era.dll/file'
+  const response = await fetch(downloadUrl, {
+    headers: downloadUrl.startsWith('https://api.erafn.dev/') ? headers : {},
+  })
+  if (!response.ok) {
+    throw new Error(`VAULTED could not download the Era client registration DLL (HTTP ${response.status}).`)
+  }
+  const buffer = Buffer.from(await response.arrayBuffer())
+  const digest = crypto.createHash('sha256').update(buffer).digest('hex')
+  const expected = typeof check?.sha256 === 'string' ? check.sha256.toLowerCase() : ''
+  if (expected && digest !== expected) {
+    throw new Error('The Era client registration DLL did not match the SHA-256 published by Era.')
+  }
+  const temporary = `${target}.download`
+  fs.writeFileSync(temporary, buffer)
+  fs.renameSync(temporary, target)
+  fs.writeFileSync(
+    sidecarPath,
+    JSON.stringify({ version: check?.latest ?? local?.version ?? null, sha256: digest }),
+  )
+  return target
+}
+
 function injectDll(pid, dllPath) {
   return new Promise((resolve, reject) => {
     const injector = path.join(runtimeRoot(), 'VaultedInjector.exe')
@@ -2318,6 +2392,38 @@ function killProcessTree(pid) {
       }
       resolve()
     }
+  })
+}
+
+/**
+ * Ask the client to close through its window first. The redirect DLL restores
+ * its hooks before forwarding WM_CLOSE so Unreal can flush settings and exit
+ * normally; force-kill only if the client ignores the close request.
+ */
+function closeProcessTreeGracefully(pid) {
+  return new Promise((resolve) => {
+    if (!pid) return resolve()
+    if (process.platform !== 'win32') {
+      try {
+        process.kill(pid, 'SIGTERM')
+      } catch {
+        /* already gone */
+      }
+      return resolve()
+    }
+
+    execFile('taskkill', ['/PID', String(pid), '/T'], { windowsHide: true }, () => {
+      const deadline = Date.now() + 12000
+      const poll = () => {
+        if (!processAlive(pid)) return resolve()
+        if (Date.now() >= deadline) {
+          execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve())
+          return
+        }
+        setTimeout(poll, 100)
+      }
+      poll()
+    })
   })
 }
 
@@ -4569,6 +4675,10 @@ async function launchOnlineProvider(payload) {
   }
 
   let authCode = ''
+  // The verified Era gateway socket must outlive exchange-code. Keep its
+  // main-process handle until the client process exits; never send it to the
+  // renderer or close it after build.verify.
+  let realtimeSession = null
   try {
     const exchange = await providerAuth.exchangeCode(providerId, {
       seasonId,
@@ -4578,9 +4688,14 @@ async function launchOnlineProvider(payload) {
       // executable/PAK files the official launcher verifies.
       buildPath: folder,
     })
+    realtimeSession = exchange.realtimeSession || null
     authCode = normalizeProviderAuthCode(exchange.code)
-    if (!authCode) throw new Error('The provider returned an invalid login code.')
+    if (!authCode) {
+      realtimeSession?.close('invalid login code')
+      throw new Error('The provider returned an invalid login code.')
+    }
   } catch (error) {
+    realtimeSession?.close('exchange failed')
     const buildIssue = providerBuildIssue(profile, error)
     if (buildIssue) {
       // A build integrity rejection is not an account-status issue. Keep it
@@ -4609,17 +4724,46 @@ async function launchOnlineProvider(payload) {
   if (join) writeJoinTarget(join.host, join.port)
   else clearJoinTarget()
 
+  // Era's native client and the packaged redirect DLL both need to observe
+  // the game's HTTP stack. Route the game through a loopback origin so the
+  // bridge can keep Era's periodic account reads from logging the lobby out,
+  // while the native client registers the running process for matchmaking.
+  let backendUrl = profile.backendUrl
+  let eraBridge = null
+  let eraClientDll = null
+  let eraClientTimer = null
+  if (providerId === 'era') {
+    try {
+      eraClientDll = await ensureEraClientDll()
+      const account = providerAuth.status('era')
+      eraBridge = await createEraBridge({
+        upstream: profile.backendUrl,
+        accountId: account.accountId || '',
+        displayName: account.displayName || '',
+      })
+      backendUrl = eraBridge.url
+    } catch (error) {
+      await eraBridge?.close()
+      realtimeSession?.close('Era client bridge failed')
+      throw new Error(
+        `VAULTED could not prepare Era's client registration.\n\n${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+  }
+
   const restoreEnvironment = applyProviderEnvironmentBypass()
   let launched
   try {
     launched = await launchInjectedGame(launchPayload, {
       injector: runtime.injector,
       dll: redirectDll,
-      args: providerFortniteArgs(profile.backendUrl, authCode),
+      args: providerFortniteArgs(backendUrl, authCode),
       env: {
         VAULTED_PROVIDER_ID: providerId,
         // Retained for diagnostics; the redirect itself receives -backend= below.
-        VAULTED_PROVIDER_BACKEND_URL: profile.backendUrl,
+        VAULTED_PROVIDER_BACKEND_URL: backendUrl,
         VAULTED_PROVIDER_CONFIG: profile.configPath,
         VAULTED_PROVIDER_DLL: redirectDll,
         VAULTED_SEASON_ID: seasonId,
@@ -4635,10 +4779,34 @@ async function launchOnlineProvider(payload) {
       },
     })
   } catch (error) {
+    realtimeSession?.close('game launch failed')
+    void eraBridge?.close()
     restoreEnvironment()
     throw error
   }
   restoreEnvironmentWhenClientExits(launched.pid, restoreEnvironment)
+
+  // Attach only after the real client PID exists. The session polls that PID
+  // and closes exactly once it disappears, so a launcher-side exchange failure
+  // or a crashed launch cannot leave an orphaned gateway socket behind.
+  realtimeSession?.attachGameProcess(launched.pid)
+
+  if (eraClientDll) {
+    // Let the redirect DLL finish unpacking and take the login request before
+    // the native client joins the same process. Loading it at process start
+    // races the game's network stack; eight seconds is after login but before
+    // Era's first lobby verification in the live 6.21 build.
+    eraClientTimer = setTimeout(() => {
+      void injectDll(launched.pid, eraClientDll).catch((error) => {
+        console.warn(
+          `[era-bridge] client registration DLL could not attach: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      })
+    }, 8_000)
+    eraClientTimer.unref?.()
+  }
 
   const startedAt = Date.now()
   const entry = {
@@ -4648,10 +4816,16 @@ async function launchOnlineProvider(payload) {
     expectedExecutable: executable,
     external: false,
     providerId,
+    realtimeSession,
+    eraBridge,
+    eraClientTimer,
   }
   running.set(id, entry)
   launched.child.once('exit', (code, signal) => {
     if (running.get(id) !== entry) return
+    clearTimeout(entry.eraClientTimer)
+    void entry.eraBridge?.close()
+    realtimeSession?.close('game process exited')
     running.delete(id)
     clearJoinTarget()
     const expected = expectedBuildCloses.delete(id)
@@ -5088,10 +5262,14 @@ function registerIpc() {
     const entry = running.get(id)
     if (!entry?.pid) return { closed: false }
 
-    // Mark this exit before taskkill fires the injector's exit event. The UI
-    // already knows about a user-requested close and should not show a crash.
+    // Mark this exit before the close reaches the injector's exit event. The
+    // UI already knows about a user-requested close and should not show a
+    // crash message.
     expectedBuildCloses.add(id)
-    await killProcessTree(entry.pid)
+    await closeProcessTreeGracefully(entry.pid)
+    clearTimeout(entry.eraClientTimer)
+    void entry.eraBridge?.close()
+    entry.realtimeSession?.close('game process closed by app')
 
     running.delete(id)
     expectedBuildCloses.delete(id)

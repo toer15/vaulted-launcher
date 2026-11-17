@@ -226,6 +226,9 @@ internal static class VaultedInjector
     private static extern bool IsWindowVisible(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    private static extern uint WaitForInputIdle(IntPtr hProcess, uint dwMilliseconds);
+
+    [DllImport("user32.dll")]
     private static extern bool ShowWindow(IntPtr hWnd, int command);
 
     /** Keep the spare listen-server client off the desktop without stopping its renderer. */
@@ -394,6 +397,13 @@ internal static class VaultedInjector
         IntPtr thread = IntPtr.Zero;
         try
         {
+            // The Era client expects the game to have finished creating its
+            // message queue before it installs its hooks. The official Era
+            // injector waits for input idle; without this the DLL loads but
+            // never registers the running client with the backend.
+            uint idle = WaitForInputIdle(process, 30000);
+            if (idle == 258) Console.Error.WriteLine("WaitForInputIdle timed out; injecting anyway");
+
             byte[] bytes = Encoding.Unicode.GetBytes(dllPath + "\0");
             remote = VirtualAllocEx(process, IntPtr.Zero, (UIntPtr)bytes.Length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
             if (remote == IntPtr.Zero) return Fail("VirtualAllocEx failed: " + Marshal.GetLastWin32Error());

@@ -10,6 +10,10 @@ const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
 const VERIFICATION_TIMEOUT_MS = 5 * 60 * 1000
 const VERIFICATION_POLL_MS = 5_000
 const REQUEST_TIMEOUT_MS = 20_000
+const REALTIME_VERIFY_TIMEOUT_MS = 20_000
+const REALTIME_RECONNECT_BASE_MS = 1_000
+const REALTIME_RECONNECT_MAX_MS = 15_000
+const REALTIME_PROCESS_POLL_MS = 2_000
 const TOKEN_FILE = 'provider-auth.bin'
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const BUILD_VERIFICATION_STATUS = 'build_verification_required'
@@ -23,6 +27,17 @@ const BUILD_RELATIVE_PATH_MAX = 320
 
 function safeText(value, limit = 300) {
   return typeof value === 'string' ? value.trim().slice(0, limit) : ''
+}
+
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // Windows returns EPERM for a live process owned by another user/session.
+    return error?.code === 'EPERM'
+  }
 }
 
 // Provider account APIs use these status codes when the signed-in account is
@@ -1426,68 +1441,319 @@ function createProviderAuth({
     const url = `${config.realtimeUrl}/v1`
     return await new Promise((resolve, reject) => {
       let settled = false
-      let sent = false
-      const ws = new WebSocket(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'User-Agent': providerUserAgent,
-        },
-        handshakeTimeout: 15_000,
-        maxPayload: 64 * 1024,
-      })
-      const timer = setTimeout(() => finish(new Error(`${config.label} did not answer the game-file check in time.`)), 20_000)
+      let verified = false
+      let closed = false
+      let socket = null
+      let connectionId = 0
+      let currentToken = token
+      let verificationTimer = null
+      let reconnectTimer = null
+      let reconnectDelay = REALTIME_RECONNECT_BASE_MS
+      let processTimer = null
+      let gamePid = null
+      let nextRef = 0
 
-      function finish(error, reply) {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
+      const log = (message) =>
+        console.log(`[provider-auth] ${config.label} realtime: ${message}`)
+
+      function clearVerificationTimer() {
+        if (!verificationTimer) return
+        clearTimeout(verificationTimer)
+        verificationTimer = null
+      }
+
+      function clearReconnectTimer() {
+        if (!reconnectTimer) return
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
+
+      function clearProcessTimer() {
+        if (!processTimer) return
+        clearInterval(processTimer)
+        processTimer = null
+      }
+
+      function close(reason = 'requested') {
+        if (closed) return
+        closed = true
+        verified = false
+        clearVerificationTimer()
+        clearReconnectTimer()
+        clearProcessTimer()
+        const current = socket
+        socket = null
         try {
-          ws.close(1000)
+          current?.close(1000)
         } catch {
           /* already closed */
         }
-        if (error) reject(error)
-        else resolve(reply)
+        log(`closed (${reason})`)
       }
 
-      ws.on('message', (raw) => {
-        let frame
-        try {
-          frame = JSON.parse(raw.toString())
-        } catch {
-          return
-        }
-        if (frame?.op === 'welcome' && !sent) {
-          sent = true
-          try {
-            ws.send(
-              JSON.stringify({
-                op: 'build.verify',
-                ref: '1',
-                d: { build_id: buildId, files },
-              }),
-            )
-          } catch (error) {
-            finish(error instanceof Error ? error : new Error(String(error)))
+      const session = {
+        providerId: config.id,
+        buildId,
+        attachGameProcess(pid) {
+          if (closed) return
+          gamePid = Number(pid)
+          if (!Number.isInteger(gamePid) || gamePid <= 0) {
+            close('invalid game process id')
+            return
           }
+          clearProcessTimer()
+          if (!processIsAlive(gamePid)) {
+            close(`game process ${gamePid} already exited`)
+            return
+          }
+          // The gateway session belongs to the client, not the launcher. Keep
+          // it open for the complete process lifetime, including the period
+          // after exchange-code and before the first lobby frame.
+          processTimer = setInterval(() => {
+            if (closed) return
+            if (!processIsAlive(gamePid)) close(`game process ${gamePid} exited`)
+          }, REALTIME_PROCESS_POLL_MS)
+          sendInGamePresence()
+          log(`tracking game process ${gamePid}`)
+        },
+        close(reason = 'requested') {
+          close(reason)
+        },
+        get active() {
+          return !closed
+        },
+        get verified() {
+          return verified
+        },
+      }
+
+      function fail(error) {
+        if (settled) {
+          log(`gateway error after verification: ${error instanceof Error ? error.message : error}`)
+          close('gateway error after verification')
           return
         }
-        if (frame?.ref !== '1') return
-        if (frame.op === 'error') {
-          const code = safeText(frame.d?.code, 80) || 'verification_failed'
-          finish(new Error(`${config.label} could not verify the game files (${code}).`))
+        settled = true
+        closed = true
+        verified = false
+        clearVerificationTimer()
+        clearReconnectTimer()
+        clearProcessTimer()
+        const current = socket
+        socket = null
+        try {
+          current?.close(1000)
+        } catch {
+          /* already closed */
+        }
+        reject(error)
+      }
+
+      function finish(error, reply) {
+        if (error) {
+          fail(error)
           return
         }
-        if (frame.op !== 'build.verify.ok') {
-          finish(new Error(`${config.label} returned an unexpected game-file check response.`))
+        if (settled) return
+        settled = true
+        verified = true
+        clearVerificationTimer()
+        reconnectDelay = REALTIME_RECONNECT_BASE_MS
+        if (reply && typeof reply === 'object') {
+          // Keep the live socket out of the IPC result while letting the
+          // launcher tie it to the game process it is about to start.
+          Object.defineProperty(reply, 'realtimeSession', {
+            value: session,
+            enumerable: false,
+            configurable: true,
+          })
+        }
+        log('verified; keeping the gateway socket open for the game session')
+        resolve(reply)
+      }
+
+      function scheduleReconnect(reason) {
+        if (closed || reconnectTimer) return
+        const delay = reconnectDelay
+        reconnectDelay = Math.min(reconnectDelay * 2, REALTIME_RECONNECT_MAX_MS)
+        log(`gateway socket closed (${reason}); reconnecting in ${delay}ms`)
+        reconnectTimer = setTimeout(async () => {
+          reconnectTimer = null
+          if (closed) return
+          try {
+            currentToken = await accessToken(config)
+          } catch (error) {
+            log(`token refresh failed during reconnect: ${error instanceof Error ? error.message : error}`)
+            scheduleReconnect('token refresh failed')
+            return
+          }
+          if (closed) return
+          connect()
+        }, delay)
+      }
+
+      function replyToHeartbeat(ws, frame) {
+        const ref = safeText(frame.ref, 80)
+        const op = frame.op === 'ping' ? 'pong' : 'heartbeat.ack'
+        const reply = { op, ...(ref ? { ref } : {}), d: frame.d ?? null }
+        try {
+          ws.send(JSON.stringify(reply))
+          log(`${frame.op} -> ${op}`)
+        } catch (error) {
+          log(`could not answer ${frame.op}: ${error instanceof Error ? error.message : error}`)
+        }
+      }
+
+      /**
+       * Era's game host checks this presence on every auth verify. The official
+       * launcher sends it once the client is running; without it the backend
+       * answers `/account/api/oauth/verify` with 401 "The Era client isn't
+       * running" after roughly a minute and kicks the player out of the lobby.
+       */
+      function sendInGamePresence() {
+        const ws = socket
+        if (closed || !ws || ws.readyState !== WebSocket.OPEN) return
+        try {
+          ws.send(
+            JSON.stringify({
+              op: 'presence.set',
+              d: {
+                status: 'in_game',
+                activity: {
+                  build_id: buildId,
+                  playlist: null,
+                  party_size: null,
+                  match_id: null,
+                  since: new Date().toISOString(),
+                },
+              },
+            }),
+          )
+          log('presence.set in_game')
+        } catch (error) {
+          log(`could not set in-game presence: ${error instanceof Error ? error.message : error}`)
+        }
+      }
+
+      function connect() {
+        if (closed) return
+        const id = ++connectionId
+        let ws
+        try {
+          ws = new WebSocket(url, {
+            headers: {
+              Authorization: `Bearer ${currentToken}`,
+              'User-Agent': providerUserAgent,
+            },
+            handshakeTimeout: 15_000,
+            maxPayload: 64 * 1024,
+            // ws answers protocol-level ping frames automatically. App-level
+            // gateway ping/heartbeat frames are answered below.
+            autoPong: true,
+          })
+        } catch (error) {
+          scheduleReconnect(error instanceof Error ? error.message : String(error))
           return
         }
-        finish(null, frame.d)
-      })
-      ws.on('error', (error) => finish(error instanceof Error ? error : new Error(String(error))))
-      ws.on('close', () => {
-        if (!settled) finish(new Error(`${config.label} closed the game-file check connection.`))
-      })
+        socket = ws
+        let sent = false
+        const ref = String(++nextRef)
+        const isCurrent = () => id === connectionId && socket === ws && !closed
+
+        clearVerificationTimer()
+        verificationTimer = setTimeout(() => {
+          if (!isCurrent()) return
+          if (!settled) {
+            finish(new Error(`${config.label} did not answer the game-file check in time.`))
+          } else {
+            log('re-verification timed out; reconnecting')
+            try {
+              ws.close(1000)
+            } catch {
+              /* already closed */
+            }
+          }
+        }, REALTIME_VERIFY_TIMEOUT_MS)
+
+        ws.on('open', () => {
+          if (!isCurrent()) return
+          log('gateway socket open')
+        })
+        ws.on('ping', () => {
+          // ws has already queued the matching pong.
+          if (isCurrent()) log('gateway ping (pong sent)')
+        })
+        ws.on('message', (raw) => {
+          if (!isCurrent()) return
+          let frame
+          try {
+            frame = JSON.parse(raw.toString())
+          } catch {
+            return
+          }
+          if (frame?.op === 'ping' || frame?.op === 'heartbeat') {
+            replyToHeartbeat(ws, frame)
+            return
+          }
+          if (frame?.op === 'welcome' && !sent) {
+            sent = true
+            try {
+              ws.send(
+                JSON.stringify({
+                  op: 'build.verify',
+                  ref,
+                  d: { build_id: buildId, files },
+                }),
+              )
+            } catch (error) {
+              fail(error instanceof Error ? error : new Error(String(error)))
+            }
+            return
+          }
+          if (frame?.ref !== ref) return
+          if (frame.op === 'error') {
+            const code = safeText(frame.d?.code, 80) || 'verification_failed'
+            fail(new Error(`${config.label} could not verify the game files (${code}).`))
+            return
+          }
+          if (frame.op !== 'build.verify.ok') {
+            fail(new Error(`${config.label} returned an unexpected game-file check response.`))
+            return
+          }
+          if (settled) {
+            verified = true
+            clearVerificationTimer()
+            reconnectDelay = REALTIME_RECONNECT_BASE_MS
+            // A reconnect starts a new gateway session. Re-assert the game
+            // presence so the backend does not treat the fresh socket as a
+            // launcher that is merely sitting online.
+            if (gamePid && processIsAlive(gamePid)) sendInGamePresence()
+            log('gateway re-verified after reconnect')
+            return
+          }
+          finish(null, frame.d)
+        })
+        ws.on('error', (error) => {
+          if (!isCurrent()) return
+          const message = error instanceof Error ? error.message : String(error)
+          if (!settled) fail(error instanceof Error ? error : new Error(message))
+          else log(`gateway error: ${message}`)
+        })
+        ws.on('close', (code, reason) => {
+          if (socket === ws) socket = null
+          if (!isCurrent() && (closed || id !== connectionId)) return
+          clearVerificationTimer()
+          const detail = `${code || 'unknown'}${reason ? ` ${reason}` : ''}`
+          if (closed) return
+          if (!settled) {
+            fail(new Error(`${config.label} closed the game-file check connection (${detail}).`))
+            return
+          }
+          scheduleReconnect(detail)
+        })
+      }
+
+      connect()
     })
   }
 
@@ -2012,37 +2278,68 @@ function createProviderAuth({
     const build = chooseBuild(builds, config, seasonId, version)
 
     const cached = takeVerificationCode(config, build)
-    if (cached) return cached
+    let realtimeSession = null
+    const withRealtimeSession = (result) => {
+      if (realtimeSession && result && typeof result === 'object') {
+        // This handle is consumed by the main process immediately after the
+        // exchange. It must never cross IPC or be serialized for the renderer.
+        Object.defineProperty(result, 'realtimeSession', {
+          value: realtimeSession,
+          enumerable: false,
+          configurable: true,
+        })
+      }
+      return result
+    }
+
+    if (cached) {
+      // A cached code is still a real game launch. Re-open the verified
+      // gateway session so Era does not see a running client with no client
+      // connection and kick it after roughly a minute.
+      if (buildPath && config.realtimeUrl) {
+        const verification = await verifyLocalBuild(config, token, build, buildPath)
+        realtimeSession = verification.realtimeSession || null
+      }
+      return withRealtimeSession(cached)
+    }
 
     // Match the official launcher's order: build.verify runs before the
     // exchange when the installed folder is known. This avoids spending an
     // exchange request just to be told the same gate applies.
     let buildVerified = false
     if (buildPath && config.realtimeUrl) {
-      await verifyLocalBuild(config, token, build, buildPath)
+      const verification = await verifyLocalBuild(config, token, build, buildPath)
+      realtimeSession = verification.realtimeSession || null
       buildVerified = true
     }
 
     try {
       const result = await gameCode(config, token, build)
       markVerificationCompleted(config)
-      return result
+      return withRealtimeSession(result)
     } catch (error) {
       // Era's exchange endpoint is gated on a successful realtime
       // `build.verify` for the installed files. This is not an account
       // verification state, so verify the build and retry the exchange once.
       if (error?.buildVerificationRequired) {
-        if (!buildVerified) await verifyLocalBuild(config, token, build, buildPath)
+        if (!buildVerified) {
+          realtimeSession?.close('build verification retry')
+          const verification = await verifyLocalBuild(config, token, build, buildPath)
+          realtimeSession = verification.realtimeSession || null
+        }
         const result = await gameCode(config, token, build)
         markVerificationCompleted(config)
-        return result
+        return withRealtimeSession(result)
       }
-      if (!isVerificationFailure(error)) throw error
+      if (!isVerificationFailure(error)) {
+        realtimeSession?.close('exchange failed')
+        throw error
+      }
       logVerificationResponse(config, error)
       const recovery = await trySilentVerificationRecovery(config, token, build)
       if (recovery.result) {
         markVerificationCompleted(config)
-        return recovery.result
+        return withRealtimeSession(recovery.result)
       }
       const finalError =
         recovery.error && isVerificationFailure(recovery.error) ? recovery.error : error
@@ -2053,6 +2350,7 @@ function createProviderAuth({
       // Remember the exact provider-supplied HTTPS page for the explicit
       // Verify Account action. Do not open it from Play.
       rememberVerification(config, build, finalError)
+      realtimeSession?.close('exchange requires verification')
       throw finalError
     }
   }

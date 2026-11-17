@@ -4,5 +4,5 @@
   "label": "Era",
   "backendUrl": "https://game.erafn.dev/",
   "redirectDllName": "Tellurium.dll",
-  "redirectDllSha256": "a7a344e9347ba5f6745d85c397a9423bf4edbdb32001b090c00bcdce0580ffe5"
+  "redirectDllSha256": "208b764d8c97ef6d59a3e7ffe3e360bddb646f215a4044d9a2965020ef50ea2e"
 }

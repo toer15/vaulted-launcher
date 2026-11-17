@@ -4,7 +4,7 @@
   "label": "Reboot",
   "backendUrl": "https://rebootfn.org/",
   "redirectDllName": "Tellurium.dll",
-  "redirectDllSha256": "a7a344e9347ba5f6745d85c397a9423bf4edbdb32001b090c00bcdce0580ffe5",
+  "redirectDllSha256": "208b764d8c97ef6d59a3e7ffe3e360bddb646f215a4044d9a2965020ef50ea2e",
   "gameServerDllName": "Reboot.dll",
   "gameServerDllSha256": "1a23b6e1eb43ae3224aa6eebefd6c9e4c003632b731b10674782279be3fb6405",
   "gameServerDllSource": "https://github.com/Breec-YT/Project-Reboot-3.0",

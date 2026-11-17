@@ -1247,7 +1247,9 @@ export default function App() {
       setRunningId((current) => (current === id ? null : current))
       setLaunchStage(null)
 
-      if (exit.expected) {
+      // A zero-code client exit is a normal close (including the window-close
+      // guard), not a failed launch. Only surface unexpected crashes.
+      if (exit.expected || exit.reason === 'client-closed') {
         setPhase((current) => (current === 'running' || current === 'launching' ? 'idle' : current))
         setLaunchFailure((current) => (current?.id === id ? null : current))
         return
