@@ -207,6 +207,11 @@ function healthForBackend(provider: GlobalBackend | null | undefined): ServerHea
       linkLabel: provider.launchKind === 'discord' ? 'ONLINE · DISCORD' : 'LAUNCHER',
     }
   }
+  // A bundled local engine is not a global server. Never turn its probe into
+  // an ONLINE · 1 SERVER claim, even if the local backend responds.
+  if (provider?.global !== true || provider?.mode === 'download') {
+    return { state: 'link', linkLabel: 'LOCAL' }
+  }
   if (!provider?.live) return { state: 'checking' }
   return {
     state: provider.live.online ? 'up' : 'down',
@@ -368,9 +373,14 @@ export function ActiveBuildCard({
   // The official Retrac launcher owns its own sign-in and 14.60 client, so the
   // archive card must never gate it behind a VAULTED account or a download.
   const officialExternal = build?.onlineProvider?.id === 'retrac-official'
+  const externalHero = Boolean(
+    autoGlobalBackend &&
+      (autoGlobalBackend.mode === 'external' || autoGlobalBackend.external),
+  )
   const requiresSignIn =
     !archived &&
     !officialExternal &&
+    !externalHero &&
     signedOut &&
     ['missing', 'paused', 'ready', 'error'].includes(state)
   // Only offer the account prompt for an installed season. A missing build
@@ -430,7 +440,11 @@ export function ActiveBuildCard({
     ? 'LOCAL ONLY'
     : liveServers > 0
       ? `ONLINE · ${liveServers} ${liveServers === 1 ? 'SERVER' : 'SERVERS'}`
-      : 'OFFLINE'
+      : externalHero || playMode?.externalAvailable
+        ? 'LAUNCHER'
+        : playMode?.availability === 'launcher'
+          ? 'LOCAL'
+          : 'OFFLINE'
   const serverBadgeLive = liveServers > 0 && !selectedLocalBackend
   const activeBackendHealth = healthForBackend(activeGlobalBackend)
   const activeBackendOffline = activeBackendHealth.state === 'down'
@@ -551,6 +565,16 @@ export function ActiveBuildCard({
       }
     : defaultStatePrimary
 
+  const externalPrimary =
+    externalHero && !['downloading', 'paused', 'launching', 'running'].includes(state)
+      ? {
+          label: `Open ${autoGlobalBackend?.label || 'community launcher'}`,
+          icon: Globe2,
+          background: 'linear-gradient(120deg, #7c8cff, #4752c4)',
+          glow: 'rgba(124,140,255,0.55)',
+        }
+      : null
+
   const primary = archived
     ? statePrimary
     : accountConnectRequired
@@ -574,18 +598,20 @@ export function ActiveBuildCard({
           background: 'linear-gradient(120deg, #4b5563, #374151)',
           glow: 'rgba(75,85,99,0.35)',
         }
-      : statePrimary
+      : externalPrimary ?? statePrimary
   const primaryBusy = busy && !requiresSignIn && !accountConnectRequired
   const primaryDisabled =
     archived ||
     (!requiresSignIn &&
       !accountConnectRequired &&
-      (busy || (state === 'missing' && !hasDownloadSource && !officialExternal)))
+      (busy || (state === 'missing' && !hasDownloadSource && !officialExternal && !externalHero)))
 
   const PrimaryIcon = primary.icon
 
   const statusText: Record<BuildState, string> = {
-    missing: officialExternal
+    missing: externalHero
+      ? `Ready — Play opens ${autoGlobalBackend?.label || 'the community launcher'} for this season.`
+      : officialExternal
       ? runtimeRequired && !runtime?.installed
         ? `Step 1 — install ${runtime?.label || 'the companion launcher'} to unlock the season download.`
         : requiresSignIn
@@ -618,7 +644,9 @@ export function ActiveBuildCard({
       discordLocked
         ? `Ready — join ${discordGate?.label || 'the community Discord'} to unlock online play.`
         : playMode?.availability === 'launcher' && !playMode?.online
-        ? 'Ready — online play is available. Play connects automatically to a live server.'
+        ? playMode?.externalAvailable
+          ? 'Ready — Play opens the community launcher that hosts this season.'
+          : 'Ready — local lobby only. Pick a live server or community launcher to go online.'
         : playMode?.availability === 'unsupported' && !playMode?.online
           ? 'Ready — no live server is reporting for this season right now.'
           : playMode?.availability === 'directory' && !playMode?.online
@@ -1197,38 +1225,53 @@ export function ActiveBuildCard({
                           </button>
                         )}
 
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            if (downloadUnlocked) onPrimary()
-                          }}
-                          disabled={!downloadUnlocked}
-                          aria-disabled={!downloadUnlocked}
-                          title={
-                            !hasDownloadSource
-                              ? 'No download source is available for this season.'
-                              : !runtimeReady
-                                ? `Install ${runtime?.label || 'the companion launcher'} first.`
-                                : requiresSignIn
-                                  ? 'Sign in to unlock the season download.'
-                                  : busy
-                                    ? 'A download is already running.'
-                                    : `Download ${season.label}`
-                          }
-                          className={cx(
-                            'inline-flex items-center gap-2 rounded-xl px-4 py-3 text-[12.5px] font-semibold transition-all duration-200',
-                            downloadUnlocked
-                              ? 'bg-gradient-to-r from-emerald-400 to-emerald-600 text-void shadow-[0_14px_34px_-14px_rgba(16,185,129,0.8)] hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]'
-                              : 'cursor-not-allowed border border-white/10 bg-white/[0.04] text-fog/55',
-                          )}
-                        >
-                          <Download className="h-4 w-4" />
-                          <span>
-                            Download Season
-                            {downloadSizeLabel ? ` · ${downloadSizeLabel}` : ''}
-                          </span>
-                        </button>
+                        {externalHero ? (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              onPrimary()
+                            }}
+                            title={`Open ${autoGlobalBackend?.label || 'the community launcher'} for ${season.label}`}
+                            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#7c8cff] to-[#4752c4] px-4 py-3 text-[12.5px] font-semibold text-white shadow-[0_14px_34px_-16px_rgba(124,140,255,0.65)] transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]"
+                          >
+                            <Globe2 className="h-4 w-4" />
+                            <span>Open {autoGlobalBackend?.label || 'community launcher'}</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              if (downloadUnlocked) onPrimary()
+                            }}
+                            disabled={!downloadUnlocked}
+                            aria-disabled={!downloadUnlocked}
+                            title={
+                              !hasDownloadSource
+                                ? 'No download source is available for this season.'
+                                : !runtimeReady
+                                  ? `Install ${runtime?.label || 'the companion launcher'} first.`
+                                  : requiresSignIn
+                                    ? 'Sign in to unlock the season download.'
+                                    : busy
+                                      ? 'A download is already running.'
+                                      : `Download ${season.label}`
+                            }
+                            className={cx(
+                              'inline-flex items-center gap-2 rounded-xl px-4 py-3 text-[12.5px] font-semibold transition-all duration-200',
+                              downloadUnlocked
+                                ? 'bg-gradient-to-r from-emerald-400 to-emerald-600 text-void shadow-[0_14px_34px_-14px_rgba(16,185,129,0.8)] hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]'
+                                : 'cursor-not-allowed border border-white/10 bg-white/[0.04] text-fog/55',
+                            )}
+                          >
+                            <Download className="h-4 w-4" />
+                            <span>
+                              Download Season
+                              {downloadSizeLabel ? ` · ${downloadSizeLabel}` : ''}
+                            </span>
+                          </button>
+                        )}
                       </div>
 
                       {runtimeRequired && !runtimeReady && (

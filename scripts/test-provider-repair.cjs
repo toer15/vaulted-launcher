@@ -32,8 +32,9 @@ const localProviderIds = ['reboot', 'neo', 'era', 'ezfn', 'ezfn-hybrid']
 // their own launchers/communities and deliberately have no redirect DLL.
 const globalProviderIds = ['stellar']
 const externalProviderIds = [
-  'eon', 'hydro', 'interloop', 'crystal', 'echo', 'arc', 'retrac-official',
+  'neo-official', 'eon', 'hydro', 'interloop', 'crystal', 'echo', 'arc', 'retrac-official',
   'slurp', 'ambient', 'reef', 'legacy-mp', 'horizon', 'sunset', 'blue-og', 'glow',
+  'reboot-official',
 ]
 const dllProviderIds = [...localProviderIds, ...globalProviderIds]
 const providerIds = [...dllProviderIds, ...externalProviderIds]

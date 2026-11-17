@@ -384,6 +384,56 @@ internal static class VaultedInjector
                normalized.Contains("RETRYING 1");
     }
 
+    private static bool HasReadyMarker(string log)
+    {
+        return !string.IsNullOrEmpty(log) &&
+               (log.Contains("LogInit: Display: Game Engine Initialized.") ||
+                log.Contains("LogInit: Display: Starting Game."));
+    }
+
+    /**
+     * Fortnite 6.21 ships a packed main image. Its loader scans and decrypts
+     * that image after process start, so a redirect DLL injected while the
+     * process is still suspended scans encrypted code and the client exits
+     * before the hook is ready. Wait for the client's own post-load log marker
+     * before attaching for redirect DLLs (Era's Tellurium) that do not publish
+     * a HOOK_READY marker of their own.
+     */
+    private static bool WaitForGameReady(
+        PROCESS_INFORMATION process,
+        string logPath,
+        long logBaseline,
+        string logFingerprint,
+        DateTime processStartedUtc,
+        out string detail)
+    {
+        const int timeoutMs = 30000;
+        var started = Stopwatch.StartNew();
+        while (started.ElapsedMilliseconds < timeoutMs)
+        {
+            if (WaitForSingleObject(process.hProcess, 0) == 0)
+            {
+                uint exited;
+                detail = GetExitCodeProcess(process.hProcess, out exited)
+                    ? "process-exited-0x" + exited.ToString("X8")
+                    : "process-exited";
+                return false;
+            }
+
+            string fresh = ReadLogSince(logPath, logBaseline, logFingerprint, processStartedUtc);
+            if (HasReadyMarker(fresh))
+            {
+                detail = "unpacked log marker after " + started.ElapsedMilliseconds + "ms";
+                return true;
+            }
+
+            Thread.Sleep(25);
+        }
+
+        detail = "timeout after " + started.ElapsedMilliseconds + "ms";
+        return false;
+    }
+
     /** Confirm that the module is actually mapped into the target, not merely queued. */
     private static bool WaitForModuleLoaded(int processId, string dllPath, int timeoutMs, out string detail)
     {
@@ -751,10 +801,35 @@ internal static class VaultedInjector
                         backend = argument.Substring(9);
                 if (backend.Length > 0) Console.WriteLine("BACKEND=" + backend);
 
-                // The process is still suspended. Load the redirect DLL now,
-                // before the client's entry point or any HTTP/Curl stack can
-                // run. Tellurium waits inside its worker thread until the packed
-                // image exposes valid sections, then installs the URL hook.
+                // Era launches the 6.21 client with -frombe. That packed
+                // build must finish unpacking before the redirect attaches;
+                // pre-entry injection makes it exit with 0xC0000005. Other
+                // providers keep the early Cobalt/Tellurium hook path.
+                bool delayInjection = false;
+                foreach (string argument in gameArguments)
+                    if (string.Equals(argument, "-frombe", StringComparison.OrdinalIgnoreCase))
+                        delayInjection = true;
+                string hookDetail = "hook marker not requested";
+                if (delayInjection)
+                {
+                    // The process was created suspended so the bootstrappers
+                    // could be frozen. Let the packed client unpack its image
+                    // before attaching; injecting into the suspended image
+                    // makes the 6.21 client exit before any hook can install.
+                    ResumeThread(process.hThread);
+                    Console.WriteLine("RESUMED=1");
+                    Console.Out.Flush();
+
+                    string readyDetail;
+                    if (!WaitForGameReady(process, logPath, logBaseline, logFingerprint, processStartedUtc, out readyDetail))
+                    {
+                        TerminateProcess(process.hProcess, 1);
+                        return Fail("Fortnite exited before the redirect DLL could attach (" + readyDetail + ").");
+                    }
+                    Console.WriteLine("READY=" + readyDetail);
+                    Console.Out.Flush();
+                }
+
                 int injected = InjectIntoProcess(process.dwProcessId, dllPath, false);
                 if (injected != 0)
                 {
@@ -771,15 +846,20 @@ internal static class VaultedInjector
                 Console.WriteLine("MODULE_VERIFIED=" + moduleDetail);
                 Console.Out.Flush();
 
-                ResumeThread(process.hThread);
-                Console.WriteLine("RESUMED=1");
-                Console.Out.Flush();
-
-                string hookDetail;
-                if (!WaitForHookMarker(process, hookLog, hookToken, logPath, logBaseline, logFingerprint, processStartedUtc, out hookDetail))
+                if (!delayInjection)
                 {
-                    TerminateProcess(process.hProcess, 1);
-                    return Fail("The redirect hook was not ready in Fortnite (" + hookDetail + ").");
+                    // The process is still suspended. Load the redirect DLL
+                    // before the client's entry point or HTTP/Curl stack runs,
+                    // then resume and wait for the DLL's own readiness marker.
+                    ResumeThread(process.hThread);
+                    Console.WriteLine("RESUMED=1");
+                    Console.Out.Flush();
+
+                    if (!WaitForHookMarker(process, hookLog, hookToken, logPath, logBaseline, logFingerprint, processStartedUtc, out hookDetail))
+                    {
+                        TerminateProcess(process.hProcess, 1);
+                        return Fail("The redirect hook was not ready in Fortnite (" + hookDetail + ").");
+                    }
                 }
                 Console.WriteLine("HOOK_VERIFIED=" + hookDetail);
 

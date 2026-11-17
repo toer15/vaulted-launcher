@@ -501,8 +501,14 @@ export default function App() {
     const byId = new Map<string, GlobalBackend>()
     for (const provider of nativeProviders) byId.set(provider.id, provider)
     for (const provider of verifiedOAuthProviders) byId.set(provider.id, provider)
+    // Active external projects are real remote destinations through their
+    // official launcher. They rank after hosted native backends and exact live
+    // servers, but before a bundled local lobby.
+    for (const provider of seasonProviders) {
+      if (provider.mode === 'external') byId.set(provider.id, provider)
+    }
     return [...byId.values()]
-  }, [nativeProviders, verifiedOAuthProviders])
+  }, [nativeProviders, seasonProviders, verifiedOAuthProviders])
   const providerVerified = useMemo(
     () => verifiedOAuthProviders.some((provider) => providerAuthStatus[provider.id]?.signedIn),
     [providerAuthStatus, verifiedOAuthProviders],
@@ -932,10 +938,18 @@ export default function App() {
     )
     .sort((left, right) => Number(isLocalEngine(left)) - Number(isLocalEngine(right)))
   const autoGlobalBackend =
-    activeBuild && !selectedServerValue && !activeServerRoute?.exactServer
-      ? healthyAutoProviders.find((provider) => provider.id === activeBuild.onlineProvider?.id) ??
-        healthyAutoProviders[0] ??
-        null
+    activeBuild && !selectedServerValue && !isRemoteServer(activeServerRoute?.exactServer)
+      ? (() => {
+          const remote = healthyAutoProviders.filter((provider) => !isLocalEngine(provider))
+          const mappedId = activeBuild.onlineProvider?.id
+          return (
+            remote.find((provider) => provider.id === mappedId) ??
+            remote[0] ??
+            healthyAutoProviders.find((provider) => provider.id === mappedId) ??
+            healthyAutoProviders[0] ??
+            null
+          )
+        })()
       : null
   // The card offers the generic account connection for any hosted backend
   // that needs an account. Local `auth: "none"` engines never show it, and a
@@ -2931,6 +2945,36 @@ export default function App() {
         await startOnlineProvider(build, externalChoice)
         return
       }
+      // A season whose only remote route is a companion project must open that
+      // launcher before the install/download gate. Downloading a 6–20 GB local
+      // build first is not a remote connection and strands external-only
+      // seasons on a local server.
+      const automaticExternal = (() => {
+        if (join || selectedValue || options.forceProviderId) return null
+        const seasonKey = artKeyFor(build.season)
+        if (!seasonKey) return null
+        const candidates = seasonProviders.filter(
+          (provider) =>
+            provider.mode === 'external' &&
+            provider.id !== 'retrac-official' &&
+            provider.supportedSeasons.includes(seasonKey) &&
+            provider.live?.online !== false,
+        )
+        if (candidates.length === 0) return null
+        const hostedLive = seasonProviders.some(
+          (provider) =>
+            provider.global === true &&
+            provider.mode !== 'external' &&
+            provider.supportedSeasons.includes(seasonKey) &&
+            provider.live?.online === true,
+        )
+        if (hostedLive) return null
+        return candidates.find((provider) => provider.id === build.onlineProvider?.id) ?? candidates[0] ?? null
+      })()
+      if (automaticExternal) {
+        await startOnlineProvider(build, automaticExternal)
+        return
+      }
       // Retrac owns its own Alea account. Never put it behind VAULTED's account
       // prompt, including the launch resumed automatically after a download.
       const isRetracOfficial = build.onlineProvider?.id === 'retrac-official'
@@ -3115,31 +3159,38 @@ export default function App() {
       const autoCandidates = globalOptions.filter(
         (provider) => autoLocalAllowed || !isLocalEngine(provider),
       )
-      const autoGlobal =
-        autoCandidates.find(
+      const autoRemoteCandidates = autoCandidates.filter((provider) => !isLocalEngine(provider))
+      const autoLocalCandidates = autoCandidates.filter((provider) => isLocalEngine(provider))
+      const findAuto = (candidates: GlobalBackend[]) =>
+        candidates.find(
           (provider) =>
             providerIsSignedIn(provider) &&
             providerIsAutoRoutable(provider) &&
             provider.id === build.onlineProvider?.id,
         ) ??
-        autoCandidates.find(
+        candidates.find(
           (provider) =>
             providerCanRoute(provider) &&
             providerIsAutoRoutable(provider) &&
             provider.id === build.onlineProvider?.id,
         ) ??
-        autoCandidates.find(
+        candidates.find(
           (provider) => providerIsSignedIn(provider) && providerIsAutoRoutable(provider),
         ) ??
-        autoCandidates.find(
+        candidates.find(
           (provider) => providerCanRoute(provider) && providerIsAutoRoutable(provider),
         ) ??
+        null
+      const autoGlobal =
+        findAuto(autoRemoteCandidates) ??
+        (autoLocalAllowed ? findAuto(autoLocalCandidates) : null) ??
         // The badge can be ONLINE through any mapped engine. If the mapped
         // engine is the only route left, still attempt it instead of falling
         // through to a dead-end "no live server" message.
         (playModes[build.id]?.online || playModes[build.id]?.globalOnline
-          ? autoCandidates.find((provider) => provider.id === mappedGlobal?.id) ??
-            autoCandidates[0] ??
+          ? autoRemoteCandidates.find((provider) => provider.id === mappedGlobal?.id) ??
+            autoRemoteCandidates[0] ??
+            (autoLocalAllowed ? autoLocalCandidates[0] : null) ??
             null
           : null)
       const chosen = join
@@ -3190,7 +3241,17 @@ export default function App() {
         // Do not run a full file scan before asking an unsigned player to
         // connect. Once the account is linked, the resumed Play reaches this
         // branch with a signed-in provider and runs the preflight normally.
-        if (providerIsSignedIn(providerTarget) && !(await runManagedPreflight(build))) return
+        // External companions own their install and file verification, so a
+        // VAULTED preflight must not block their official launcher handoff.
+        const needsManagedPreflight =
+          providerTarget.mode !== 'external' && providerTarget.external !== true
+        if (
+          needsManagedPreflight &&
+          providerIsSignedIn(providerTarget) &&
+          !(await runManagedPreflight(build))
+        ) {
+          return
+        }
         const started = await startOnlineProvider(
           build,
           providerTarget,
@@ -3450,6 +3511,13 @@ export default function App() {
       return
     }
 
+    // External companions own their own install and matchmaking. Play must open
+    // that launcher before the local runtime/download gates.
+    if (autoGlobalBackend && (autoGlobalBackend.mode === 'external' || autoGlobalBackend.external)) {
+      await startOnlineProvider(build, autoGlobalBackend)
+      return
+    }
+
     // The companion launcher is step one of the card's unlock sequence. Never
     // spend a season download before the verified runtime is installed.
     if (activeRuntime?.required && !activeRuntime.installed) {
@@ -3470,7 +3538,20 @@ export default function App() {
     }
 
     await startBuild(build, undefined, { promptOnEmpty: true })
-  }, [activeBuild, downloads, installed, openRetracBuild, phase, providerOnly, pushToast, runningId, signedIn, startBuild])
+  }, [
+    activeBuild,
+    autoGlobalBackend,
+    downloads,
+    installed,
+    openRetracBuild,
+    phase,
+    providerOnly,
+    pushToast,
+    runningId,
+    signedIn,
+    startBuild,
+    startOnlineProvider,
+  ])
 
   const handlePlayChallengeBuild = useCallback(
     (buildId: string) => {

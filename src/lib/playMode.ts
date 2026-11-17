@@ -43,6 +43,10 @@ export interface SeasonPlayMode {
   globalOffline?: boolean
   /** whether this season has a hosted backend, a bundled launcher, or no live route */
   availability?: SeasonAvailability
+  /** a reachable external project hosts this season through its own launcher */
+  externalAvailable?: boolean
+  /** compact label for the reachable external project(s) */
+  externalProviderLabel?: string
   /** archive-only card; never offers Play */
   archived?: boolean
 }
@@ -114,7 +118,7 @@ export function seasonStatusLabel(mode: SeasonPlayMode | null | undefined): stri
   if (mode?.availability === 'global') {
     return mode.globalOffline ? 'OFFLINE' : 'CHECKING'
   }
-  if (mode?.availability === 'launcher') return 'READY'
+  if (mode?.availability === 'launcher') return mode.externalAvailable ? 'LAUNCHER' : 'LOCAL'
   if (mode?.availability === 'directory') return 'CHECKING'
   return 'OFFLINE'
 }
@@ -475,10 +479,24 @@ export function playModesForBuilds(
   globalBackends: GlobalBackend[] = [],
 ): Record<string, SeasonPlayMode> {
   const globalBySeason = new Map<string, GlobalBackend[]>()
+  const externalBySeason = new Map<string, GlobalBackend[]>()
   for (const backend of globalBackends) {
     // Local launchers are not global multiplayer backends. Their probe only
     // confirms the bundled private lobby can start, so it must not make a
     // season look globally ONLINE or become Auto's chosen server.
+    if (backend.mode === 'external') {
+      // External companion projects are real remote destinations, but they do
+      // not expose joinable server APIs. Track them separately so the card can
+      // say LAUNCHER without inventing a server count.
+      if (backend.live?.online === true) {
+        for (const seasonId of backend.supportedSeasons) {
+          const current = externalBySeason.get(seasonId) ?? []
+          current.push(backend)
+          externalBySeason.set(seasonId, current)
+        }
+      }
+      continue
+    }
     if (isLocalEngine(backend)) continue
     // Every mapped engine contributes to the season's live badge and count.
     // Reachability is the only requirement; the probe already supplies one
@@ -498,11 +516,13 @@ export function playModesForBuilds(
     const seasonKey = artKeyFor(build.season)
     const archived = build.archived === true
     const hasGlobal = !archived && Boolean(seasonKey && globalBySeason.has(seasonKey))
+    const external = !archived && seasonKey ? externalBySeason.get(seasonKey) ?? [] : []
+    const hasExternal = external.length > 0
     const availability: SeasonAvailability = archived
       ? 'unsupported'
       : hasGlobal
         ? 'global'
-        : build.onlineProvider
+        : hasExternal || build.onlineProvider
           ? 'launcher'
           : 'unsupported'
     modes[build.id] = {
@@ -520,6 +540,12 @@ export function playModesForBuilds(
         ? { providerLabel: build.onlineProvider.label || build.onlineProvider.name }
         : {}),
       availability,
+      ...(hasExternal
+        ? {
+            externalAvailable: true,
+            externalProviderLabel: external.map((provider) => provider.label).join(' / '),
+          }
+        : {}),
       ...(archived ? { archived: true } : {}),
     }
   }

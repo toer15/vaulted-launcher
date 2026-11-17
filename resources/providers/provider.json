@@ -100,6 +100,31 @@
       ]
     },
     {
+      "id": "neo-official",
+      "name": "Project Neo",
+      "label": "Neo",
+      "mode": "external",
+      "launchKind": "official",
+      "backendUrl": "https://projectneofn.dev/",
+      "website": "https://projectneofn.dev/",
+      "launchUrl": "https://projectneofn.dev/",
+      "statusUrl": "https://projectneofn.dev/",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "neofn",
+        "label": "Discord"
+      },
+      "seasons": [
+        "ch1-s3",
+        "ch1-s4",
+        "ch1-s7",
+        "ch1-s10"
+      ]
+    },
+    {
       "id": "eon",
       "name": "Project Eon",
       "label": "Eon",
@@ -118,7 +143,8 @@
       "global": true,
       "seasons": [
         "ch2-s7"
-      ]
+      ],
+      "statusUrl": "https://projecteon.dev/"
     },
     {
       "id": "hydro",
@@ -139,7 +165,8 @@
       "global": true,
       "seasons": [
         "ch2-s5"
-      ]
+      ],
+      "statusUrl": "https://hydromp.site/"
     },
     {
       "id": "interloop",
@@ -160,7 +187,8 @@
       "global": true,
       "seasons": [
         "ch2-s2"
-      ]
+      ],
+      "statusUrl": "https://interloopfn.org/"
     },
     {
       "id": "crystal",
@@ -181,7 +209,8 @@
       "global": true,
       "seasons": [
         "ch2-s5"
-      ]
+      ],
+      "statusUrl": "https://discord.gg/crystalfn"
     },
     {
       "id": "echo",
@@ -202,7 +231,8 @@
       "global": true,
       "seasons": [
         "ch1-s3"
-      ]
+      ],
+      "statusUrl": "https://echofn.org/"
     },
     {
       "id": "arc",
@@ -223,7 +253,8 @@
       "global": true,
       "seasons": [
         "ch1-s4"
-      ]
+      ],
+      "statusUrl": "https://discord.gg/arcogfn"
     },
     {
       "id": "retrac-official",
@@ -300,7 +331,8 @@
       },
       "seasons": [
         "ch2-s2"
-      ]
+      ],
+      "statusUrl": "https://discord.gg/9yyBHJTGSb"
     },
     {
       "id": "ambient",
@@ -316,7 +348,8 @@
       "global": true,
       "seasons": [
         "ch2-s1"
-      ]
+      ],
+      "statusUrl": "https://discord.com/servers/ambient-1511812282751914144"
     },
     {
       "id": "reef",
@@ -342,7 +375,8 @@
       },
       "seasons": [
         "ch2-s1"
-      ]
+      ],
+      "statusUrl": "https://discord.gg/ECQyr9mtsD"
     },
     {
       "id": "legacy-mp",
@@ -368,7 +402,8 @@
       },
       "seasons": [
         "ch2-s1"
-      ]
+      ],
+      "statusUrl": "https://discord.gg/FecWFJkYjy"
     },
     {
       "id": "horizon",
@@ -394,7 +429,8 @@
       },
       "seasons": [
         "ch2-s2"
-      ]
+      ],
+      "statusUrl": "https://discord.gg/5NGeWtq8Mh"
     },
     {
       "id": "sunset",
@@ -423,7 +459,8 @@
         "ch1-s3",
         "ch1-s4",
         "ch1-s5"
-      ]
+      ],
+      "statusUrl": "https://discord.gg/HRrjapjcCR"
     },
     {
       "id": "blue-og",
@@ -449,7 +486,8 @@
       },
       "seasons": [
         "ch3-s1"
-      ]
+      ],
+      "statusUrl": "https://discord.gg/cdCgqBvJT6"
     },
     {
       "id": "glow",
@@ -475,6 +513,48 @@
       },
       "seasons": [
         "ch4-s4"
+      ],
+      "statusUrl": "https://discord.gg/wZf8RaucJd"
+    },
+    {
+      "id": "reboot-official",
+      "name": "Project Reboot",
+      "label": "Reboot",
+      "mode": "external",
+      "launchKind": "official",
+      "backendUrl": "https://rebootfn.org/",
+      "website": "https://rebootfn.org/",
+      "launchUrl": "https://rebootfn.org/",
+      "statusUrl": "https://rebootfn.org/",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "rebootmp",
+        "label": "Discord"
+      },
+      "seasons": [
+        "ch1-s1",
+        "ch1-s2",
+        "ch1-s5",
+        "ch1-s8",
+        "ch1-s9",
+        "ch2-s1",
+        "ch2-s3",
+        "ch2-s5",
+        "ch2-s6",
+        "ch2-s7",
+        "ch2-s8",
+        "ch3-s1",
+        "ch3-s2",
+        "ch3-s3",
+        "ch3-s4",
+        "ch4-s1",
+        "ch4-s2",
+        "ch4-s3",
+        "ch4-s4",
+        "ch4-s5"
       ]
     }
   ]
