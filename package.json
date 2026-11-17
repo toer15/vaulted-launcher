@@ -9,8 +9,9 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run check:syntax && tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "check:syntax": "node scripts/check-syntax.cjs",
     "app": "npm run build && electron .",
     "app:dev": "electron . --dev",
     "test:join-watchdog": "node scripts/test-join-watchdog.cjs",

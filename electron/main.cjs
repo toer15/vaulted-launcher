@@ -4542,7 +4542,6 @@ function providerAccountIssue(profile, error) {
     error?.verificationRequired === true ||
     /(?:^|_)(?:verification|verify|verified|discord|guild|membership|whitelist)(?:_|$)/.test(code)
   const providerName = String(profile?.name || profile?.label || profile?.id || 'the provider')
-  const providerLabel = String(profile?.label || providerName)
   const issuer = providerLabel
   const rawWebsite = String(profile?.website || profile?.signInUrl || '').trim()
   const website = /^https?:\/\//i.test(rawWebsite)
