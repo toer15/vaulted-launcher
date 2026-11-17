@@ -31,6 +31,7 @@ const {
 const { createEraBridge } = require('./eraBridge.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
+const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
 
 const { botFillPreferences } = require('./botFill.cjs')
 
@@ -1486,7 +1487,9 @@ function fortniteLaunchArgs(payload, options = {}) {
     '-epiclocale=en-us',
     '-epicportal',
     '-skippatchcheck',
+    '-noeac',
     '-nobe',
+    '-NOSSLPINNING',
     `-fromfl=${eos ? 'eaceos' : 'eac'}`,
     `-fltoken=${LEGACY_FLTOKEN}`,
     `-caldera=${eos ? LEGACY_CALDERA_EOS : LEGACY_CALDERA}`,
@@ -1512,12 +1515,10 @@ function fortniteLaunchArgs(payload, options = {}) {
 }
 
 /**
- * Starts the game, lets its loader unpack the client image, then loads the
- * redirect DLL. Injecting a packed build while it is still suspended makes
- * Tellurium scan encrypted code and crash the client with 0xc0000005. The
- * injector waits for the client's own post-unpack readiness marker, so slower
- * machines can take longer without risking an early scan or missing the first
- * OAuth request.
+ * Creates the client suspended, maps the redirect DLL before its entry point,
+ * then resumes it. Tellurium waits inside the process for a valid unpacked
+ * image and reports hook readiness through injector.log before a launch is
+ * allowed to resolve.
  */
 function launchInjectedGame(payload, options = {}) {
   return new Promise((resolve, reject) => {
@@ -1528,6 +1529,14 @@ function launchInjectedGame(payload, options = {}) {
 
     const workingDirectory = path.dirname(payload.executable)
     removeAftermathDlls(payload.executable)
+
+    const logPath = injectorLogPath()
+    const hookToken = crypto.randomBytes(16).toString('hex')
+    try {
+      fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    } catch {
+      /* diagnostics must never prevent a launch */
+    }
 
     const injectorArgs = [payload.executable, dll, workingDirectory]
     for (const bootstrapper of suspendedBootstrappers(payload.executable)) {
@@ -1541,10 +1550,15 @@ function launchInjectedGame(payload, options = {}) {
       cwd: workingDirectory,
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, OPENSSL_ia32cap: '~0x20000000', ...(options.env || {}) },
+      env: {
+        ...process.env,
+        OPENSSL_ia32cap: '~0x20000000',
+        VAULTED_HOOK_LOG: logPath,
+        VAULTED_HOOK_TOKEN: hookToken,
+        ...(options.env || {}),
+      },
     })
 
-    const logPath = injectorLogPath()
     const appendLog = (stream, chunk) => {
       try {
         fs.mkdirSync(path.dirname(logPath), { recursive: true })
@@ -1554,12 +1568,18 @@ function launchInjectedGame(payload, options = {}) {
       }
     }
     const safeArgs = injectorArgs.map((argument) =>
-      /^-AUTH_PASSWORD=/i.test(argument) ? '-AUTH_PASSWORD=<redacted>' : argument,
+      /^(-AUTH_PASSWORD=|-actoken=|-caldera=)/i.test(argument)
+        ? `${argument.slice(0, argument.indexOf('=') + 1)}<redacted>`
+        : argument,
     )
-    appendLog('launcher', `\n=== ${new Date().toISOString()} ===\ninjector: ${injector}\ndll: ${dll}\nargs: ${safeArgs.join(' ')}\n`)
+    appendLog(
+      'launcher',
+      `\n=== ${new Date().toISOString()} ===\ninjector: ${injector}\ndll: ${dll}\nmode: pre-entry\nhook-token: ${hookToken.slice(0, 8)}\nargs: ${safeArgs.join(' ')}\n`,
+    )
 
     let stdout = ''
     let stderr = ''
+    let hookVerified = false
     let settled = false
     const finishError = (message) => {
       if (settled) return
@@ -1576,12 +1596,13 @@ function launchInjectedGame(payload, options = {}) {
     child.stdout?.on('data', (chunk) => {
       appendLog('stdout', chunk)
       stdout = (stdout + chunk.toString()).slice(-4000)
+      if (/(?:^|\r?\n)HOOK_VERIFIED=/m.test(stdout)) hookVerified = true
       const match = /(?:^|\r?\n)PID=(\d+)/.exec(stdout)
       if (match && !settled) {
         settled = true
         clearTimeout(timer)
-        appendLog('launcher', `ready: pid=${match[1]}\n`)
-        resolve({ child, pid: Number(match[1]) })
+        appendLog('launcher', `ready: pid=${match[1]} hook=${hookVerified ? 'verified' : 'unverified'}\n`)
+        resolve({ child, pid: Number(match[1]), hookVerified })
       }
     })
     child.stderr?.on('data', (chunk) => {
@@ -4590,9 +4611,8 @@ function providerAccountIssue(profile, error) {
 /**
  * Launch a downloaded season directly inside VAULTED. The bundled provider
  * profile supplies the backend URL and the redirect DLL; no vendor installer
- * or external launcher is involved. The redirect DLL is injected before the
- * first client frame, using the same unpack-aware injector as the local
- * runtime.
+ * or external launcher is involved. The redirect DLL is mapped while the
+ * client is still suspended, before Unreal starts its HTTP/Curl stack.
  */
 async function launchOnlineProvider(payload) {
   const id = typeof payload?.id === 'string' ? payload.id : ''
@@ -4791,10 +4811,10 @@ async function launchOnlineProvider(payload) {
     }
   }
 
-  // Keep legacy 6.21 profiles on their original argument set. Chapter 4+
-  // local providers need the explicit non-exchange auth shape below or the
-  // client exits before the injector's ready marker.
-  const localAuth = localLauncher && Number(String(version).split('.')[0]) >= 11
+  // Every local/hybrid client needs an explicit non-exchange auth shape.
+  // Without it older builds fall through to Epic's exchange-code path and
+  // modern builds exit before the redirect hook can take over the login.
+  const localAuth = localLauncher
   const providerArgs = providerFortniteArgs(backendUrl, authCode, providerId, authToken, {
     localAuth,
   })
@@ -4851,11 +4871,10 @@ async function launchOnlineProvider(payload) {
   realtimeSession?.attachGameProcess(launched.pid)
 
   if (eraClientDll) {
-    // launchInjectedGame resolves only after the packed client has unpacked and
-    // written its ready marker. The Era client must join before the game sends
-    // its exchange-code login and registration; waiting even a few seconds can
-    // miss that request and makes matchmaking answer "The Era client isn't
-    // running."
+    // launchInjectedGame resolves only after Tellurium reports that its HTTP
+    // hook is installed. The Era client must join before the game sends its
+    // exchange-code login and registration; waiting can miss that request and
+    // makes matchmaking answer "The Era client isn't running."
     eraClientTimer = setTimeout(() => {
       void injectDll(launched.pid, eraClientDll).catch((error) => {
         console.warn(
@@ -4905,6 +4924,7 @@ async function launchOnlineProvider(payload) {
     providerId,
     name: profile.name,
     pid: launched.pid,
+    hookVerified: launched.hookVerified === true,
     privateServer: false,
     matchmaking: Boolean(join),
     joined: join ? `${join.host}:${join.port}` : null,
@@ -5223,6 +5243,25 @@ function registerIpc() {
   )
 
   ipcMain.handle('arc:provider-catalog', () => providerCatalog())
+
+  // Discord-gated communities are verified from their public invite metadata.
+  // The renderer never receives a Discord token; launch still uses the season's
+  // normal provider auth and redirect DLL path after this gate is unlocked.
+  ipcMain.handle('arc:discord-gate-verify', async (_event, providerId) => {
+    const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
+    if (!id) throw new Error('Invalid Discord community request.')
+    const profile = providerProfile(id)
+    if (!profile.discordGate) {
+      throw new Error(`${profile.label} does not use a Discord community gate.`)
+    }
+    return verifyDiscordCommunity(profile.discordGate)
+  })
+
+  ipcMain.handle('arc:open-discord-invite', async (_event, inviteUrl) => {
+    if (!inviteCode(inviteUrl)) throw new Error('That Discord invite is not valid.')
+    await shell.openExternal(String(inviteUrl))
+    return true
+  })
 
   ipcMain.handle('arc:provider-auth-status', () => providerAuth.statuses())
 

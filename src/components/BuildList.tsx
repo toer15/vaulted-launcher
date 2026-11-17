@@ -1,5 +1,5 @@
 import { Fragment } from 'react'
-import { Check, FolderOpen, FolderPlus, HardDrive, Trash2 } from 'lucide-react'
+import { Check, FolderOpen, FolderPlus, HardDrive, MessageCircle, Trash2 } from 'lucide-react'
 import { artKeyFor, seasonImageFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { formatDownloadSize, formatEtaMinutes } from '../lib/downloadSize'
@@ -109,6 +109,7 @@ export function BuildList({
         const installedNow = installed?.[build.id] === true
         const diskSize = build.path ? diskSizes?.[build.path] : undefined
         const playModeTitle = onlineStatus
+        const discordGate = (build.discordGates ?? [])[0]
 
         return (
           <Fragment key={build.id}>
@@ -221,6 +222,16 @@ export function BuildList({
                       />
                       {onlineStatus}
                     </span>
+                    {discordGate && (
+                      <span
+                        title={`${discordGate.label}: join the community Discord to unlock online play`}
+                        aria-label={`${discordGate.label} gate: online play unlocks through Discord`}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#5865F2]/45 bg-[#5865F2]/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em] text-[#c7ccff]"
+                      >
+                        <MessageCircle className="h-2.5 w-2.5" />
+                        ONLINE · DISCORD
+                      </span>
+                    )}
                     <span
                       className={cx(
                         'min-w-0 truncate font-mono text-[11px]',

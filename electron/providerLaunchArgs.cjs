@@ -32,6 +32,7 @@ function providerFortniteArgs(backendUrl, authCode = '', providerId = '', authTo
     '-nobe',
     '-nouac',
     '-nocodeguards',
+    '-NOSSLPINNING',
     `-fromfl=${era ? 'be' : 'eac'}`,
     ...(era ? ['-frombe'] : []),
     `-caldera=${LEGACY_CALDERA}`,
@@ -49,7 +50,7 @@ function providerFortniteArgs(backendUrl, authCode = '', providerId = '', authTo
     // Local profiles (Reboot, Neo, EZFN Hybrid) have no provider-issued
     // exchange code. Modern clients still require an authenticated launch
     // shape; without AUTH_TYPE they fall through to the exchange-code path and
-    // exit before writing the injector's ready marker. Use the documented
+    // exit before the redirect DLL can install its hook. Use the documented
     // local placeholder so the client reaches engine initialization. The
     // redirect DLL supplies the real backend identity after it attaches.
     args.push('-AUTH_LOGIN=unused', '-AUTH_PASSWORD=unused', '-AUTH_TYPE=epic', '-log')

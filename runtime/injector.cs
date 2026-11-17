@@ -12,6 +12,8 @@ internal static class VaultedInjector
     private const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
     private const uint THREAD_SUSPEND_RESUME = 0x0002;
     private const uint TH32CS_SNAPTHREAD = 0x00000004;
+    private const uint TH32CS_SNAPMODULE = 0x00000008;
+    private const uint TH32CS_SNAPMODULE32 = 0x00000010;
     private const uint MEM_COMMIT = 0x00001000;
     private const uint MEM_RESERVE = 0x00002000;
     private const uint MEM_RELEASE = 0x00008000;
@@ -62,6 +64,23 @@ internal static class VaultedInjector
         public int tpBasePri;
         public int tpDeltaPri;
         public uint dwFlags;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct MODULEENTRY32W
+    {
+        public uint dwSize;
+        public uint th32ModuleID;
+        public uint th32ProcessID;
+        public uint GlblcntUsage;
+        public uint ProccntUsage;
+        public IntPtr modBaseAddr;
+        public uint modBaseSize;
+        public IntPtr hModule;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+        public string szModule;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExePath;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -175,6 +194,12 @@ internal static class VaultedInjector
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern int SuspendThread(IntPtr thread);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool Module32FirstW(IntPtr snapshot, ref MODULEENTRY32W entry);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool Module32NextW(IntPtr snapshot, ref MODULEENTRY32W entry);
 
     /**
      * Suspending a process at CreateProcess time skips the launcher's UAC/app
@@ -318,19 +343,6 @@ internal static class VaultedInjector
         }
     }
 
-    private static bool HasReadyMarker(string log)
-    {
-        // The packed image is unpacked before the engine starts initializing.
-        // This line is written right after the loader hands control to the
-        // engine, so it is the earliest marker that is both post-unpack and
-        // ahead of the exchange-code/OAuth request. Waiting for
-        // "Game Engine Initialized" left Tellurium installing its hooks after
-        // the client had already tried to authenticate.
-        return log.Contains("LogInit: Display: Limiting process virtual memory size to") ||
-               log.Contains("LogInit: Display: Game Engine Initialized.") ||
-               log.Contains("LogInit: Display: Starting Game.");
-    }
-
     /**
      * Bootstrappers only need the Epic portal flags. Never duplicate the
      * one-time exchange code or the Tellurium backend argument onto processes
@@ -349,39 +361,130 @@ internal static class VaultedInjector
         }
     }
 
-    /**
-     * Wait for the client's own log to prove that its packed image has finished
-     * loading. A visible splash/window is too early: the packer still owns the
-     * main image, so injecting at that point can leave Tellurium scanning the
-     * wrong bytes. The engine-initialized lines are written after unpacking and
-     * before the first version-check/OAuth request.
-     */
-    private static bool WaitForGameReady(PROCESS_INFORMATION process, string logPath, long logBaseline, string logFingerprint, DateTime processStartedUtc, out string detail)
+    private static string ReadTextShared(string path)
     {
-        // Cold starts can spend well over a minute mounting the Era pak files
-        // and building the shader library. Wait for the client's own post-unpack
-        // marker rather than killing a healthy launch at 25 seconds.
+        try
+        {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                return reader.ReadToEnd();
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    private static bool HasLoginFailure(string log)
+    {
+        if (string.IsNullOrEmpty(log)) return false;
+        string normalized = log.ToUpperInvariant();
+        return normalized.Contains("CHECKING EPIC SERVICES") ||
+               normalized.Contains("UNABLE TO SIGN IN") ||
+               normalized.Contains("RETRYING 1");
+    }
+
+    /** Confirm that the module is actually mapped into the target, not merely queued. */
+    private static bool WaitForModuleLoaded(int processId, string dllPath, int timeoutMs, out string detail)
+    {
+        string expectedName = Path.GetFileName(dllPath);
+        string expectedPath;
+        try { expectedPath = Path.GetFullPath(dllPath); }
+        catch { expectedPath = dllPath; }
+        var started = Stopwatch.StartNew();
+        while (started.ElapsedMilliseconds < timeoutMs)
+        {
+            IntPtr snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, (uint)processId);
+            if (snapshot != new IntPtr(-1))
+            {
+                try
+                {
+                    var entry = new MODULEENTRY32W();
+                    entry.dwSize = (uint)Marshal.SizeOf(typeof(MODULEENTRY32W));
+                    if (Module32FirstW(snapshot, ref entry))
+                    {
+                        do
+                        {
+                            if (string.Equals(entry.szModule, expectedName, StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(entry.szExePath, expectedPath, StringComparison.OrdinalIgnoreCase))
+                            {
+                                detail = "module loaded at 0x" + entry.modBaseAddr.ToInt64().ToString("X") +
+                                    " after " + started.ElapsedMilliseconds + "ms";
+                                return true;
+                            }
+                        }
+                        while (Module32NextW(snapshot, ref entry));
+                    }
+                }
+                finally
+                {
+                    CloseHandle(snapshot);
+                }
+            }
+            Thread.Sleep(25);
+        }
+        detail = "module did not appear in the target process within " + timeoutMs + "ms";
+        return false;
+    }
+
+    /**
+     * The redirect DLL writes HOOK_READY stage=ready after its HTTP vtable hook
+     * is installed. If the client reaches Epic's login queue before that line,
+     * fail the launch immediately instead of leaving a retry loop open.
+     */
+    private static bool WaitForHookMarker(
+        PROCESS_INFORMATION process,
+        string hookLog,
+        string token,
+        string gameLog,
+        long logBaseline,
+        string logFingerprint,
+        DateTime processStartedUtc,
+        out string detail)
+    {
+        if (string.IsNullOrEmpty(token))
+        {
+            detail = "hook marker not requested";
+            return true;
+        }
+
         const int timeoutMs = 90000;
+        string needle = "token=" + token;
         var started = Stopwatch.StartNew();
         while (started.ElapsedMilliseconds < timeoutMs)
         {
             if (WaitForSingleObject(process.hProcess, 0) == 0)
             {
-                detail = "process-exited";
+                detail = "process-exited-before-hook-ready";
                 return false;
             }
 
-            string fresh = ReadLogSince(logPath, logBaseline, logFingerprint, processStartedUtc);
-            if (fresh != null && HasReadyMarker(fresh))
+            string markerLog = ReadTextShared(hookLog);
+            if (!string.IsNullOrEmpty(markerLog))
             {
-                detail = "unpacked log marker after " + started.ElapsedMilliseconds + "ms";
-                return true;
+                foreach (string line in markerLog.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (line.IndexOf("HOOK_READY", StringComparison.Ordinal) >= 0 &&
+                        line.IndexOf("stage=ready", StringComparison.Ordinal) >= 0 &&
+                        line.IndexOf(needle, StringComparison.Ordinal) >= 0)
+                    {
+                        detail = "hook-ready after " + started.ElapsedMilliseconds + "ms";
+                        return true;
+                    }
+                }
             }
 
-            Thread.Sleep(25);
+            string freshGameLog = ReadLogSince(gameLog, logBaseline, logFingerprint, processStartedUtc);
+            if (HasLoginFailure(freshGameLog))
+            {
+                detail = "client reached Epic login before the redirect hook attached";
+                return false;
+            }
+
+            Thread.Sleep(50);
         }
 
-        detail = "timeout after " + started.ElapsedMilliseconds + "ms";
+        detail = "redirect hook marker timeout after " + started.ElapsedMilliseconds + "ms";
         return false;
     }
 
@@ -391,7 +494,7 @@ internal static class VaultedInjector
     private const uint PROCESS_QUERY_INFORMATION = 0x0400;
     private const uint PROCESS_ACCESS = PROCESS_CREATE_THREAD | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_QUERY_INFORMATION;
 
-    private static int InjectIntoProcess(int processId, string dllPath)
+    private static int InjectIntoProcess(int processId, string dllPath, bool waitForIdle)
     {
         IntPtr process = OpenProcess(PROCESS_ACCESS, false, processId);
         if (process == IntPtr.Zero) return Fail("OpenProcess failed: " + Marshal.GetLastWin32Error());
@@ -400,12 +503,15 @@ internal static class VaultedInjector
         IntPtr thread = IntPtr.Zero;
         try
         {
-            // The Era client expects the game to have finished creating its
-            // message queue before it installs its hooks. The official Era
-            // injector waits for input idle; without this the DLL loads but
-            // never registers the running client with the backend.
-            uint idle = WaitForInputIdle(process, 30000);
-            if (idle == 258) Console.Error.WriteLine("WaitForInputIdle timed out; injecting anyway");
+            if (waitForIdle)
+            {
+                // The Era client expects the game to have finished creating its
+                // message queue before it installs its hooks. The official Era
+                // injector waits for input idle; without this the DLL loads but
+                // never registers the running client with the backend.
+                uint idle = WaitForInputIdle(process, 30000);
+                if (idle == 258) Console.Error.WriteLine("WaitForInputIdle timed out; injecting anyway");
+            }
 
             byte[] bytes = Encoding.Unicode.GetBytes(dllPath + "\0");
             remote = VirtualAllocEx(process, IntPtr.Zero, (UIntPtr)bytes.Length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
@@ -487,7 +593,7 @@ internal static class VaultedInjector
         {
             int processId;
             if (!int.TryParse(args[1], out processId) || processId <= 0) return Fail("Invalid process id.");
-            return InjectIntoProcess(processId, args[2]);
+            return InjectIntoProcess(processId, args[2], true);
         }
 
         if (args.Length < 3)
@@ -502,6 +608,8 @@ internal static class VaultedInjector
         long logBaseline = LogLength(logPath);
         string logFingerprint = LogFingerprint(logPath);
         DateTime processStartedUtc = DateTime.UtcNow;
+        string hookLog = Environment.GetEnvironmentVariable("VAULTED_HOOK_LOG") ?? "";
+        string hookToken = Environment.GetEnvironmentVariable("VAULTED_HOOK_TOKEN") ?? "";
 
         var auxiliaries = new List<string>();
         var gameArguments = new List<string>();
@@ -595,7 +703,7 @@ internal static class VaultedInjector
                 IntPtr.Zero,
                 IntPtr.Zero,
                 false,
-                CREATE_UNICODE_ENVIRONMENT,
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
                 IntPtr.Zero,
                 workingDirectory,
                 ref startup,
@@ -604,78 +712,46 @@ internal static class VaultedInjector
                 return Fail("CreateProcess failed: " + Marshal.GetLastWin32Error());
             }
 
-            IntPtr remote = IntPtr.Zero;
-            IntPtr thread = IntPtr.Zero;
             try
             {
-                // Fortnite 6.21 ships a packed main image. Scanning or hooking
-                // it before the loader has finished unpacking makes Tellurium
-                // install hooks against encrypted code, and the client dies
-                // with 0xc0000005. Wait for the client's own post-load log
-                // marker instead of assuming every machine unpacks in the same
-                // two seconds.
-                string readiness;
-                if (!WaitForGameReady(process, logPath, logBaseline, logFingerprint, processStartedUtc, out readiness))
+                Console.WriteLine("REDIRECT=" + dllPath);
+                string backend = "";
+                foreach (string argument in gameArguments)
+                    if (argument.StartsWith("-backend=", StringComparison.OrdinalIgnoreCase))
+                        backend = argument.Substring(9);
+                if (backend.Length > 0) Console.WriteLine("BACKEND=" + backend);
+
+                // The process is still suspended. Load the redirect DLL now,
+                // before the client's entry point or any HTTP/Curl stack can
+                // run. Tellurium waits inside its worker thread until the packed
+                // image exposes valid sections, then installs the URL hook.
+                int injected = InjectIntoProcess(process.dwProcessId, dllPath, false);
+                if (injected != 0)
                 {
-                    uint exited;
-                    if (WaitForSingleObject(process.hProcess, 0) == 0 && GetExitCodeProcess(process.hProcess, out exited))
-                    {
-                        return Fail("Fortnite exited before the redirect DLL could attach: 0x" + exited.ToString("X8"));
-                    }
                     TerminateProcess(process.hProcess, 1);
-                    return Fail("Fortnite did not become ready for the redirect DLL (" + readiness + ").");
+                    return injected;
                 }
-                Console.WriteLine("READY=" + readiness);
+
+                string moduleDetail;
+                if (!WaitForModuleLoaded(process.dwProcessId, dllPath, 10000, out moduleDetail))
+                {
+                    TerminateProcess(process.hProcess, 1);
+                    return Fail("The redirect DLL was not mapped into Fortnite: " + moduleDetail);
+                }
+                Console.WriteLine("MODULE_VERIFIED=" + moduleDetail);
                 Console.Out.Flush();
 
-                byte[] bytes = Encoding.Unicode.GetBytes(dllPath + "\0");
-                remote = VirtualAllocEx(process.hProcess, IntPtr.Zero, (UIntPtr)bytes.Length, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-                if (remote == IntPtr.Zero)
+                ResumeThread(process.hThread);
+                Console.WriteLine("RESUMED=1");
+                Console.Out.Flush();
+
+                string hookDetail;
+                if (!WaitForHookMarker(process, hookLog, hookToken, logPath, logBaseline, logFingerprint, processStartedUtc, out hookDetail))
                 {
                     TerminateProcess(process.hProcess, 1);
-                    return Fail("VirtualAllocEx failed: " + Marshal.GetLastWin32Error());
+                    return Fail("The redirect hook was not ready in Fortnite (" + hookDetail + ").");
                 }
-
-                UIntPtr written;
-                if (!WriteProcessMemory(process.hProcess, remote, bytes, (UIntPtr)bytes.Length, out written))
-                {
-                    TerminateProcess(process.hProcess, 1);
-                    return Fail("WriteProcessMemory failed: " + Marshal.GetLastWin32Error());
-                }
-
-                IntPtr kernel32 = GetModuleHandle("kernel32.dll");
-                IntPtr loadLibrary = GetProcAddress(kernel32, "LoadLibraryW");
-                if (loadLibrary == IntPtr.Zero)
-                {
-                    TerminateProcess(process.hProcess, 1);
-                    return Fail("GetProcAddress(LoadLibraryW) failed: " + Marshal.GetLastWin32Error());
-                }
-
-                uint threadId;
-                thread = CreateRemoteThread(process.hProcess, IntPtr.Zero, UIntPtr.Zero, loadLibrary, remote, 0, out threadId);
-                if (thread == IntPtr.Zero)
-                {
-                    TerminateProcess(process.hProcess, 1);
-                    return Fail("CreateRemoteThread failed: " + Marshal.GetLastWin32Error());
-                }
-
-                if (WaitForSingleObject(thread, 15000) != 0)
-                {
-                    TerminateProcess(process.hProcess, 1);
-                    return Fail("The redirect DLL did not load in time.");
-                }
-
-                uint moduleHandle;
-                if (!GetExitCodeThread(thread, out moduleHandle) || moduleHandle == 0)
-                {
-                    TerminateProcess(process.hProcess, 1);
-                    return Fail("LoadLibraryW failed inside Fortnite.");
-                }
-
-                // Tellurium scans the client and installs its hooks from
-                // DllMain's worker thread. Give it a moment to finish before
-                // the launcher considers the client ready.
-                Thread.Sleep(500);
+                Console.WriteLine("HOOK_VERIFIED=" + hookDetail);
 
                 if (hideWindow)
                 {
@@ -701,11 +777,6 @@ internal static class VaultedInjector
             }
             finally
             {
-                if (remote != IntPtr.Zero && process.hProcess != IntPtr.Zero)
-                {
-                    VirtualFreeEx(process.hProcess, remote, UIntPtr.Zero, MEM_RELEASE);
-                }
-                if (thread != IntPtr.Zero) CloseHandle(thread);
                 if (process.hThread != IntPtr.Zero) CloseHandle(process.hThread);
                 if (process.hProcess != IntPtr.Zero) CloseHandle(process.hProcess);
             }

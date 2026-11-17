@@ -4,5 +4,5 @@
   "label": "Neo",
   "backendUrl": "https://api.neofn.dev/",
   "redirectDllName": "Tellurium.dll",
-  "redirectDllSha256": "208b764d8c97ef6d59a3e7ffe3e360bddb646f215a4044d9a2965020ef50ea2e"
+  "redirectDllSha256": "16b97054fb1128595300a22a6b79343baf33d6d37b04eea8c9f1af650ba8c766"
 }

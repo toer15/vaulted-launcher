@@ -94,6 +94,7 @@ function testLaunchArguments() {
     '-nobe',
     '-nouac',
     '-nocodeguards',
+    '-NOSSLPINNING',
     '-fromfl=eac',
     `-caldera=${LEGACY_CALDERA}`,
     `-fltoken=${PROVIDER_FLTOKEN}`,

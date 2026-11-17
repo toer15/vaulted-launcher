@@ -12,6 +12,7 @@ import {
   HardDrive,
   Loader2,
   LogIn,
+  MessageCircle,
   Pause,
   Play,
   Server,
@@ -35,7 +36,15 @@ import {
   type SeasonPlayMode,
 } from '../lib/playMode'
 import type { CommunityServer } from '../lib/network'
-import type { Account, Build, BuildState, BuildVerifyReport, DownloadState, GlobalBackend } from '../types'
+import type {
+  Account,
+  Build,
+  BuildState,
+  BuildVerifyReport,
+  DiscordGate,
+  DownloadState,
+  GlobalBackend,
+} from '../types'
 
 interface ActiveBuildCardProps {
   build: Build | null
@@ -62,6 +71,10 @@ interface ActiveBuildCardProps {
   accountSignedIn?: boolean
   /** open the generic account connection prompt */
   onConnectAccount?: () => void
+  /** Discord community that unlocks online play for this season */
+  discordGate?: DiscordGate | null
+  /** the community invite has been verified on this PC */
+  discordGateVerified?: boolean
   account: Account
   sourceKeys?: Set<string>
   downloadSize?: number | null
@@ -249,6 +262,8 @@ export function ActiveBuildCard({
   accountAuthRequired = false,
   accountSignedIn = false,
   onConnectAccount,
+  discordGate,
+  discordGateVerified = false,
   account,
   sourceKeys,
   downloadSize,
@@ -324,6 +339,15 @@ export function ActiveBuildCard({
   const accountConnectRequired = Boolean(
     accountAuthRequired &&
       accountSignedIn === false &&
+      isInstalled &&
+      ['ready', 'error'].includes(state) &&
+      !busy,
+  )
+  // A Discord gate only changes the Play action once the build is actually
+  // ready. Download, pause and resume keep their normal install language.
+  const discordLocked = Boolean(
+    discordGate &&
+      !discordGateVerified &&
       isInstalled &&
       ['ready', 'error'].includes(state) &&
       !busy,
@@ -460,6 +484,13 @@ export function ActiveBuildCard({
         background: 'linear-gradient(120deg, #7c8cff, #4752c4)',
         glow: 'rgba(124,140,255,0.55)',
       }
+    : discordLocked
+      ? {
+          label: 'Join Discord to Play',
+          icon: MessageCircle,
+          background: 'linear-gradient(120deg, #5865F2, #4752c4)',
+          glow: 'rgba(88,101,242,0.55)',
+        }
     : requiresSignIn
       ? {
           label: `Sign in to ${signInTarget}`,
@@ -493,7 +524,9 @@ export function ActiveBuildCard({
           ? 'Verifying the archive checksum…'
           : 'Downloading the build…',
     ready:
-      playMode?.availability === 'launcher' && !playMode?.online
+      discordLocked
+        ? `Ready — join ${discordGate?.label || 'the community Discord'} to unlock online play.`
+        : playMode?.availability === 'launcher' && !playMode?.online
         ? 'Ready — online play is available. Play connects automatically to a live server.'
         : playMode?.availability === 'unsupported' && !playMode?.online
           ? 'Ready — no live server is reporting for this season right now.'
@@ -583,6 +616,15 @@ export function ActiveBuildCard({
               >
                 <Globe2 className="h-3 w-3" />
                 Community · {heroCommunity}
+              </span>
+            )}
+            {discordGate && (
+              <span
+                title={`${discordGate.label}: online play unlocks through the community Discord.`}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-[#5865F2]/40 bg-[#5865F2]/15 px-2.5 py-1 text-[10.5px] font-bold uppercase tracking-[0.1em] text-[#c7ccff] backdrop-blur"
+              >
+                <MessageCircle className="h-3 w-3" />
+                ONLINE · DISCORD
               </span>
             )}
           </div>

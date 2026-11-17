@@ -64,6 +64,7 @@ export interface OnlineProviderLaunchResult {
   providerId?: string
   name?: string
   pid?: number | null
+  hookVerified?: boolean
   external?: boolean
   provider?: string
   error?: string
@@ -257,6 +258,18 @@ export interface LauncherBridge {
   fetchCommunityServers?(query: CommunityServerQuery): Promise<CommunityServerResult>
   /** live global OGFN backends from resources/providers/provider.json */
   providerCatalog?(): Promise<GlobalBackend[]>
+  /** Verify the public invite for a Discord-gated community. */
+  discordGateVerify?(providerId: string): Promise<{
+    ok: boolean
+    providerId: string
+    guildId: string
+    guildName?: string
+    memberCount?: number
+    inviteUrl: string
+    verifiedAt: number
+  }>
+  /** Open a validated Discord invite in the user's Discord/browser. */
+  openDiscordInvite?(inviteUrl: string): Promise<boolean>
   /** health and population sampled from the configured global backends */
   providerLiveStatus?(): Promise<Record<string, ProviderLiveStatus>>
   /** repair the bundled, hash-checked provider files before one-click launch */

@@ -42,6 +42,27 @@ export interface ProviderPopulationConfig {
   label: string
 }
 
+/** A community Discord that gates online access for one mapped provider. */
+export interface DiscordGate {
+  /** provider that owns this community invite */
+  providerId: string
+  /** display name of the community, e.g. Crystal Discord */
+  label: string
+  /** validated https invite opened by VAULTED */
+  inviteUrl: string
+  /** Discord guild id, when the invite is a server-discovery link */
+  guildId?: string
+}
+
+/** A locally remembered Discord unlock. The provider id is the stable key. */
+export interface DiscordGateVerification {
+  providerId: string
+  guildId?: string
+  guildName?: string
+  memberCount?: number
+  verifiedAt: number
+}
+
 /** A live health/population sample for one configured global backend. */
 export interface ProviderLiveStatus {
   providerId: string
@@ -84,6 +105,8 @@ export interface GlobalBackend extends OnlineProviderConfig {
   statusUrl?: string
   /** public fallback population source when the health endpoint omits players */
   population?: ProviderPopulationConfig
+  /** Discord community that must be joined before online play unlocks */
+  discordGate?: DiscordGate
   global: boolean
   /** discover additional live seasons from the provider account at runtime */
   dynamicSeasons?: boolean
@@ -127,6 +150,8 @@ export interface Build {
   onlineProvider?: OnlineProviderConfig
   /** every provider that can host this season; primary is onlineProvider */
   onlineProviders?: OnlineProviderConfig[]
+  /** Discord-gated communities mapped to this season */
+  discordGates?: DiscordGate[]
   season: SeasonInfo
   addedAt: number
   /** true until a real build folder is linked or downloaded */

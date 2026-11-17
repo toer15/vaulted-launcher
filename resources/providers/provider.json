@@ -2,7 +2,7 @@
   "version": 1,
   "runtime": {
     "redirectDllName": "Tellurium.dll",
-    "redirectDllSha256": "208b764d8c97ef6d59a3e7ffe3e360bddb646f215a4044d9a2965020ef50ea2e"
+    "redirectDllSha256": "16b97054fb1128595300a22a6b79343baf33d6d37b04eea8c9f1af650ba8c766"
   },
   "providers": [
     {
@@ -135,11 +135,17 @@
       "name": "Project Eon",
       "label": "Eon",
       "mode": "external",
+      "launchKind": "discord",
       "backendUrl": "https://projecteon.dev/",
       "website": "https://projecteon.dev/",
-      "launchUrl": "https://projecteon.dev/",
+      "launchUrl": "https://discord.gg/eonfn",
       "auth": "none",
       "external": true,
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/eonfn",
+        "guildId": "1185620726695342260",
+        "label": "Eon Discord"
+      },
       "global": true,
       "seasons": [
         "ch2-s7"
@@ -150,11 +156,17 @@
       "name": "Hydro",
       "label": "Hydro",
       "mode": "external",
+      "launchKind": "discord",
       "backendUrl": "https://hydromp.site/",
       "website": "https://hydromp.site/",
-      "launchUrl": "https://hydromp.site/",
+      "launchUrl": "https://discord.gg/cqGtYm7KSN",
       "auth": "none",
       "external": true,
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/cqGtYm7KSN",
+        "guildId": "1375872012823695550",
+        "label": "Hydro Discord"
+      },
       "global": true,
       "seasons": [
         "ch2-s5"
@@ -165,11 +177,17 @@
       "name": "Project Interloop",
       "label": "Interloop",
       "mode": "external",
+      "launchKind": "discord",
       "backendUrl": "https://interloopfn.org/",
       "website": "https://interloopfn.org/",
-      "launchUrl": "https://interloopfn.org/download",
+      "launchUrl": "https://discord.gg/9Xq3Yvwmve",
       "auth": "none",
       "external": true,
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/9Xq3Yvwmve",
+        "guildId": "1426751880020889684",
+        "label": "Interloop Discord"
+      },
       "global": true,
       "seasons": [
         "ch2-s2"
@@ -183,9 +201,14 @@
       "launchKind": "discord",
       "backendUrl": "https://discord.com/",
       "website": "https://discord.gg/crystalfn",
-      "launchUrl": "https://discord.gg/crystalfn",
+      "launchUrl": "https://discord.gg/AFQSGeXqAU",
       "auth": "none",
       "external": true,
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/AFQSGeXqAU",
+        "guildId": "1500857330135208089",
+        "label": "Crystal Discord"
+      },
       "global": true,
       "seasons": [
         "ch2-s5"
@@ -196,11 +219,17 @@
       "name": "Project Echo",
       "label": "Echo",
       "mode": "external",
+      "launchKind": "discord",
       "backendUrl": "https://echofn.org/",
       "website": "https://echofn.org/",
-      "launchUrl": "https://echofn.org/",
+      "launchUrl": "https://discord.gg/run22HRWn9",
       "auth": "none",
       "external": true,
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/run22HRWn9",
+        "guildId": "1232417399454826528",
+        "label": "Echo Discord"
+      },
       "global": true,
       "seasons": [
         "ch1-s3"
@@ -213,10 +242,15 @@
       "mode": "external",
       "launchKind": "discord",
       "backendUrl": "https://discord.com/",
-      "website": "https://discord.com/servers/arc-1462432577892647139",
-      "launchUrl": "https://discord.com/servers/arc-1462432577892647139",
+      "website": "https://discord.gg/arcogfn",
+      "launchUrl": "https://discord.gg/arcogfn",
       "auth": "none",
       "external": true,
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/arcogfn",
+        "guildId": "1538872114537562163",
+        "label": "ARC Discord"
+      },
       "global": true,
       "seasons": [
         "ch1-s4"

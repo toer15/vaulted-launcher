@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActiveBuildCard } from './components/ActiveBuildCard'
 import { AddBuildDialog } from './components/AddBuildDialog'
 import { ConnectAccountModal } from './components/ConnectAccountModal'
+import { DiscordGateModal } from './components/DiscordGateModal'
 import { SignInModal } from './components/SignInModal'
 import { BuildDrawer } from './components/BuildDrawer'
 import { FriendsView } from './components/FriendsView'
@@ -98,6 +99,12 @@ import {
 import defaultBuilds from './assets/builds.json'
 import { buildForSeason, ensureAllSeasons, seedBuilds, sortBuilds } from './lib/sampleBuilds'
 import { loadState, saveState, uid } from './lib/storage'
+import {
+  isDiscordGateVerified,
+  loadDiscordGateVerifications,
+  nextDiscordGate,
+  saveDiscordGateVerifications,
+} from './lib/discordGates'
 import { useItemShop } from './lib/useItemShop'
 import { inventoryItemsFor, SHOP_CATALOG } from './lib/shop'
 import type {
@@ -107,6 +114,8 @@ import type {
   BuildState,
   BuildVerifyReport,
   DownloadState,
+  DiscordGate,
+  DiscordGateVerification,
   GlobalBackend,
   LaunchPhase,
   ProviderAuthStatus,
@@ -302,6 +311,13 @@ interface AccountPrompt {
   }
 }
 
+interface DiscordPrompt {
+  build: Build
+  gate: DiscordGate
+  join?: { host: string; port: number }
+  options?: { promptOnEmpty?: boolean; forceProviderId?: string }
+}
+
 export default function App() {
   const [builds, setBuilds] = useState<Build[]>(() => {
     const persisted = loadState()
@@ -391,6 +407,15 @@ export default function App() {
   const [accountBusy, setAccountBusy] = useState(false)
   const [accountError, setAccountError] = useState<string | null>(null)
   const accountPromptRef = useRef(false)
+  // Community Discord unlocks are local to this PC and keyed by the mapped
+  // provider id. The invite is verified in main; the launch path is untouched.
+  const [discordGateVerifications, setDiscordGateVerifications] = useState<
+    Record<string, DiscordGateVerification>
+  >(() => loadDiscordGateVerifications())
+  const [discordPrompt, setDiscordPrompt] = useState<DiscordPrompt | null>(null)
+  const [discordBusy, setDiscordBusy] = useState(false)
+  const [discordError, setDiscordError] = useState<string | null>(null)
+  const discordResumeRef = useRef<DiscordPrompt | null>(null)
   // Holds the Play that opened the account prompt until the provider session
   // has rendered into app state. The resume then re-enters startBuild instead
   // of bypassing VAULTED's sign-in and managed-build preflight gates.
@@ -685,6 +710,37 @@ export default function App() {
     })
   }, [seasonManifest])
 
+  // Attach the Discord community gate from the trusted provider catalog. The
+  // manifest keeps the working primary engine; this is additional metadata for
+  // the card badge and the pre-launch unlock prompt.
+  useEffect(() => {
+    if (providerCatalog.length === 0) return
+    const gateByProvider = new Map(
+      providerCatalog
+        .filter((provider) => provider.discordGate)
+        .map((provider) => [provider.id, provider.discordGate!] as const),
+    )
+    setBuilds((prev) => {
+      let changed = false
+      const next = prev.map((build) => {
+        const gates = Array.from(
+          new Map(
+            (build.onlineProviders ?? (build.onlineProvider ? [build.onlineProvider] : []))
+              .map((provider) => gateByProvider.get(provider.id))
+              .filter((gate): gate is DiscordGate => Boolean(gate))
+              .map((gate) => [gate.providerId, gate] as const),
+          ).values(),
+        )
+        const current = (build.discordGates ?? []).map((gate) => gate.providerId).join('|')
+        const nextIds = gates.map((gate) => gate.providerId).join('|')
+        if (current === nextIds) return build
+        changed = true
+        return { ...build, discordGates: gates }
+      })
+      return changed ? next : prev
+    })
+  }, [providerCatalog])
+
   const sourceKeys = useMemo(() => new Set(Object.keys(seasonManifest)), [seasonManifest])
   const onlineSeasonCount = useMemo(() => {
     const seasons = new Set<string>()
@@ -806,6 +862,11 @@ export default function App() {
   const activeServerRoute = useMemo(
     () => (activeBuild ? routeExternalServer(activeBuild, serverCatalog) : null),
     [activeBuild, serverCatalog],
+  )
+  const activeDiscordGate = activeBuild?.discordGates?.[0] ?? null
+  const activeDiscordGateVerified = Boolean(
+    activeBuild?.discordGates?.length &&
+      activeBuild.discordGates.every((gate) => isDiscordGateVerified(discordGateVerifications, gate)),
   )
   const activeGlobalBackends = useMemo(() => {
     if (!activeKey) return []
@@ -2509,6 +2570,62 @@ export default function App() {
     accountPromptRef.current = false
   }, [accountBusy])
 
+  const handleOpenDiscordInvite = useCallback(async () => {
+    const pending = discordPrompt
+    if (!pending) return
+    try {
+      const opened = await window.arc?.openDiscordInvite?.(pending.gate.inviteUrl)
+      if (opened === false) throw new Error('The Discord invite could not be opened.')
+    } catch (error) {
+      setDiscordError(
+        nativeMessage(error instanceof Error ? error.message : 'The Discord invite could not be opened.'),
+      )
+    }
+  }, [discordPrompt])
+
+  const handleDiscordVerify = useCallback(async () => {
+    const pending = discordPrompt
+    if (!pending || discordBusy) return
+    if (!window.arc?.discordGateVerify) {
+      setDiscordError('Discord verification needs the desktop app. Run "npm run app".')
+      return
+    }
+    setDiscordBusy(true)
+    setDiscordError(null)
+    try {
+      const result = await window.arc.discordGateVerify(pending.gate.providerId)
+      if (!result?.ok || !result.guildId) {
+        throw new Error('That Discord community could not be verified. Try again.')
+      }
+      const next = {
+        ...discordGateVerifications,
+        [pending.gate.providerId]: {
+          providerId: pending.gate.providerId,
+          guildId: result.guildId,
+          ...(result.guildName ? { guildName: result.guildName } : {}),
+          ...(typeof result.memberCount === 'number' ? { memberCount: result.memberCount } : {}),
+          verifiedAt: result.verifiedAt,
+        },
+      }
+      setDiscordGateVerifications(next)
+      saveDiscordGateVerifications(next)
+      setDiscordPrompt(null)
+    } catch (error) {
+      setDiscordError(
+        nativeMessage(error instanceof Error ? error.message : 'Discord verification failed.'),
+      )
+    } finally {
+      setDiscordBusy(false)
+    }
+  }, [discordBusy, discordGateVerifications, discordPrompt])
+
+  const handleDiscordCancel = useCallback(() => {
+    if (discordBusy) return
+    discordResumeRef.current = null
+    setDiscordPrompt(null)
+    setDiscordError(null)
+  }, [discordBusy])
+
   /** Re-scan every configured external directory immediately before Play. */
   const refreshCommunityServers = useCallback(async (): Promise<CommunityServer[]> => {
     const directory = await fetchCommunityDirectory({ token: onlineToken, force: true })
@@ -2569,6 +2686,25 @@ export default function App() {
       // cards stay on the existing Download → Play path.
       if (!installed[build.id]) {
         requestDownload(build, { launchAfter: true })
+        return
+      }
+
+      // Discord-gated communities are checked at Play time, after the build is
+      // installed. The normal provider/account/redirect route resumes unchanged
+      // once the community unlock has been verified.
+      const lockedGate = nextDiscordGate(build.discordGates, discordGateVerifications)
+      if (lockedGate) {
+        const pending: DiscordPrompt = {
+          build,
+          gate: lockedGate,
+          ...(join ? { join } : {}),
+          ...(options.forceProviderId ? { options } : {}),
+        }
+        discordResumeRef.current = pending
+        setDiscordPrompt(pending)
+        setDiscordError(null)
+        setPhase('idle')
+        setLaunchStage(null)
         return
       }
 
@@ -2898,6 +3034,7 @@ export default function App() {
       shop.sets,
       shop.owned,
       shop.equipped,
+      discordGateVerifications,
     ],
   )
 
@@ -2921,6 +3058,17 @@ export default function App() {
       pending.server ? { host: pending.server.host, port: pending.server.port } : undefined,
     )
   }, [accountBusy, providerAuthStatus, session?.user.providerId])
+
+  // Resume the Play that opened the Discord gate only after the verified
+  // unlock has rendered. The resumed path still runs the normal sign-in,
+  // provider exchange and managed-build preflight gates.
+  useEffect(() => {
+    const pending = discordResumeRef.current
+    if (!pending || discordBusy) return
+    if (!isDiscordGateVerified(discordGateVerifications, pending.gate)) return
+    discordResumeRef.current = null
+    void startBuildRef.current?.(pending.build, pending.join, pending.options)
+  }, [discordBusy, discordGateVerifications])
 
   // The provider sync clears its DownloadState in a finally block. Wait for
   // that render before launching, otherwise startBuild would still see the
@@ -3896,6 +4044,8 @@ export default function App() {
                     openAccountPrompt(activeBuild, activeAccountBackend)
                   }
                 }}
+                discordGate={activeDiscordGate}
+                discordGateVerified={activeDiscordGateVerified}
                 account={account}
                 sourceKeys={sourceKeys}
                 downloadSize={activeDownloadSize}
@@ -4000,6 +4150,15 @@ export default function App() {
         error={accountError}
         onClose={handleAccountCancel}
         onContinue={() => void handleAccountContinue()}
+      />
+
+      <DiscordGateModal
+        gate={discordPrompt?.gate ?? null}
+        busy={discordBusy}
+        error={discordError}
+        onClose={handleDiscordCancel}
+        onOpenInvite={() => void handleOpenDiscordInvite()}
+        onVerify={() => void handleDiscordVerify()}
       />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />

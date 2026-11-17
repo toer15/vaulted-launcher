@@ -2,7 +2,7 @@
   "name": "vaulted-launcher",
   "productName": "VAULTED Launcher",
   "private": true,
-  "version": "1.0.90",
+  "version": "1.0.91",
   "description": "VAULTED — Fortnite build launcher",
   "author": "VAULTED",
   "type": "module",
@@ -21,6 +21,8 @@
     "test:provider-repair": "node scripts/test-provider-repair.cjs",
     "test:provider-launch": "node scripts/test-provider-launch.cjs",
     "test:provider-verification": "node scripts/test-provider-verification.cjs",
+    "test:discord-gates": "node scripts/test-discord-gates.cjs",
+    "test:redirect-runtime": "node scripts/test-redirect-runtime.cjs",
     "catalog": "node scripts/build-shop-catalog.cjs",
     "icon": "electron scripts/make-icon.cjs",
     "check:runtime": "node scripts/verify-runtime.cjs",
@@ -28,7 +30,7 @@
     "check:providers": "node scripts/verify-provider-dlls.cjs",
     "check:providers:packaged": "node scripts/verify-provider-dlls.cjs --providers-dir=release/win-unpacked/resources/providers",
     "version:bump": "npm version patch --no-git-tag-version",
-    "dist": "npm run version:bump && npm run build && npm run test:bot-fill && npm run test:provider-repair && npm run test:provider-launch && npm run test:provider-verification && npm run check:runtime && npm run check:providers && electron-builder --win nsis --publish never && npm run check:runtime:packaged && npm run check:providers:packaged"
+    "dist": "npm run version:bump && npm run build && npm run test:redirect-runtime && npm run test:discord-gates && npm run test:bot-fill && npm run test:provider-repair && npm run test:provider-launch && npm run test:provider-verification && npm run check:runtime && npm run check:providers && electron-builder --win nsis --publish never && npm run check:runtime:packaged && npm run check:providers:packaged"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",

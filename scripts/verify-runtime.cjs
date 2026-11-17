@@ -46,22 +46,32 @@ function verifyRuntime(root) {
     }
   }
 
-  // Provider launches pass their backend with -backend=. The provider runtime
-  // has its own backend-aware Tellurium; the local runtime deliberately uses
-  // the stable redirect build, so only enforce this when checking that folder
-  // (or when explicitly requested).
+  // Every redirect build must report hook readiness so a launch cannot resolve
+  // while the client is still able to fall through to Epic's login services.
+  // Provider builds also need -backend= support for per-season routing.
   const normalizedRoot = root.replace(/\\/g, '/')
   const requireBackend = normalizedRoot.includes('/providers/runtime') || process.argv.includes('--require-backend')
-  if (requireBackend) {
-    const tellurium = path.join(root, 'Tellurium.dll')
-    try {
-      const contents = fs.readFileSync(tellurium)
-      if (!contents.includes(Buffer.from('-backend=', 'utf16le'))) {
-        problems.push('Tellurium.dll does not support the -backend= launch option (rebuild with UseBackendParam=true)')
-      }
-    } catch {
-      /* the required-file check above already reports a missing DLL */
+  const tellurium = path.join(root, 'Tellurium.dll')
+  try {
+    const contents = fs.readFileSync(tellurium)
+    if (!contents.includes(Buffer.from('HOOK_READY'))) {
+      problems.push('Tellurium.dll has no hook-readiness marker (rebuild the bundled redirect DLL)')
     }
+    if (requireBackend && !contents.includes(Buffer.from('-backend=', 'utf16le'))) {
+      problems.push('Tellurium.dll does not support the -backend= launch option (rebuild with UseBackendParam=true)')
+    }
+  } catch {
+    /* the required-file check above already reports a missing DLL */
+  }
+
+  const injector = path.join(root, 'VaultedInjector.exe')
+  try {
+    const contents = fs.readFileSync(injector)
+    if (!contents.includes(Buffer.from('HOOK_VERIFIED', 'utf16le'))) {
+      problems.push('VaultedInjector.exe cannot verify redirect-hook readiness (rebuild the bundled injector)')
+    }
+  } catch {
+    /* the required-file check above already reports a missing injector */
   }
   return problems
 }

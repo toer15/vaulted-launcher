@@ -41,6 +41,8 @@ contextBridge.exposeInMainWorld('arc', {
   fetchText: (url, options) => ipcRenderer.invoke('arc:fetch-text', url, options),
   fetchCommunityServers: (query) => ipcRenderer.invoke('arc:community-servers', query),
   providerCatalog: () => ipcRenderer.invoke('arc:provider-catalog'),
+  discordGateVerify: (providerId) => ipcRenderer.invoke('arc:discord-gate-verify', providerId),
+  openDiscordInvite: (inviteUrl) => ipcRenderer.invoke('arc:open-discord-invite', inviteUrl),
   providerLiveStatus: () => ipcRenderer.invoke('arc:provider-live-status'),
   providerPrepare: (providerId) => ipcRenderer.invoke('arc:provider-prepare', providerId),
   providerBuilds: (providerId) => ipcRenderer.invoke('arc:provider-builds', providerId),

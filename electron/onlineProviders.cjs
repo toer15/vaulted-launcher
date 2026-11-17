@@ -146,6 +146,45 @@ function parseEmbeddedWeb(raw) {
   }
 }
 
+/**
+ * A Discord invite is public metadata, never an OAuth secret. Accept either a
+ * full Discord invite URL or a bare vanity code, and keep it constrained to
+ * Discord's two invite hosts so the renderer can open it safely.
+ */
+function parseDiscordGate(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const configured = typeof raw.inviteUrl === 'string' ? raw.inviteUrl.trim() : ''
+  const code = configured || (typeof raw.invite === 'string' ? raw.invite.trim() : '')
+  if (!code) return null
+  const candidate = /^[A-Za-z0-9-]{2,64}$/.test(code) ? `https://discord.gg/${code}` : code
+  let inviteUrl
+  try {
+    inviteUrl = new URL(candidate)
+  } catch {
+    return null
+  }
+  if (inviteUrl.protocol !== 'https:' || inviteUrl.username || inviteUrl.password || inviteUrl.search || inviteUrl.hash) {
+    return null
+  }
+  const host = inviteUrl.hostname.toLowerCase()
+  const invitePath = inviteUrl.pathname.replace(/^\/+|\/+$/g, '')
+  const validInvite =
+    host === 'discord.gg' && /^[A-Za-z0-9-]{2,64}$/.test(invitePath)
+  const validDiscovery =
+    host === 'discord.com' && /^(?:invite\/[A-Za-z0-9-]{2,64}|servers\/[A-Za-z0-9-]+)$/.test(invitePath)
+  if (!validInvite && !validDiscovery) return null
+  const guildId = typeof raw.guildId === 'string' ? raw.guildId.trim() : ''
+  if (guildId && !/^\d{15,22}$/.test(guildId)) return null
+  return {
+    inviteUrl: inviteUrl.toString(),
+    ...(guildId ? { guildId } : {}),
+    label:
+      typeof raw.label === 'string' && raw.label.trim()
+        ? raw.label.trim().slice(0, 48)
+        : 'Discord',
+  }
+}
+
 const PROVIDERS = new Map()
 for (const season of Object.values(BUNDLED_MANIFEST.seasons || {})) {
   for (const provider of [season?.onlineProvider, ...(Array.isArray(season?.onlineProviders) ? season.onlineProviders : [])]) {
@@ -264,6 +303,7 @@ function catalogData() {
       }
     }
     const discordAuth = entry.discordAuth === true || discordAuthorize
+    const parsedDiscordGate = parseDiscordGate(entry.discordGate)
 
     providers.push({
       id,
@@ -274,6 +314,9 @@ function catalogData() {
       signInUrl: typeof entry.signInUrl === 'string' ? entry.signInUrl.trim() : '',
       auth,
       discordAuth,
+      discordGate: parsedDiscordGate
+        ? { providerId: id, ...parsedDiscordGate }
+        : undefined,
       mode,
       external: mode === 'external' || entry.external === true,
       launchKind,
@@ -327,6 +370,7 @@ function providerCatalog() {
     signInUrl: entry.signInUrl,
     auth: entry.auth,
     discordAuth: entry.discordAuth === true,
+    discordGate: entry.discordGate,
     mode: entry.mode,
     external: entry.external === true,
     launchKind: entry.launchKind,
@@ -528,6 +572,12 @@ function providerProfile(id) {
     configPath,
     auth: catalogEntry?.auth || (raw?.auth === 'exchangeCode' ? 'exchangeCode' : 'none'),
     discordAuth: catalogEntry?.discordAuth === true,
+    discordGate:
+      catalogEntry?.discordGate ||
+      (() => {
+        const gate = parseDiscordGate(raw?.discordGate)
+        return gate ? { providerId: provider.id, ...gate } : undefined
+      })(),
     launchHandshakePending: catalogEntry?.launchHandshakePending === true,
     statusUrl: catalogEntry?.statusUrl || '',
     mode:
