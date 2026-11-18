@@ -98,7 +98,16 @@ function main() {
   assert.equal(providerUsesLegacyRedirect('14.60', 'ch2-s4'), false)
 
   const providers = providerCatalog().filter((provider) => provider.mode !== 'external')
-  assert.ok(providers.length >= 6, 'packaged provider catalog is unexpectedly small')
+  // The managed (non-external) profiles must all ship. Neo was removed from the
+  // catalog permanently, so the guard names the profiles instead of counting
+  // them: a truncated package can never pass because one id disappeared.
+  const managedIds = new Set(providers.map((provider) => provider.id))
+  for (const id of ['era', 'stellar', 'ezfn', 'ezfn-hybrid', 'reboot']) {
+    assert.ok(managedIds.has(id), `packaged provider catalog is missing ${id}`)
+  }
+  for (const id of managedIds) {
+    assert.ok(!/neo/i.test(id), `${id} must not ship a local Neo route`)
+  }
 
   let modernChecked = 0
   let legacyChecked = 0

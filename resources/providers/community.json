@@ -12,8 +12,12 @@
       "auth": "account",
       "seasonParam": "season",
       "freshnessMs": 30000,
-      "providerIds": ["*"],
-      "seasonIds": ["*"]
+      "providerIds": [
+        "*"
+      ],
+      "seasonIds": [
+        "*"
+      ]
     },
     {
       "id": "reboot-server-browser",
@@ -27,8 +31,12 @@
       "freshnessMs": 0,
       "providerId": "reboot",
       "providerLabel": "Reboot",
-      "providerIds": ["reboot"],
-      "seasonIds": ["*"],
+      "providerIds": [
+        "reboot"
+      ],
+      "seasonIds": [
+        "*"
+      ],
       "entriesPath": "data",
       "fields": {
         "name": "name",
@@ -64,10 +72,17 @@
       "freshnessMs": 45000,
       "providerId": "meteor",
       "providerLabel": "Meteor",
-      "providerIds": ["meteor"],
-      "seasonIds": ["ch1-s6"],
+      "providerIds": [
+        "meteor"
+      ],
+      "seasonIds": [
+        "ch1-s6"
+      ],
       "defaultSeasonId": "ch1-s6",
-      "entriesPath": ["servers", "data.servers"],
+      "entriesPath": [
+        "servers",
+        "data.servers"
+      ],
       "fields": {
         "id": "serverId",
         "name": "name",
@@ -93,8 +108,12 @@
       "freshnessMs": 60000,
       "providerId": "eon",
       "providerLabel": "Eon",
-      "providerIds": ["eon"],
-      "seasonIds": ["ch2-s7"],
+      "providerIds": [
+        "eon"
+      ],
+      "seasonIds": [
+        "ch2-s7"
+      ],
       "defaultSeasonId": "ch2-s7",
       "entriesPath": "servers",
       "fields": {
@@ -116,15 +135,38 @@
       "kind": "awesome-ogfn",
       "url": "https://raw.githubusercontent.com/Twin1dev/awesome-ogfn/main/README.md",
       "timeoutMs": 8000,
-      "providerIds": ["*"],
-      "seasonIds": ["*"],
+      "providerIds": [
+        "*"
+      ],
+      "seasonIds": [
+        "*"
+      ],
       "providerMap": {
-        "Stellar": { "id": "stellar", "label": "Stellar", "url": "https://stellarfn.dev/" },
-        "Retrac": { "id": "retrac", "label": "Retrac", "url": "https://retrac.lol/" },
-        "EZFN": { "id": "ezfn", "label": "EZFN", "url": "https://ezfn.dev/" },
-        "Era": { "id": "era", "label": "Era", "url": "https://erafn.dev/" },
-        "Eon": { "id": "eon", "label": "Eon", "url": "https://eonfn.com/" },
-        "Neo": { "id": "neo", "label": "Neo", "url": "https://projectneofn.dev/" }
+        "Stellar": {
+          "id": "stellar",
+          "label": "Stellar",
+          "url": "https://stellarfn.dev/"
+        },
+        "Retrac": {
+          "id": "retrac",
+          "label": "Retrac",
+          "url": "https://retrac.lol/"
+        },
+        "EZFN": {
+          "id": "ezfn",
+          "label": "EZFN",
+          "url": "https://ezfn.dev/"
+        },
+        "Era": {
+          "id": "era",
+          "label": "Era",
+          "url": "https://erafn.dev/"
+        },
+        "Eon": {
+          "id": "eon",
+          "label": "Eon",
+          "url": "https://eonfn.com/"
+        }
       }
     },
     {
@@ -133,20 +175,63 @@
       "kind": "fortnite-versions-directory",
       "url": "https://raw.githubusercontent.com/ByZNexus/Fortnite-Versions/main/Projects.md",
       "timeoutMs": 8000,
-      "providerIds": ["*"],
-      "seasonIds": ["*"],
+      "providerIds": [
+        "*"
+      ],
+      "seasonIds": [
+        "*"
+      ],
       "providerMap": {
-        "Project Era": { "id": "era", "label": "Era", "url": "https://erafn.dev/" },
-        "EZFN": { "id": "ezfn", "label": "EZFN", "url": "https://ezfn.dev/" },
-        "Project Neo": { "id": "neo", "label": "Neo", "url": "https://projectneofn.dev/" },
-        "Project Reboot": { "id": "reboot", "label": "Reboot", "url": "https://rebootmp.com/" },
-        "Project Eon": { "id": "eon", "label": "Eon", "url": "https://projecteon.dev/" },
-        "Hydro": { "id": "hydro", "label": "Hydro", "url": "https://hydromp.site/" },
-        "Project Interloop": { "id": "interloop", "label": "Interloop", "url": "https://interloopfn.org/" },
-        "Project Crystal": { "id": "crystal", "label": "Crystal", "url": "https://discord.gg/crystalfn" },
-        "Project Echo": { "id": "echo", "label": "Echo", "url": "https://echofn.org/" },
-        "ARC": { "id": "arc", "label": "ARC", "url": "https://discord.com/servers/arc-1462432577892647139" },
-        "Erbium": { "id": "erbium", "label": "Erbium", "url": "https://github.com/plooshi/Erbium" }
+        "Project Era": {
+          "id": "era",
+          "label": "Era",
+          "url": "https://erafn.dev/"
+        },
+        "EZFN": {
+          "id": "ezfn",
+          "label": "EZFN",
+          "url": "https://ezfn.dev/"
+        },
+        "Project Reboot": {
+          "id": "reboot",
+          "label": "Reboot",
+          "url": "https://rebootmp.com/"
+        },
+        "Project Eon": {
+          "id": "eon",
+          "label": "Eon",
+          "url": "https://projecteon.dev/"
+        },
+        "Hydro": {
+          "id": "hydro",
+          "label": "Hydro",
+          "url": "https://hydromp.site/"
+        },
+        "Project Interloop": {
+          "id": "interloop",
+          "label": "Interloop",
+          "url": "https://interloopfn.org/"
+        },
+        "Project Crystal": {
+          "id": "crystal",
+          "label": "Crystal",
+          "url": "https://discord.gg/crystalfn"
+        },
+        "Project Echo": {
+          "id": "echo",
+          "label": "Echo",
+          "url": "https://echofn.org/"
+        },
+        "ARC": {
+          "id": "arc",
+          "label": "ARC",
+          "url": "https://discord.com/servers/arc-1462432577892647139"
+        },
+        "Erbium": {
+          "id": "erbium",
+          "label": "Erbium",
+          "url": "https://github.com/plooshi/Erbium"
+        }
       }
     }
   ]

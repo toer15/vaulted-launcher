@@ -27,12 +27,12 @@ const {
 const projectRoot = path.join(__dirname, '..')
 // These providers ship a per-provider profile; Stellar and Retrac are defined
 // only in the central catalog and reuse the shared runtime.
-const localProviderIds = ['reboot', 'neo', 'era', 'ezfn', 'ezfn-hybrid']
+const localProviderIds = ['reboot', 'era', 'ezfn', 'ezfn-hybrid']
 // Stellar and Retrac reuse the shared DLL; the external projects are links to
 // their own launchers/communities and deliberately have no redirect DLL.
 const globalProviderIds = ['stellar']
 const externalProviderIds = [
-  'neo-official', 'eon', 'hydro', 'interloop', 'crystal', 'echo', 'arc', 'retrac-official',
+  'eon', 'hydro', 'interloop', 'crystal', 'echo', 'arc', 'retrac-official',
   'slurp', 'ambient', 'reef', 'legacy-mp', 'horizon', 'sunset', 'blue-og', 'glow',
   'reboot-official',
 ]

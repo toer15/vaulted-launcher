@@ -26,9 +26,9 @@ export interface SeasonInfo {
 export interface OnlineProviderConfig {
   /** stable provider id used by the bundled provider profile */
   id: string
-  /** full project name, e.g. Project Neo */
+  /** full project name, e.g. Project Eon */
   name: string
-  /** compact badge label, e.g. Neo */
+  /** compact badge label, e.g. Eon */
   label: string
   /** signed in, but the provider's game-code handshake is not wired yet */
   launchHandshakePending?: boolean

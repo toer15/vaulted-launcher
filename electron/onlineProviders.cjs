@@ -268,6 +268,19 @@ function parseExeRuntimeMetadata(raw) {
   const version =
     typeof raw.version === 'string' ? raw.version.trim().slice(0, 64) : ''
   if (!/^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/.test(version)) return null
+  // Silent switches for the vendor installer. Only simple slash/flag forms are
+  // accepted so catalog metadata can never smuggle arbitrary command lines.
+  const silentArgs = Array.isArray(raw.silentArgs)
+    ? raw.silentArgs
+        .filter(
+          (value) =>
+            typeof value === 'string' &&
+            /^(?:\/[A-Za-z]{1,24}|--?[A-Za-z][A-Za-z-]{0,20})$/.test(value.trim()),
+        )
+        .map((value) => value.trim())
+    : []
+  if (silentArgs.length !== (Array.isArray(raw.silentArgs) ? raw.silentArgs.length : 0)) return null
+  if (silentArgs.length > 4) return null
   const label =
     typeof raw.label === 'string' && raw.label.trim()
       ? raw.label.trim().slice(0, 48)
@@ -338,6 +351,7 @@ function parseExeRuntimeMetadata(raw) {
     allowUnsigned: !signerSubject,
     interactive: true,
     autoInstall: raw.autoInstall !== false,
+    silentArgs,
     installedExecutables,
     executableNames,
     installRoots,
@@ -669,7 +683,7 @@ function providerCatalog() {
 }
 
 /**
- * Bundled local launchers (Reboot, Neo, EZFN Hybrid) are not global backends,
+ * Bundled local launchers (Reboot, EZFN Hybrid) are not global backends,
  * but the renderer still needs their names and season mappings so every card
  * can show a real launcher instead of a dead "unsupported" state. The launch
  * path reads the same profile folder; no credentials are exposed here.

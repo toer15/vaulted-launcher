@@ -82,12 +82,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 7384406276,
-      "onlineProvider": {
-        "id": "neo",
-        "name": "Project Neo",
-        "label": "Neo"
-      }
+      "sizeBytes": 7384406276
     },
     "ch1-s4": {
       "id": "ch1-s4",
@@ -111,12 +106,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 11427640644,
-      "onlineProvider": {
-        "id": "neo",
-        "name": "Project Neo",
-        "label": "Neo"
-      }
+      "sizeBytes": 11427640644
     },
     "ch1-s5": {
       "id": "ch1-s5",
@@ -198,12 +188,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 15211195887,
-      "onlineProvider": {
-        "id": "neo",
-        "name": "Project Neo",
-        "label": "Neo"
-      }
+      "sizeBytes": 15211195887
     },
     "ch1-s8": {
       "id": "ch1-s8",
@@ -285,12 +270,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 26556266920,
-      "onlineProvider": {
-        "id": "neo",
-        "name": "Project Neo",
-        "label": "Neo"
-      }
+      "sizeBytes": 26556266920
     },
     "ch2-s1": {
       "id": "ch2-s1",
@@ -414,7 +394,7 @@
         }
       ],
       "sizeBytes": 28769341535,
-            "onlineProvider": {
+      "onlineProvider": {
         "id": "reboot",
         "name": "Project Reboot",
         "label": "Reboot"
@@ -432,7 +412,6 @@
         }
       ]
     },
-
     "ch2-s5": {
       "id": "ch2-s5",
       "title": "Chapter 2 Season 5",

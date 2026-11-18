@@ -3,7 +3,13 @@
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
+const os = require('node:os')
 const { execFile, spawn } = require('node:child_process')
+const {
+  WINDOW_HIDER_PS,
+  cleanProcessNames,
+  startHiddenWindowWatcher,
+} = require('./hiddenWindows.cjs')
 
 /**
  * Download and verify a provider's documented desktop runtime.
@@ -23,6 +29,10 @@ const INSTALL_TIMEOUT_MS = 10 * 60_000
 const MIN_INSTALLER_BYTES = 64 * 1024
 const MAX_INSTALLER_BYTES = 900 * 1024 * 1024
 const MAX_EXE_SEARCH_ENTRIES = 3_000
+// A vendor launcher can finish its own bootstrap (a script or a SFX that then
+// unpacks the real client) after its installer process exits, so the installed
+// executable is polled instead of sampled once.
+const INSTALL_DETECT_TIMEOUT_MS = 90_000
 const runtimeTasks = new Map()
 
 function expandEnvironmentPath(value, env = process.env) {
@@ -56,6 +66,23 @@ function executableInRoots(metadata, env = process.env) {
     (metadata.executableNames || []).map((name) => String(name).toLowerCase()),
   )
   if (names.size === 0) return ''
+  // A bare file name is not enough: `echo.exe` also exists inside Git's own
+  // Program Files tree. The folder holding the launcher must belong to the
+  // provider, so an unrelated tool can never be mistaken for a company's app.
+  const normalize = (value) => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+  const ownerTokens = new Set()
+  for (const name of names) ownerTokens.add(normalize(name.replace(/\.exe$/i, '')))
+  for (const word of String(metadata.label || '').toLowerCase().split(/[^a-z0-9]+/)) {
+    if (word.length >= 3) ownerTokens.add(normalize(word))
+  }
+  const ownerFolder = (directory) => {
+    const folder = normalize(path.basename(directory))
+    if (!folder) return false
+    for (const token of ownerTokens) {
+      if (token && (folder.includes(token) || token.includes(folder))) return true
+    }
+    return false
+  }
   const roots = [
     ...new Set(
       (metadata.installRoots || [])
@@ -63,9 +90,11 @@ function executableInRoots(metadata, env = process.env) {
         .filter((root) => path.isAbsolute(root)),
     ),
   ]
-  let inspected = 0
-  const visit = (directory, depth) => {
-    if (depth > 3 || inspected >= MAX_EXE_SEARCH_ENTRIES) return ''
+  // Each root gets its own budget. A single shared counter let one large root
+  // (for example %LOCALAPPDATA%/Programs) exhaust the scan before the real
+  // install root (for example Squirrel's %LOCALAPPDATA%/VendorLauncher) was read.
+  const visit = (directory, depth, budget) => {
+    if (depth > 3 || budget.inspected >= MAX_EXE_SEARCH_ENTRIES) return ''
     let entries
     try {
       entries = fs.readdirSync(directory, { withFileTypes: true })
@@ -73,22 +102,24 @@ function executableInRoots(metadata, env = process.env) {
       return ''
     }
     for (const entry of entries) {
-      if (++inspected >= MAX_EXE_SEARCH_ENTRIES) return ''
+      if (++budget.inspected >= MAX_EXE_SEARCH_ENTRIES) return ''
       const full = path.join(directory, entry.name)
-      if (entry.isFile() && names.has(entry.name.toLowerCase())) return full
+      if (entry.isFile() && names.has(entry.name.toLowerCase()) && ownerFolder(directory)) {
+        return full
+      }
       if (
         entry.isDirectory() &&
         depth < 3 &&
         !/^(?:node_modules|\.git|cache|temp|tmp|logs?)$/i.test(entry.name)
       ) {
-        const found = visit(full, depth + 1)
+        const found = visit(full, depth + 1, budget)
         if (found) return found
       }
     }
     return ''
   }
   for (const root of roots) {
-    const found = visit(root, 0)
+    const found = visit(root, 0, { inspected: 0 })
     if (found) return found
   }
   return ''
@@ -372,24 +403,95 @@ function installMsi(file) {
   })
 }
 
-function installExeElevated(file) {
+function psLiteral(value) {
+  return `'${String(value).replace(/'/g, "''")}'`
+}
+
+/**
+ * Installers that need administrator rights run through one elevated
+ * PowerShell. The same elevated process hides the launcher windows the vendor
+ * setup auto-starts, because a non-elevated process cannot hide a window owned
+ * by an elevated one.
+ */
+function installExeElevated(file, args = [], options = {}) {
   return new Promise((resolve, reject) => {
-    const escaped = String(file).replace(/'/g, "''")
-    const script =
-      `$p = Start-Process -FilePath '${escaped}' -Verb RunAs -Wait -PassThru; ` +
-      'if ($null -eq $p) { exit 1 }; exit $p.ExitCode'
+    if (process.platform !== 'win32') {
+      reject(new Error('The provider launcher EXE can only be installed on Windows.'))
+      return
+    }
+    const hideNames = cleanProcessNames(options.hideNames || [])
+    const script = [
+      WINDOW_HIDER_PS,
+      "$ErrorActionPreference = 'SilentlyContinue'",
+      `$installer = ${psLiteral(file)}`,
+      `$installerArgs = @(${args.map(psLiteral).join(', ')})`,
+      `$hideTargets = @(${hideNames.map(psLiteral).join(', ')})`,
+      'function Hide-TargetWindows { foreach ($target in $hideTargets) { Get-Process -Name $target -ErrorAction SilentlyContinue | ForEach-Object { [VaultedWindowHider]::Hide($_.Id) } } }',
+      'if ($installerArgs.Count -gt 0) { $p = Start-Process -FilePath $installer -ArgumentList $installerArgs -WindowStyle Hidden -PassThru } else { $p = Start-Process -FilePath $installer -WindowStyle Hidden -PassThru }',
+      'if ($null -eq $p) { exit 1 }',
+      'Hide-TargetWindows',
+      '$deadline = (Get-Date).AddMinutes(10)',
+      'while (-not $p.HasExited -and (Get-Date) -lt $deadline) { Hide-TargetWindows; Start-Sleep -Milliseconds 300 }',
+      '# A setup can start the vendor launcher as it exits. Keep hiding it for a',
+      '# short grace period so nothing pops up over VAULTED.',
+      '$grace = (Get-Date).AddSeconds(20)',
+      'while ((Get-Date) -lt $grace) { Hide-TargetWindows; Start-Sleep -Milliseconds 300 }',
+      'if ($p.HasExited) { exit $p.ExitCode } else { exit 0 }',
+    ].join('\r\n')
+
+    const scriptPath = path.join(
+      os.tmpdir(),
+      `vaulted-install-${process.pid}-${Date.now()}.ps1`,
+    )
+    try {
+      fs.writeFileSync(scriptPath, `${script}\r\n`, 'utf8')
+    } catch (error) {
+      reject(error instanceof Error ? error : new Error('Could not prepare the installer script.'))
+      return
+    }
+
+    const wrapper =
+      `$p = Start-Process -FilePath 'powershell.exe' -ArgumentList @(` +
+      `'-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',${psLiteral(
+        scriptPath,
+      )}) -Verb RunAs -WindowStyle Hidden -PassThru; ` +
+      'if ($null -eq $p) { exit 1 }; $p.WaitForExit(); exit $p.ExitCode'
+
+    let settled = false
+    let probeTimer = null
+    const settle = (callback, value) => {
+      if (settled) return
+      settled = true
+      if (probeTimer) clearInterval(probeTimer)
+      callback(value)
+    }
+    // A portable launcher never exits, so the install step waits on the
+    // documented install folder instead of the vendor process lifetime.
+    if (typeof options.isInstalled === 'function') {
+      probeTimer = setInterval(() => {
+        if (settled) return
+        try {
+          if (options.isInstalled()) settle(resolve, 0)
+        } catch {
+          /* keep waiting for the documented install location */
+        }
+      }, 1_000)
+      probeTimer.unref?.()
+    }
     execFile(
       'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', script],
-      { windowsHide: true, timeout: INSTALL_TIMEOUT_MS },
+      ['-NoProfile', '-NonInteractive', '-Command', wrapper],
+      { windowsHide: true, timeout: INSTALL_TIMEOUT_MS + 60_000 },
       (error, _stdout, stderr) => {
+        fs.promises.rm(scriptPath, { force: true }).catch(() => {})
         const code = typeof error?.code === 'number' ? error.code : error ? 1 : 0
         if (code === 0 || code === 3010) {
-          resolve(code)
+          settle(resolve, code)
           return
         }
         const detail = String(stderr || '').trim()
-        reject(
+        settle(
+          reject,
           new Error(
             `The provider launcher installer needs Windows administrator approval. ` +
               `Approve the UAC prompt to finish installing it.${detail ? ` ${detail}` : ''}`,
@@ -400,22 +502,27 @@ function installExeElevated(file) {
   })
 }
 
-function installExe(file) {
+function installExe(file, options = {}) {
   return new Promise((resolve, reject) => {
     if (process.platform !== 'win32') {
       reject(new Error('The provider launcher EXE can only be installed on Windows.'))
       return
     }
-    const child = spawn(file, [], {
+    const args = Array.isArray(options.silentArgs) ? options.silentArgs : []
+    const child = spawn(file, args, {
       detached: false,
       stdio: 'ignore',
-      windowsHide: false,
+      // A silent vendor installer has no UI of its own; an interactive one must
+      // stay visible so the player can confirm it.
+      windowsHide: args.length > 0,
     })
     let settled = false
+    let probeTimer = null
     const finish = (callback, value) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      if (probeTimer) clearInterval(probeTimer)
       callback(value)
     }
     const timer = setTimeout(() => {
@@ -426,6 +533,20 @@ function installExe(file) {
       )
     }, INSTALL_TIMEOUT_MS)
     timer.unref?.()
+    // Portable / Squirrel launchers start their own resident app and never let
+    // the setup process exit. Watch the install location instead of waiting for
+    // that process, so the season unlocks as soon as the launcher is on disk.
+    if (typeof options.isInstalled === 'function') {
+      probeTimer = setInterval(() => {
+        if (settled) return
+        try {
+          if (options.isInstalled()) finish(resolve, 0)
+        } catch {
+          /* keep waiting for the documented install location */
+        }
+      }, 1_000)
+      probeTimer.unref?.()
+    }
     child.once('error', (error) => {
       // Node reports ERROR_ELEVATION_REQUIRED from CreateProcess as EACCES on
       // Windows. These installers carry a requireAdministrator manifest, so
@@ -435,7 +556,10 @@ function installExe(file) {
         if (settled) return
         settled = true
         clearTimeout(timer)
-        installExeElevated(file).then(resolve, reject)
+        installExeElevated(file, args, {
+          isInstalled: options.isInstalled,
+          hideNames: options.hideNames,
+        }).then(resolve, reject)
         return
       }
       finish(reject, error)
@@ -453,6 +577,18 @@ function installExe(file) {
       )
     })
   })
+}
+
+/** Poll for a launcher the vendor installer placed via its own bootstrap. */
+async function waitForExecutable(metadata, env, options = {}) {
+  const deadline = Date.now() + (options.timeoutMs ?? INSTALL_DETECT_TIMEOUT_MS)
+  const signal = options.signal
+  for (;;) {
+    const found = installedExecutable(metadata, env)
+    if (found) return found
+    if (signal?.aborted || Date.now() >= deadline) return ''
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+  }
 }
 
 async function ensureProviderRuntime(providerId, metadata, options = {}) {
@@ -536,12 +672,48 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
       if (metadata.kind === 'msi') {
         await installMsi(installer)
       } else {
-        await installExe(installer)
+        const silentArgs = Array.isArray(metadata.silentArgs) ? metadata.silentArgs : []
+        // Squirrel-based setups start the vendor launcher as they finish.
+        // Hide those windows from the moment the installer runs so no
+        // third-party UI can appear over VAULTED.
+        const hideNames = cleanProcessNames([
+          metadata.processName,
+          ...(metadata.executableNames || []),
+        ])
+        startHiddenWindowWatcher(hideNames, { seconds: 240 })
+        await installExe(installer, {
+          silentArgs,
+          hideNames,
+          isInstalled: () => installedExecutable(metadata, options.env),
+        })
+        executable = await waitForExecutable(metadata, options.env, {
+          timeoutMs: silentArgs.length > 0 ? INSTALL_DETECT_TIMEOUT_MS : 0,
+          signal: options.signal,
+        })
+        if (!executable && silentArgs.length > 0) {
+          // Some vendor setups ignore a silent switch and need the player to
+          // confirm their official UI. Never send the player to a website.
+          options.report?.({
+            received: meta.size,
+            total: meta.size,
+            percent: 100,
+            etaSeconds: null,
+            bytesPerSecond: null,
+            phase: 'installing',
+            url: release.url,
+          })
+          await installExe(installer, {
+            silentArgs: [],
+            isInstalled: () => installedExecutable(metadata, options.env),
+          })
+        }
       }
-      executable = installedExecutable(metadata, options.env)
+      executable = await waitForExecutable(metadata, options.env, {
+        signal: options.signal,
+      })
       if (!executable) {
         throw new Error(
-          `The provider launcher installed, but ${metadata.processName} was not found in its documented install folders.`,
+          `The ${metadata.label} installer finished, but ${metadata.processName} was not found in its documented install folders. Press Install again to retry; VAULTED never opens the project website instead.`,
         )
       }
       await fs.promises.writeFile(
@@ -571,7 +743,9 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
 
 module.exports = {
   ensureProviderRuntime,
+  installExe,
   installedExecutable,
   launchArguments,
   resolveRelease,
+  waitForExecutable,
 }

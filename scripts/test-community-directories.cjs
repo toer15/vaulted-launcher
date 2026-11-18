@@ -328,7 +328,7 @@ function testMarkdownDirectories() {
     providerMap: {
       Stellar: { id: 'stellar', label: 'Stellar' },
       Era: { id: 'era', label: 'Era' },
-      Neo: { id: 'neo', label: 'Neo' },
+      Hydro: { id: 'hydro', label: 'Hydro' },
     },
   })
   const awesomeEntries = parseAwesomeOgfn(
@@ -336,7 +336,7 @@ function testMarkdownDirectories() {
       '## Hosted Servers/Projects',
       '- [Stellar (Chapter 2, Season 2)](https://discord.gg/stellarfn)',
       '- [Era (Chapter 1, Season 8)](https://discord.gg/erafn)',
-      '- [Neo (Chapter 1, Season X)](https://discord.gg/neofn)',
+      '- [Hydro (Chapter 2, Season 5)](https://discord.gg/hydromp)',
       '## Self Hosted Servers/Projects',
       '- [Erbium (Universal, S3-S29)](https://github.com/plooshi/Erbium)',
     ].join('\n'),
@@ -347,7 +347,7 @@ function testMarkdownDirectories() {
     [
       ['stellar', 'ch2-s2'],
       ['era', 'ch1-s8'],
-      ['neo', 'ch1-s10'],
+      ['hydro', 'ch2-s5'],
     ],
   )
 

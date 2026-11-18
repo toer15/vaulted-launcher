@@ -16,7 +16,6 @@ const telluriumFiles = [
   'resources/providers/era/Tellurium.dll',
   'resources/providers/ezfn/Tellurium.dll',
   'resources/providers/ezfn-hybrid/Tellurium.dll',
-  'resources/providers/neo/Tellurium.dll',
   'resources/providers/reboot/Tellurium.dll',
 ]
 const redirectHash = hash(telluriumFiles[0])
@@ -29,7 +28,6 @@ const profileFiles = [
   'resources/providers/era/provider.json',
   'resources/providers/ezfn/provider.json',
   'resources/providers/ezfn-hybrid/provider.json',
-  'resources/providers/neo/provider.json',
   'resources/providers/reboot/provider.json',
 ]
 for (const file of profileFiles) {

@@ -40,7 +40,43 @@
       "dynamicSeasons": true,
       "seasons": [
         "ch1-s6"
-      ]
+      ],
+      "runtime": {
+        "kind": "exe",
+        "label": "Era Launcher",
+        "version": "4.0.42",
+        "downloadUrl": "https://api.erafn.dev/api/launcher/download",
+        "downloadHosts": [
+          "api.erafn.dev",
+          "cdn.erafn.dev"
+        ],
+        "installerName": "Era-Setup-4.0.42.exe",
+        "allowUnsigned": true,
+        "interactive": true,
+        "autoInstall": true,
+        "silentArgs": [
+          "/S"
+        ],
+        "installedExecutables": [
+          "%LOCALAPPDATA%/Programs/Era/Era.exe",
+          "%LOCALAPPDATA%/Programs/Era Launcher/Era Launcher.exe",
+          "%LOCALAPPDATA%/Era/Era.exe",
+          "%PROGRAMFILES%/Era/Era.exe",
+          "%PROGRAMFILES%/Project Era/Era.exe"
+        ],
+        "executableNames": [
+          "Era.exe",
+          "Era Launcher.exe",
+          "Project Era.exe"
+        ],
+        "installRoots": [
+          "%LOCALAPPDATA%/Programs",
+          "%LOCALAPPDATA%",
+          "%PROGRAMFILES%"
+        ],
+        "launchArgs": [],
+        "processName": "Era.exe"
+      }
     },
     {
       "id": "stellar",
@@ -100,31 +136,6 @@
       ]
     },
     {
-      "id": "neo-official",
-      "name": "Project Neo",
-      "label": "Neo",
-      "mode": "external",
-      "launchKind": "official",
-      "backendUrl": "https://projectneofn.dev/",
-      "website": "https://projectneofn.dev/",
-      "launchUrl": "https://projectneofn.dev/",
-      "statusUrl": "https://projectneofn.dev/",
-      "auth": "none",
-      "external": true,
-      "global": true,
-      "population": {
-        "kind": "discord",
-        "invite": "neofn",
-        "label": "Discord"
-      },
-      "seasons": [
-        "ch1-s3",
-        "ch1-s4",
-        "ch1-s7",
-        "ch1-s10"
-      ]
-    },
-    {
       "id": "eon",
       "name": "Project Eon",
       "label": "Eon",
@@ -154,6 +165,9 @@
           "projecteon.dev"
         ],
         "installerName": "Eon_Launcher_2.4.44_x64_en-US.exe",
+        "silentArgs": [
+          "/S"
+        ],
         "allowUnsigned": true,
         "interactive": true,
         "autoInstall": true,
@@ -206,6 +220,9 @@
           "hydromp.site"
         ],
         "installerName": "Hydro_Setup.exe",
+        "silentArgs": [
+          "/S"
+        ],
         "allowUnsigned": true,
         "interactive": true,
         "autoInstall": true,
@@ -258,6 +275,9 @@
           "objects.githubusercontent.com"
         ],
         "installerName": "Interloop-Setup-3.4.6.exe",
+        "silentArgs": [
+          "/S"
+        ],
         "allowUnsigned": true,
         "interactive": true,
         "autoInstall": true,
@@ -331,6 +351,9 @@
           "projectecho.dev"
         ],
         "installerName": "EchoLauncher-Setup.exe",
+        "silentArgs": [
+          "/S"
+        ],
         "allowUnsigned": true,
         "interactive": true,
         "autoInstall": true,
@@ -683,7 +706,45 @@
         "ch4-s3",
         "ch4-s4",
         "ch4-s5"
-      ]
+      ],
+      "runtime": {
+        "kind": "exe",
+        "label": "Reboot Launcher",
+        "version": "10.0.9",
+        "downloadUrl": "https://github.com/Auties00/Reboot-Launcher/releases/download/10.0.9/reboot_launcher-10.0.9-windows-setup.exe",
+        "downloadHosts": [
+          "github.com",
+          "objects.githubusercontent.com",
+          "release-assets.githubusercontent.com"
+        ],
+        "installerName": "reboot_launcher-10.0.9-windows-setup.exe",
+        "allowUnsigned": true,
+        "interactive": true,
+        "autoInstall": true,
+        "silentArgs": [
+          "/VERYSILENT",
+          "/SUPPRESSMSGBOXES",
+          "/NORESTART"
+        ],
+        "installedExecutables": [
+          "%LOCALAPPDATA%/Programs/Reboot Launcher/reboot_launcher.exe",
+          "%LOCALAPPDATA%/Programs/Reboot/reboot_launcher.exe",
+          "%PROGRAMFILES%/Reboot Launcher/reboot_launcher.exe",
+          "%PROGRAMFILES%/Reboot/reboot_launcher.exe"
+        ],
+        "executableNames": [
+          "reboot_launcher.exe",
+          "Reboot Launcher.exe",
+          "Reboot.exe"
+        ],
+        "installRoots": [
+          "%LOCALAPPDATA%/Programs",
+          "%LOCALAPPDATA%",
+          "%PROGRAMFILES%"
+        ],
+        "launchArgs": [],
+        "processName": "reboot_launcher.exe"
+      }
     }
   ]
 }

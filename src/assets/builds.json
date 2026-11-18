@@ -96,16 +96,11 @@
       ],
       "sizeBytes": 7384406276,
       "onlineProvider": {
-        "id": "neo",
-        "name": "Project Neo",
-        "label": "Neo"
+        "id": "echo",
+        "name": "Project Echo",
+        "label": "Echo"
       },
       "onlineProviders": [
-        {
-          "id": "neo",
-          "name": "Project Neo",
-          "label": "Neo"
-        },
         {
           "id": "echo",
           "name": "Project Echo",
@@ -142,16 +137,11 @@
       ],
       "sizeBytes": 11427640644,
       "onlineProvider": {
-        "id": "neo",
-        "name": "Project Neo",
-        "label": "Neo"
+        "id": "arc",
+        "name": "ARC",
+        "label": "ARC"
       },
       "onlineProviders": [
-        {
-          "id": "neo",
-          "name": "Project Neo",
-          "label": "Neo"
-        },
         {
           "id": "arc",
           "name": "ARC",
@@ -262,12 +252,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 15211195887,
-      "onlineProvider": {
-        "id": "neo",
-        "name": "Project Neo",
-        "label": "Neo"
-      }
+      "sizeBytes": 15211195887
     },
     "ch1-s8": {
       "id": "ch1-s8",
@@ -356,12 +341,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 26556266920,
-      "onlineProvider": {
-        "id": "neo",
-        "name": "Project Neo",
-        "label": "Neo"
-      }
+      "sizeBytes": 26556266920
     },
     "ch2-s1": {
       "id": "ch2-s1",

@@ -316,7 +316,6 @@ export interface LauncherBridge {
     verifiedAt: number
   }>
   /** Open a validated Discord invite in the user's Discord/browser. */
-  openDiscordInvite?(inviteUrl: string): Promise<boolean>
   /** health and population sampled from the configured global backends */
   providerLiveStatus?(): Promise<Record<string, ProviderLiveStatus>>
   /** repair the bundled, hash-checked provider files before one-click launch */
@@ -376,6 +375,10 @@ export interface LauncherBridge {
     version?: string
     pid?: number | null
     tracked?: boolean
+    /** the community step is required because no launcher is installed */
+    community?: boolean
+    /** invite the in-app community dialog can show; never opened by VAULTED */
+    inviteUrl?: string
   }>
   stopProviderLauncher?(providerId: string): Promise<{ stopped: boolean }>
   providerLauncherStatus?(): Promise<ProviderLauncherStatus[]>
@@ -395,6 +398,8 @@ export interface LauncherBridge {
     seasonId: string
     version: string
     buildFolderPath: string
+    /** connected VAULTED account, used for companion launches without a provider code */
+    username?: string
     joinHost?: string
     joinPort?: number
   }): Promise<OnlineProviderLaunchResult>
@@ -513,6 +518,7 @@ export async function launchOnlineProvider(
   build: Build,
   provider: OnlineProviderConfig,
   server?: Pick<CommunityServer, 'host' | 'port'> | null,
+  username?: string,
 ): Promise<OnlineProviderLaunchResult> {
   if (!window.arc?.launchOnlineProvider) {
     throw new Error('Online play needs the desktop app.')
@@ -524,6 +530,7 @@ export async function launchOnlineProvider(
       seasonId: artKeyFor(build.season) ?? build.id,
       version: build.version,
       buildFolderPath: build.path,
+      ...(username ? { username } : {}),
       ...(server ? { joinHost: server.host, joinPort: server.port } : {}),
     })
   } catch (error) {

@@ -13,7 +13,7 @@ const root = path.resolve(
   process.argv.find((arg) => arg.startsWith('--providers-dir='))?.split('=')[1] ||
     path.join(__dirname, '..', 'resources', 'providers'),
 )
-const expectedIds = ['neo', 'era', 'ezfn', 'ezfn-hybrid', 'reboot']
+const expectedIds = ['era', 'ezfn', 'ezfn-hybrid', 'reboot']
 const problems = []
 const rows = []
 

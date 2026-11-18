@@ -92,6 +92,12 @@ async function checkInvite(provider) {
     }
     const guildId = String(payload?.guild?.id || '')
     const configuredId = String(gate.guildId || '')
+    // Discord rate-limits its public invite lookup per IP. A 429 (or an empty
+    // payload with no guild and no message) is not evidence that the invite is
+    // dead, so it must not fail the catalog audit.
+    if (response.status === 429 || (!guildId && !payload?.message)) {
+      return { providerId: provider.id, code, ok: true, skipped: 'Discord rate limit' }
+    }
     const ok =
       response.ok &&
       Boolean(payload?.guild?.name) &&
@@ -131,9 +137,9 @@ async function main() {
   }
   for (const result of inviteResults) {
     console.log(
-      `${result.ok ? 'OK  ' : 'FAIL'} invite\t${result.providerId}\t${result.code}\t${result.guild || result.error}${
-        result.members !== undefined ? ` (${result.members} members, ${result.online ?? 0} online)` : ''
-      }`,
+      `${result.skipped ? 'SKIP' : result.ok ? 'OK  ' : 'FAIL'} invite\t${result.providerId}\t${result.code}\t${
+        result.skipped || result.guild || result.error
+      }${result.members !== undefined ? ` (${result.members} members, ${result.online ?? 0} online)` : ''}`,
     )
   }
 

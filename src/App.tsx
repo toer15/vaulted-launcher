@@ -158,7 +158,7 @@ function lobbyTarget(address: string): { host: string; port: number } | null {
   return host ? { host, port } : null
 }
 
-const PROVIDER_BRAND_PATTERN = /\b(?:Project Era|EZFN Hybrid|EZFN|Stellar|Retrac|Reboot|Neo|Eon|Hydro|Interloop|Crystal|Echo|ARC|Era)\b/gi
+const PROVIDER_BRAND_PATTERN = /\b(?:Project Era|EZFN Hybrid|EZFN|Stellar|Retrac|Reboot|Eon|Hydro|Interloop|Crystal|Echo|ARC|Era)\b/gi
 
 function nativeMessage(message: string): string {
   return message.replace(PROVIDER_BRAND_PATTERN, 'online service')
@@ -937,7 +937,7 @@ export default function App() {
       ? (() => {
           const remote = healthyAutoProviders.filter((provider) => !isLocalEngine(provider))
           const mappedId = activeBuild.onlineProvider?.id
-          // Ch1 seasons map to the bundled Reboot/Neo launcher. A same-project
+          // Ch1 seasons map to the bundled Reboot launcher. A same-project
           // external catalog entry must not steal Auto from that local mapping:
           // otherwise Play opens the project website instead of the installed
           // game. An explicit server choice still bypasses this branch.
@@ -2744,19 +2744,14 @@ export default function App() {
         fallback?: boolean
       },
     ): Promise<boolean> => {
-      if (!window.arc?.launchOnlineProvider) {
-        pushToast({
-          tone: 'error',
-          title: 'Online play needs the desktop app',
-          description: 'Run "npm run app".',
-        })
-        return false
-      }
-
       // External communities own their sign-in, anticheat and season handoff.
       // Open their documented entry point instead of pretending VAULTED can
       // inject into a backend that does not ship a compatible runtime.
       if (provider.mode === 'external' || provider.external) {
+        // External communities own their backend and their sign-in. VAULTED
+        // never substitutes a local game server for them: it opens the
+        // project's own launcher, which is the only client that can join their
+        // live server. Seasons without such a server stay ONLINE UNAVAILABLE.
         if (!window.arc?.openProviderLauncher) {
           pushToast({
             tone: 'error',
@@ -2772,6 +2767,27 @@ export default function App() {
               ? { version: build.version, folder: build.path, executable: build.executable }
               : undefined,
           )
+          if (result?.community) {
+            // No launcher is installed, so the whole handoff stays inside
+            // VAULTED: the in-app community step shows the invite and copies
+            // it. VAULTED never opens a website or invite in a browser.
+            const gate = provider.discordGate ?? null
+            const message =
+              result.error ||
+              `${provider.label} has no launcher that VAULTED can open on this PC.`
+            if (gate) {
+              setDiscordError(message)
+              setDiscordPrompt({ build, gate })
+            } else {
+              setLaunchFailure({ id: build.id, message })
+            }
+            pushToast({
+              tone: 'info',
+              title: `${provider.label} community step`,
+              description: message,
+            })
+            return false
+          }
           if (!result?.opened) {
             pushToast({
               tone: 'error',
@@ -2790,13 +2806,12 @@ export default function App() {
           }
           pushToast({
             tone: 'success',
-            title: result.tracked ? `${provider.label} is launching ${build.version}` : `${provider.label} opened`,
-            description:
-              result.tracked
-                ? 'The provider launcher stays open while Fortnite runs. Use Stop on the season card to close it.'
-                : provider.launchKind === 'discord'
-                  ? 'Join the community to download its launcher and select this season.'
-                  : 'Finish this season in the community launcher that owns its backend.',
+            title: result.tracked
+              ? `${provider.label} is launching ${build.version}`
+              : `${provider.label} opened`,
+            description: result.tracked
+              ? 'The provider launcher stays open while Fortnite runs. Use Stop on the season card to close it.'
+              : 'Finish this season in the community launcher that owns its backend.',
           })
           return true
         } catch (error) {
@@ -2807,6 +2822,15 @@ export default function App() {
           })
           return false
         }
+      }
+
+      if (!window.arc?.launchOnlineProvider) {
+        pushToast({
+          tone: 'error',
+          title: 'Online play needs the desktop app',
+          description: 'Run "npm run app".',
+        })
+        return false
       }
 
       // Local, lobby-only engines are not online play. Never launch one from
@@ -2968,11 +2992,13 @@ export default function App() {
       }
     },
     [
+      installed,
       launchAttempts,
       openAccountPrompt,
       pushToast,
       refreshProviderAuthStatus,
       session?.user.providerId,
+      session?.user.username,
       shop.sets,
     ],
   )
@@ -3026,18 +3052,23 @@ export default function App() {
     accountPromptRef.current = false
   }, [accountBusy])
 
-  const handleOpenDiscordInvite = useCallback(async () => {
+  // VAULTED never opens a website in a browser. The community step keeps the
+  // invite inside the app: the player copies it into their own Discord.
+  const handleCopyDiscordInvite = useCallback(async () => {
     const pending = discordPrompt
     if (!pending) return
     try {
-      const opened = await window.arc?.openDiscordInvite?.(pending.gate.inviteUrl)
-      if (opened === false) throw new Error('The Discord invite could not be opened.')
-    } catch (error) {
-      setDiscordError(
-        nativeMessage(error instanceof Error ? error.message : 'The Discord invite could not be opened.'),
-      )
+      await navigator.clipboard.writeText(pending.gate.inviteUrl)
+      setDiscordError(null)
+      pushToast({
+        tone: 'info',
+        title: 'Invite copied',
+        description: 'Paste it into Discord to join the community.',
+      })
+    } catch {
+      setDiscordError('The Discord invite could not be copied. Select the link and copy it manually.')
     }
-  }, [discordPrompt])
+  }, [discordPrompt, pushToast])
 
   const handleDiscordVerify = useCallback(async () => {
     const pending = discordPrompt
@@ -3298,7 +3329,7 @@ export default function App() {
 
       // Play always consults the live community directories before choosing a
       // destination. The 20-second background poll is only a cache; this scan
-      // makes the click itself check Reboot/Eon/Era/EZFN/Neo/Stellar/Retrac
+      // makes the click itself check Reboot/Eon/Era/EZFN/Stellar/Retrac
       // (and any other configured endpoint) instead of acting on stale rows.
       let availableCommunityServers = communityServers
       if (!join) {
@@ -3714,7 +3745,9 @@ export default function App() {
     // that declares a runtime must be installed before the season download;
     // once it is ready, Download Season becomes the next card action.
     if (autoGlobalBackend && (autoGlobalBackend.mode === 'external' || autoGlobalBackend.external)) {
-      if (activeRuntime?.required) {
+      // An installed build is launched directly, so its companion launcher is
+      // background plumbing: never block Start on installing it.
+      if (activeRuntime?.required && !installed[build.id]) {
         if (!activeRuntime.installed) {
           await handleInstallRuntime()
           return
@@ -4777,7 +4810,7 @@ export default function App() {
         busy={discordBusy}
         error={discordError}
         onClose={handleDiscordCancel}
-        onOpenInvite={() => void handleOpenDiscordInvite()}
+        onCopyInvite={() => void handleCopyDiscordInvite()}
         onVerify={() => void handleDiscordVerify()}
       />
 

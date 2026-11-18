@@ -1,8 +1,0 @@
-{
-  "id": "neo",
-  "name": "Project Neo",
-  "label": "Neo",
-  "backendUrl": "https://api.neofn.dev/",
-  "redirectDllName": "Tellurium.dll",
-  "redirectDllSha256": "16b97054fb1128595300a22a6b79343baf33d6d37b04eea8c9f1af650ba8c766"
-}

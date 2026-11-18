@@ -33,10 +33,18 @@ for (const [id, seasonId] of Object.entries(expected)) {
     providers.some((entry) => entry.id === id),
     `${seasonId} does not list the ${id} Discord provider`,
   )
-  // Discord is a gate/additional community, never the primary local engine.
+  // Discord is a gate/additional community, never a local engine. A season
+  // with no managed backend may still list an external community as its
+  // primary route (ch1-s4 after Neo's removal); that card only ever opens the
+  // community's launcher and never starts a local lobby.
   const primary = byId.get(season.onlineProvider?.id)
   assert.ok(primary, `${seasonId} has no primary provider`)
-  assert.notEqual(primary.mode, 'external', `${seasonId} primary provider is external`)
+  if (primary.mode === 'external') {
+    assert.ok(
+      providers.every((entry) => byId.get(entry.id)?.mode === 'external'),
+      `${seasonId} mixes an external primary with a managed backend`,
+    )
+  }
 
   const profile = providerProfile(id)
   assert.equal(profile.discordGate?.providerId, id, `${id} profile lost its Discord gate`)

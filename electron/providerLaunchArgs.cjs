@@ -16,7 +16,7 @@ const LEGACY_CALDERA =
 const LEGACY_CALDERA_EOS =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2NvdW50X2lkIjoic2FyYWgiLCJnZW5lcmF0ZWQiOjE3NzQxMjEzNzksImNhbGRlcmFHdWlkIjoiZWYzMGE4MjUtMzFlNi00ZWRhLTlmM2EtZTI4YzgwNjYxODkxIiwiYWNQcm92aWRlciI6IkVhc3lBbnRpQ2hlYXRFT1MiLCJub3RlcyI6IiIsImZhbGxiYWNrIjpmYWxzZX0.f7EcDmsjj3XHzdbMl41YHyJE-LlAirjbjaqzcdqBB_Y'
 
-/** Neonite's password grant uses the part before @ as the display name. */
+/** The bundled private server's password grant uses the part before @ as the display name. */
 function localAuthLogin(username) {
   const safe = String(username || '')
     .replace(/[^a-z0-9_]/gi, '')
@@ -67,11 +67,9 @@ function providerFortniteArgs(backendUrl, authCode = '', providerId = '', authTo
       '-log',
     )
   } else if (options.localAuth === true) {
-    // Local profiles (Reboot, Neo, EZFN Hybrid) have no provider-issued
-    // exchange code. The bundled Neonite backend accepts a password grant, but
-    // it needs a non-empty username: the value before @ becomes the lobby name.
-    // Passing `unused` here (or pointing at a public website such as
-    // rebootfn.org) leaves the client on Epic's manual email/password form.
+    // The bundled private server profile (a lobby hosted from this PC) has no
+    // provider-issued exchange code. Its password grant accepts a non-empty
+    // username: the value before @ becomes the lobby name.
     args.push(
       `-AUTH_LOGIN=${localAuthLogin(options.username)}`,
       `-AUTH_PASSWORD=${LOCAL_AUTH_PASSWORD}`,

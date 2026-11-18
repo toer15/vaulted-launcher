@@ -36,6 +36,9 @@ const { cleanupManagedBuild: cleanupBuildFolder } = require('./buildCleanup.cjs'
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
+const { startHiddenWindowWatcher } = require('./hiddenWindows.cjs')
+const { shouldCloseCompanionLauncher } = require('./companionLifecycle.cjs')
+const rangeDownload = require('./rangeDownloader.cjs')
 const {
   ensureProviderRuntime,
   installedExecutable,
@@ -85,6 +88,8 @@ const downloads = new Map()
 const extractions = new Map()
 /** providerId -> signed external launcher spawned by VAULTED */
 const providerLaunchers = new Map()
+/** providerId -> live game-session monitor for that merged companion launcher */
+const companionMonitors = new Map()
 
 /**
  * Every old Fortnite client needs a private server and a redirected login.
@@ -830,7 +835,7 @@ function normalizeUsername(value) {
   )
 }
 
-/** Apply the small VAULTED-only fixes to the bundled Neonite copy. */
+/** Apply the small VAULTED-only fixes to the bundled private-server copy. */
 function patchBackendRuntime(paths) {
   const patchRoot = path.join(runtimeRoot(), 'neonite-patch')
   const files = [
@@ -1381,7 +1386,7 @@ async function ensureLocalBackend(username) {
     const gameCode = writeBackendAuthCode(paths, requestedUser)
 
     // The previous release has no ticket/session fix. Stop only our own
-    // Neonite listener so the patched files are loaded for this launch.
+    // private-server listener so the patched files are loaded for this launch.
     if (await backendResponds()) {
       await stopOwnedListener(BACKEND_PORT, 'app.js')
       for (let attempt = 0; attempt < 40 && (await portOpen(BACKEND_PORT)); attempt += 1) {
@@ -2448,50 +2453,170 @@ function fortniteProcessRunning() {
 }
 
 /**
- * A documented external launcher (Retrac) is spawned with its own launch flag.
- * Keep the exact child PID so VAULTED can close that helper after the game it
- * started exits. A launcher that forwards to an already-running instance and
- * exits immediately has no child left to own, so the monitor stops with it.
+ * Register a spawned companion launcher for status reporting only. A
+ * single-instance launcher may forward to an already-running copy and exit at
+ * once, so the session monitor below never depends on the child's lifetime.
  */
-function trackProviderLauncher(providerId, child) {
+function registerProviderLauncher(providerId, child) {
   if (!child?.pid) return
-  const entry = { pid: child.pid, startedAt: Date.now(), sawGame: false, checking: false }
-  providerLaunchers.set(providerId, entry)
-  let stopped = false
-  const stop = (reason = 'exited') => {
-    if (stopped) return
-    stopped = true
-    clearInterval(timer)
-    if (providerLaunchers.get(providerId) === entry) providerLaunchers.delete(providerId)
-    send('arc:provider-launcher-exited', {
-      providerId,
-      pid: entry.pid,
-      reason,
-    })
-  }
+  providerLaunchers.set(providerId, { pid: child.pid, startedAt: Date.now() })
+}
+
+/**
+ * Keep a season's companion launcher alive for the whole game session.
+ *
+ * The monitor watches FortniteClient-Win64-Shipping.exe, not the spawned
+ * launcher child, so a launcher that forwards to an existing instance and
+ * exits is still owned by VAULTED. The shared rule decides the close:
+ *   - game running, or still booting: keep the launcher, for as long as needed;
+ *   - game gone after having run: close that provider's launcher tree;
+ *   - Stop: closeCompanionLauncherForProvider() closes it directly.
+ */
+function startCompanionSessionMonitor(providerId, executable) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id) return null
+  const existing = companionMonitors.get(id)
+  if (existing) return existing
+  const state = { providerId: id, executable: executable || '', sawGame: false, checking: false }
+  companionMonitors.set(id, state)
   const timer = setInterval(async () => {
-    if (entry.checking) return
-    entry.checking = true
+    if (state.checking || companionMonitors.get(id) !== state) return
+    state.checking = true
     try {
       const gameRunning = await fortniteProcessRunning()
-      if (gameRunning) {
-        entry.sawGame = true
-        return
-      }
-      if (!entry.sawGame) {
-        // Retrac may still be signing in or showing its own UI. Do not close a
-        // helper just because the game has not appeared yet. Keep it up until
-        // the game exits or the user presses Stop, with no auto-close timeout.
-        return
-      }
-      await closeProcessTreeGracefully(entry.pid)
-      stop('game-exited')
+      if (gameRunning) state.sawGame = true
+      // One shared rule for every provider (electron/companionLifecycle.cjs):
+      // the launcher survives the whole game session and is closed only after
+      // the game has run and every client process is gone. No idle timer, no
+      // early close on game startup.
+      if (!shouldCloseCompanionLauncher({ gameRunning, sawGame: state.sawGame })) return
+      clearInterval(timer)
+      companionMonitors.delete(id)
+      await closeCompanionLauncherForProvider(id)
+      send('arc:provider-launcher-exited', { providerId: id, pid: null, reason: 'game-exited' })
     } finally {
-      entry.checking = false
+      state.checking = false
     }
   }, 5000)
   timer.unref?.()
-  child.once('exit', () => stop('exited'))
+  return state
+}
+
+/** Resolve every process started from one exact executable path. */
+function executablePids(executable) {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32' || !executable) return resolve([])
+    const literal = String(executable).replace(/'/g, "''")
+    execFile(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq '${literal}' } | ForEach-Object { $_.ProcessId }`,
+      ],
+      { windowsHide: true, timeout: 8_000 },
+      (error, stdout) => {
+        if (error || !stdout) return resolve([])
+        resolve(
+          String(stdout)
+            .split(/\r?\n/)
+            .map((value) => Number(value.trim()))
+            .filter((value) => Number.isInteger(value) && value > 0),
+        )
+      },
+    )
+  })
+}
+
+/** The installed launcher metadata for a provider, shared by start/close. */
+function companionLauncherMetadata(providerId) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id) return null
+  return (
+    providerRuntimeMetadata(id) ??
+    providerCatalog().find((entry) => entry.id === id)?.launcher ??
+    null
+  )
+}
+
+/**
+ * Start the season's merged companion launcher in the background and keep it
+ * alive for 100% of the game session. Its auth, session heartbeat and
+ * matchmaking bridge are what let the client enter matches, so nothing here
+ * arms a timeout that could close it after the game starts.
+ */
+async function startCompanionLauncher(providerId) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id) return null
+  const metadata = companionLauncherMetadata(id)
+  const executable = metadata ? installedExecutable(metadata) : ''
+  const existing = providerLaunchers.get(id)
+  if (existing) {
+    startCompanionSessionMonitor(id, executable)
+    return { pid: existing.pid, executable, alreadyRunning: true }
+  }
+  if (!metadata) return null
+  if (!executable) {
+    console.warn(
+      `[VAULTED] ${metadata.label || id} is not installed on this PC; the game starts without its companion launcher.`,
+    )
+    return null
+  }
+  startHiddenWindowWatcher(providerWindowNames(metadata), { seconds: 21_600, exitWhenGone: true })
+  const child = spawn(executable, [], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    cwd: path.dirname(executable),
+  })
+  child.unref()
+  registerProviderLauncher(id, child)
+  startCompanionSessionMonitor(id, executable)
+  return { pid: child.pid ?? null, executable }
+}
+
+/** The client is up: from now on the launcher closes only after it exits. */
+function markProviderLauncherGameStarted(providerId) {
+  const monitor = companionMonitors.get(String(providerId || '').trim().toLowerCase())
+  if (monitor) monitor.sawGame = true
+}
+
+/**
+ * Stop's exact half: close the season's launcher process tree now. This is the
+ * only non-game-exit close path; it never runs on a timer.
+ */
+async function closeCompanionLauncherForProvider(providerId) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id) return false
+  let closed = false
+  if (companionMonitors.delete(id)) closed = true
+  const entry = providerLaunchers.get(id)
+  const targets = new Set()
+  if (entry) {
+    providerLaunchers.delete(id)
+    targets.add(entry.pid)
+    closed = true
+  }
+  const metadata = companionLauncherMetadata(id)
+  const executable = metadata ? installedExecutable(metadata) : ''
+  for (const pid of await executablePids(executable)) {
+    targets.add(pid)
+    closed = true
+  }
+  // A launcher has no unsaved game state, so it is force-closed: a graceful
+  // WM_CLOSE it ignores would delay the close by 12s per process, and the
+  // lifecycle must be immediate on game exit and on Stop.
+  for (const pid of targets) await killProcessTree(pid)
+  for (const pid of await executablePids(executable)) await killProcessTree(pid)
+  return closed
+}
+
+function providerWindowNames(metadata) {
+  const names = [metadata?.processName, ...(metadata?.executableNames || [])].filter(
+    (name) => typeof name === 'string' && name.trim(),
+  )
+  return [...new Set(names.map((name) => name.trim()))]
 }
 
 /** Public companion-launcher detection; never returns the filesystem path. */
@@ -2745,14 +2870,14 @@ function testArchive(archivePath, controller) {
 // Archive.org is the main source and caps useful concurrency around a dozen
 // sockets. A small chunk queue keeps every socket busy and prevents one slow
 // tail request from holding up the last gigabytes of a build.
-const MAX_DOWNLOAD_CONNECTIONS = 10
+const MAX_DOWNLOAD_CONNECTIONS = 16
 const MIN_PARALLEL_BYTES = 2 * 1024 * 1024
 const DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 const DOWNLOAD_LARGE_CHUNK_BYTES = 16 * 1024 * 1024
 const DOWNLOAD_MAX_RANGES = 2048
 const DOWNLOAD_STALL_MS = 30_000
 const DOWNLOAD_ATTEMPTS = 3
-const PROGRESS_INTERVAL_MS = 100
+const PROGRESS_INTERVAL_MS = 250
 const DOWNLOAD_HEADERS = {
   'User-Agent': 'VAULTED-Launcher/1.1',
   // byte ranges must refer to the archive itself, not a compressed response
@@ -2760,7 +2885,7 @@ const DOWNLOAD_HEADERS = {
 }
 const DOWNLOAD_META_SUFFIX = '.part.json'
 
-class RangeUnsupportedError extends Error {}
+const { RangeUnsupportedError } = rangeDownload
 
 function downloadMetaPath(partPath) {
   return `${partPath}${DOWNLOAD_META_SUFFIX.slice('.part'.length)}`
@@ -2968,26 +3093,18 @@ async function inspectDownloadedFile(filePath, contentType, contentDisposition, 
 }
 
 function downloadConnectionCount(total) {
-  if (total < MIN_PARALLEL_BYTES) return 1
-  if (total < 8 * 1024 * 1024) return 2
-  if (total < 64 * 1024 * 1024) return 4
-  if (total < 256 * 1024 * 1024) return 8
-  if (total < 2 * 1024 * 1024 * 1024) return 10
-  return MAX_DOWNLOAD_CONNECTIONS
+  return Math.min(MAX_DOWNLOAD_CONNECTIONS, rangeDownload.connectionCount(total))
 }
 
 /** Split a file into small resume-friendly chunks, not one range per socket. */
 function planDownloadRanges(total) {
   // Multi-gigabyte builds use larger chunks so request setup cannot become a
   // meaningful share of the download; smaller builds keep more workers busy.
-  const chunkBytes = total >= 512 * 1024 * 1024 ? DOWNLOAD_LARGE_CHUNK_BYTES : DOWNLOAD_CHUNK_BYTES
-  const chunks = Math.max(1, Math.min(DOWNLOAD_MAX_RANGES, Math.ceil(total / chunkBytes)))
-  const size = Math.ceil(total / chunks)
-  const ranges = []
-  for (let start = 0; start < total; start += size) {
-    ranges.push({ start, end: Math.min(total - 1, start + size - 1), received: 0 })
-  }
-  return ranges
+  return rangeDownload.planRanges(total, {
+    maxRanges: DOWNLOAD_MAX_RANGES,
+    chunkBytes: DOWNLOAD_CHUNK_BYTES,
+    largeChunkBytes: DOWNLOAD_LARGE_CHUNK_BYTES,
+  })
 }
 
 function downloadCoverage(ranges, received) {
@@ -3029,202 +3146,43 @@ function withDownloadCoverage(planned, coverage) {
 
 /** Ask for one byte so the host tells us both the archive size and range support. */
 async function probeRangeSupport(parsed, signal) {
-  const response = await fetch(parsed, {
-    signal,
-    redirect: 'follow',
-    headers: { ...DOWNLOAD_HEADERS, Range: 'bytes=0-0' },
-  })
-
-  if (!response.ok) throw new Error(`Download failed: HTTP ${response.status} ${response.statusText}`)
-
-  const contentRange = (response.headers.get('content-range') || '').trim()
-  const match = /^bytes\s+0-0\/(\d+)$/i.exec(contentRange)
-  const total = match ? Number(match[1]) : 0
-  const supported = response.status === 206 && total > 0
-
-  try {
-    await response.body?.cancel()
-  } catch {
-    /* the probe is disposable */
-  }
-
-  return {
-    supported,
-    total,
-    finalUrl: response.url || String(parsed),
-    contentType: (response.headers.get('content-type') || '').toLowerCase(),
-    contentDisposition: response.headers.get('content-disposition') || '',
-  }
+  return rangeDownload.probeRange(parsed, { headers: DOWNLOAD_HEADERS, signal })
 }
 
-async function writeAt(handle, buffer, position) {
-  let offset = 0
-  while (offset < buffer.length) {
-    const { bytesWritten } = await handle.write(buffer, offset, buffer.length - offset, position + offset)
-    if (!bytesWritten) throw new Error('Could not write the download to disk.')
-    offset += bytesWritten
-  }
-}
-
-async function downloadSingleStream(parsed, partPath, signal, onTotal, onChunk, resumeOffset = 0, onRestart = null) {
-  let offset = Math.max(0, Number(resumeOffset) || 0)
-  const response = await fetch(parsed, {
+async function downloadSingleStream(
+  parsed,
+  partPath,
+  signal,
+  onTotal,
+  onChunk,
+  resumeOffset = 0,
+  onRestart = null,
+) {
+  return rangeDownload.downloadSingleStream({
+    url: parsed,
+    partPath,
     signal,
-    redirect: 'follow',
-    headers: {
-      ...DOWNLOAD_HEADERS,
-      ...(offset > 0 ? { Range: `bytes=${offset}-` } : {}),
-    },
+    onTotal,
+    onChunk,
+    resumeOffset,
+    onRestart,
+    headers: DOWNLOAD_HEADERS,
   })
-  if (!response.ok) throw new Error(`Download failed: HTTP ${response.status} ${response.statusText}`)
-  if (!response.body) throw new Error('The server returned an empty response.')
-
-  // If the host ignores the resume range, start the file over rather than
-  // appending a second full copy after the partial bytes.
-  if (offset > 0 && response.status !== 206) {
-    offset = 0
-    onRestart?.()
-  }
-  const contentLength = Number(response.headers.get('content-length') ?? 0)
-  onTotal(offset + contentLength)
-
-  const handle = await fs.promises.open(partPath, offset > 0 ? 'r+' : 'w')
-  try {
-    if (offset > 0) await handle.truncate(offset)
-    let position = offset
-    for await (const chunk of response.body) {
-      // Positional writes keep the bytes before the saved offset intact.
-      await writeAt(handle, chunk, position)
-      position += chunk.length
-      onChunk(chunk.length)
-    }
-  } finally {
-    await handle.close()
-  }
 }
 
 async function downloadParallel(parsed, partPath, total, ranges, signal, onChunk) {
-  if (!Array.isArray(ranges) || ranges.length <= 1) {
-    throw new RangeUnsupportedError('The archive is too small to split.')
-  }
-
-  const prep = await fs.promises.open(partPath, fs.existsSync(partPath) ? 'r+' : 'w')
-  try {
-    await prep.truncate(total)
-  } finally {
-    await prep.close()
-  }
-
-  const workers = new AbortController()
-  const abortWorkers = () => workers.abort()
-  signal.addEventListener('abort', abortWorkers, { once: true })
-
-  const pending = ranges.filter((range) => {
-    const length = range.end - range.start + 1
-    range.received = Math.min(length, Math.max(0, Number(range.received) || 0))
-    return range.received < length
+  return rangeDownload.downloadRanges({
+    url: parsed,
+    partPath,
+    total,
+    ranges,
+    signal,
+    onChunk,
+    connections: downloadConnectionCount(total),
+    attempts: DOWNLOAD_ATTEMPTS,
+    stallMs: DOWNLOAD_STALL_MS,
+    headers: DOWNLOAD_HEADERS,
   })
-
-  const downloadRange = async (handle, range) => {
-    const length = range.end - range.start + 1
-    let attempts = 0
-
-    while (true) {
-      let offset = Math.min(length, Math.max(0, Number(range.received) || 0))
-      range.received = offset
-      if (offset >= length) return
-
-      const attempt = new AbortController()
-      const onAbort = () => attempt.abort()
-      let stallTimer = null
-      const resetStall = () => {
-        if (stallTimer) clearTimeout(stallTimer)
-        stallTimer = setTimeout(() => attempt.abort(new Error('Download connection stalled')), DOWNLOAD_STALL_MS)
-        stallTimer.unref?.()
-      }
-      workers.signal.addEventListener('abort', onAbort, { once: true })
-
-      try {
-        resetStall()
-        const response = await fetch(parsed, {
-          signal: attempt.signal,
-          redirect: 'follow',
-          headers: { ...DOWNLOAD_HEADERS, Range: `bytes=${range.start + offset}-${range.end}` },
-        })
-
-        if (response.status !== 206) {
-          try {
-            await response.body?.cancel()
-          } catch {
-            /* ignore */
-          }
-          if (response.status === 200) throw new RangeUnsupportedError('The server did not honor byte ranges.')
-          throw new Error(`Download range failed: HTTP ${response.status} ${response.statusText}`)
-        }
-        if (!response.body) throw new Error('The server returned an empty range response.')
-
-        const reader = response.body.getReader()
-        let position = range.start + offset
-        try {
-          while (true) {
-            resetStall()
-            const { done, value } = await reader.read()
-            if (done) break
-            if (position + value.length > range.end + 1) {
-              throw new Error('The server returned too many bytes for a range.')
-            }
-            await writeAt(handle, value, position)
-            position += value.length
-            range.received = position - range.start
-            onChunk(value.length)
-          }
-        } finally {
-          reader.releaseLock()
-        }
-
-        if (position !== range.end + 1) throw new Error('The server returned an incomplete byte range.')
-        return
-      } catch (error) {
-        if (signal.aborted || workers.signal.aborted) throw abortError()
-        if (error instanceof RangeUnsupportedError) throw error
-        attempts += 1
-        if (attempts >= DOWNLOAD_ATTEMPTS) throw error
-        // Keep completed bytes in this chunk and retry from the new offset.
-        await delay(400 * attempts)
-      } finally {
-        if (stallTimer) clearTimeout(stallTimer)
-        workers.signal.removeEventListener('abort', onAbort)
-      }
-    }
-  }
-
-  const workerCount = Math.min(MAX_DOWNLOAD_CONNECTIONS, Math.max(1, downloadConnectionCount(total)), pending.length)
-  let next = 0
-  const tasks = Array.from({ length: workerCount }, async () => {
-    // One positional-write handle per worker; ranges still write to their own
-    // slice without racing another worker.
-    const handle = await fs.promises.open(partPath, 'r+')
-    try {
-      while (true) {
-        const range = pending[next]
-        next += 1
-        if (!range) return
-        await downloadRange(handle, range)
-      }
-    } finally {
-      await handle.close()
-    }
-  })
-
-  try {
-    await Promise.all(tasks)
-  } catch (error) {
-    workers.abort()
-    await Promise.allSettled(tasks)
-    throw error
-  } finally {
-    signal.removeEventListener('abort', abortWorkers)
-  }
 }
 
 function findNestedArchives(root, depth = 0, found = []) {
@@ -3483,6 +3441,11 @@ async function downloadBuild(payload) {
     persistTimer.unref?.()
   }
 
+  // A short rolling window reports the current link speed instead of the
+  // average since the download started, so a connection that ramps up or
+  // stalls shows the truth immediately.
+  const speedSamples = [{ at: Date.now(), bytes: 0 }]
+
   const report = (force = false) => {
     const now = Date.now()
     schedulePersist()
@@ -3490,8 +3453,13 @@ async function downloadBuild(payload) {
     lastSent = now
 
     const percent = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : null
+    speedSamples.push({ at: now, bytes: sessionReceived })
+    while (speedSamples.length > 2 && now - speedSamples[0].at > 3_000) speedSamples.shift()
+    const windowStart = speedSamples[0]
+    const windowSeconds = Math.max(0.5, (now - windowStart.at) / 1000)
+    const windowBytes = Math.max(0, sessionReceived - windowStart.bytes)
+    const bytesPerSecond = windowBytes / windowSeconds
     const elapsedSeconds = (now - startedAt) / 1000
-    const bytesPerSecond = elapsedSeconds > 0 ? sessionReceived / elapsedSeconds : 0
     const etaSeconds =
       total > 0 && bytesPerSecond > 0 && elapsedSeconds >= 1
         ? Math.max(0, Math.round((total - received) / bytesPerSecond))
@@ -3510,7 +3478,9 @@ async function downloadBuild(payload) {
 
     if (SMOKE_URL && (percent === null || percent - lastLogged >= 20 || percent === 100)) {
       lastLogged = percent ?? lastLogged
-      smokeLog(`download progress ${percent ?? '?'}% (${received}/${total} bytes)`)
+      smokeLog(
+        `download progress ${percent ?? '?'}% (${received}/${total} bytes, ${(bytesPerSecond / 1024 ** 2).toFixed(1)} MiB/s)`,
+      )
     }
   }
 
@@ -4766,12 +4736,179 @@ function providerAccountIssue(profile, error) {
   }
 }
 
-/**
- * Launch a downloaded season directly inside VAULTED. The bundled provider
- * profile supplies the backend URL and the redirect DLL; no vendor installer
- * or external launcher is involved. The redirect DLL is mapped while the
- * client is still suspended, before Unreal starts its HTTP/Curl stack.
- */
+async function openProviderLauncherEntry(providerId, options = {}) {
+    const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
+    const profile = id && providerForId(id) ? providerProfile(id) : null
+    if (!profile || profile.external !== true || profile.mode !== 'external') {
+      return { opened: false, error: 'That provider does not use an official launcher.' }
+    }
+
+    // A provider with documented runtime metadata starts its official launcher
+    // with the exact build flag it publishes when it has one. Single-season
+    // launchers are opened directly; Retrac additionally receives its 14.60
+    // manifest flag. VAULTED never edits a provider's private library.
+    const runtimeMetadata = providerRuntimeMetadata(id)
+    const launchOptions =
+      options && typeof options === 'object' && !Array.isArray(options) ? options : {}
+    if (runtimeMetadata) {
+      const requestedVersion =
+        typeof launchOptions.version === 'string' ? launchOptions.version.trim() : ''
+      const manifestVersions = Object.keys(runtimeMetadata.manifestIds || {})
+      const version = runtimeMetadata.manifestIds?.[requestedVersion]
+        ? requestedVersion
+        : manifestVersions[0] || runtimeMetadata.version || ''
+      let executable = installedExecutable(runtimeMetadata)
+      if (!executable) {
+        // The season archive may already have been installed before this
+        // runtime metadata existed. Prepare the signed launcher on Play as
+        // well, without requiring another 14.60 archive download.
+        try {
+          const runtime = await ensureProviderRuntime(id, runtimeMetadata, {
+            root: path.join(app.getPath('userData'), 'provider-runtimes'),
+          })
+          executable = runtime?.executable || ''
+        } catch (error) {
+          return {
+            opened: false,
+            error: error instanceof Error ? error.message : 'The provider runtime could not be prepared.',
+          }
+        }
+      }
+      if (!executable) {
+        return {
+          opened: false,
+          error: `${profile.label} is not installed yet. Use the launcher install step on the season card once.`,
+        }
+      }
+      const args = launchArguments(runtimeMetadata, version)
+      if (args) {
+        try {
+          // Companion launchers stay invisible: only VAULTED and the game may
+          // appear on screen.
+          startHiddenWindowWatcher(providerWindowNames(runtimeMetadata), {
+            seconds: 21_600,
+            exitWhenGone: true,
+          })
+          const child = spawn(executable, args, {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+            cwd: path.dirname(executable),
+          })
+          const started = await new Promise((resolve) => {
+            child.once('spawn', () => resolve(true))
+            child.once('error', () => resolve(false))
+            setTimeout(() => resolve(true), 1500).unref?.()
+          })
+          if (!started) {
+            return { opened: false, error: `${profile.label} could not be started.` }
+          }
+          child.unref()
+          registerProviderLauncher(id, child); startCompanionSessionMonitor(id, executable)
+          return {
+            opened: true,
+            path: executable,
+            args,
+            version,
+            pid: child.pid ?? null,
+            tracked: true,
+          }
+        } catch (error) {
+          return {
+            opened: false,
+            error: error instanceof Error ? error.message : 'The provider launcher could not be started.',
+          }
+        }
+      }
+      try {
+        startHiddenWindowWatcher(providerWindowNames(runtimeMetadata), {
+          seconds: 21_600,
+          exitWhenGone: true,
+        })
+        const child = spawn(executable, [], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+          cwd: path.dirname(executable),
+        })
+        child.unref()
+        registerProviderLauncher(id, child); startCompanionSessionMonitor(id, executable)
+        return { opened: true, path: executable, pid: child.pid ?? null, tracked: true }
+      } catch (error) {
+        return {
+          opened: false,
+          error: error instanceof Error ? error.message : `${profile.label} could not be started.`,
+        }
+      }
+    }
+
+    // Discord-only communities may have a companion launcher, but no public
+    // HTTPS installer metadata. Detect it on this PC and start it when present;
+    // otherwise fall through to the verified community handoff below.
+    const launcherMetadata = providerCatalog().find((entry) => entry.id === id)?.launcher
+    if (launcherMetadata) {
+      const executable = installedExecutable(launcherMetadata)
+      if (executable) {
+        try {
+          startHiddenWindowWatcher(providerWindowNames(launcherMetadata), {
+            seconds: 21_600,
+            exitWhenGone: true,
+          })
+          const child = spawn(executable, [], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true,
+            cwd: path.dirname(executable),
+          })
+          const started = await new Promise((resolve) => {
+            child.once('spawn', () => resolve(true))
+            child.once('error', () => resolve(false))
+            setTimeout(() => resolve(true), 1500).unref?.()
+          })
+          if (!started) {
+            return { opened: false, error: `${profile.label} launcher could not be started.` }
+          }
+          child.unref()
+          registerProviderLauncher(id, child); startCompanionSessionMonitor(id, executable)
+          return {
+            opened: true,
+            path: executable,
+            version: '',
+            pid: child.pid ?? null,
+            tracked: true,
+          }
+        } catch (error) {
+          return {
+            opened: false,
+            error: error instanceof Error ? error.message : 'The community launcher could not be started.',
+          }
+        }
+      }
+    }
+
+    // A community that publishes no launcher metadata has nothing VAULTED can
+    // start. Report that as an in-app community step: the renderer opens its
+    // community dialog on this PC. VAULTED never opens a website in a browser.
+    const communityUrl = [profile.launchUrl, profile.website].find(
+      (value) =>
+        typeof value === 'string' &&
+        /^https:\/\/(?:discord\.gg\/|discord\.com\/(?:invite|servers)\/)/i.test(value),
+    )
+    if (communityUrl) {
+      return {
+        opened: false,
+        community: true,
+        inviteUrl: communityUrl,
+        error: `${profile.label} has no launcher installed on this PC. Open the ${profile.label} community step inside VAULTED, install its launcher there, then press Start again.`,
+      }
+    }
+
+    return {
+      opened: false,
+      error: `${profile.label} does not publish a launcher that VAULTED can open, so online play stays unavailable on this PC.`,
+    }
+}
+
 async function launchOnlineProvider(payload) {
   const id = typeof payload?.id === 'string' ? payload.id : ''
   // Provider identity is account-wide; casing or a legacy season suffix must
@@ -4811,18 +4948,33 @@ async function launchOnlineProvider(payload) {
     )
   }
 
+  const profile = providerProfile(providerId)
+  const seasonId = typeof payload?.seasonId === 'string' ? payload.seasonId : id
+  const version = typeof payload?.version === 'string' ? payload.version : ''
+  // External projects own their backend, sign-in and anticheat. VAULTED never
+  // injects into them: it opens the documented launcher for the exact build,
+  // the same handoff the season card's Start button uses. This runs before the
+  // managed provider runtime checks, so a launcher-only community (ARC, Eon,
+  // Hydro, …) opens cleanly even when no redirect DLL is involved.
+  if (profile.mode === 'external' || profile.external === true) {
+    const opened = await openProviderLauncherEntry(providerId, { version, folder, executable })
+    if (!opened?.opened) throw new Error(opened?.error || `${profile.label} could not be opened.`)
+    return {
+      launched: false,
+      gameStarted: false,
+      openedLauncher: true,
+      providerId,
+      name: profile.name || provider.name,
+      pid: opened.pid ?? null,
+      external: true,
+      companion: false,
+    }
+  }
+
   await ensureRuntimeInstalled()
   // Repair an old or partially installed provider tree before the launch check
   // below can turn it into a missing-DLL dialog.
   await ensureProviderRedirects()
-  const profile = providerProfile(providerId)
-  if (profile.mode === 'external') {
-    const externalName =
-      profile.launchKind === 'discord' ? 'Discord community' : 'official launcher'
-    throw new Error(
-      `${profile.label} uses its ${externalName}. Open ${profile.website || profile.label} to get that build.`,
-    )
-  }
   // VAULTED no longer starts local lobby-only engines. Play is online-only;
   // seasons without a live route are shown as unavailable on their cards.
   if (profile.auth === 'none') {
@@ -4830,8 +4982,6 @@ async function launchOnlineProvider(payload) {
       `${profile.label} has no online server available yet. The app owner is working hard to get this season online.`,
     )
   }
-  const seasonId = typeof payload?.seasonId === 'string' ? payload.seasonId : id
-  const version = typeof payload?.version === 'string' ? payload.version : ''
   const legacy = providerUsesLegacyRedirect(version, seasonId)
   const runtime = providerRuntime(profile, { legacy })
   const redirectDll = runtime.dll
@@ -4990,6 +5140,11 @@ async function launchOnlineProvider(payload) {
     }),
   )
 
+  // (a) The companion launcher starts first: its auth, session heartbeat and
+  // matchmaking bridge must be live before the client. It stays up for the
+  // whole game session and is only closed by Stop or by the game exiting.
+  const companionLauncher = await startCompanionLauncher(providerId)
+
   const restoreEnvironment = applyProviderEnvironmentBypass()
   let launched
   try {
@@ -5018,10 +5173,16 @@ async function launchOnlineProvider(payload) {
   } catch (error) {
     realtimeSession?.close('game launch failed')
     void eraBridge?.close()
+    // The game never started, so there is no session for the launcher to keep
+    // alive: close it instead of leaving it running with no client.
+    await closeCompanionLauncherForProvider(providerId)
     restoreEnvironment()
     throw error
   }
   restoreEnvironmentWhenClientExits(launched.pid, restoreEnvironment)
+  // (c) The client is running, so the launcher monitor must now close it only
+  // after every FortniteClient-Win64-Shipping.exe process has exited.
+  markProviderLauncherGameStarted(providerId)
 
   // Attach only after the real client PID exists. The session polls that PID
   // and closes exactly once it disappears, so a launcher-side exchange failure
@@ -5036,6 +5197,7 @@ async function launchOnlineProvider(payload) {
     expectedExecutable: executable,
     external: false,
     providerId,
+    companionLauncherPid: companionLauncher?.pid ?? null,
     realtimeSession,
     eraBridge,
   }
@@ -5069,6 +5231,7 @@ async function launchOnlineProvider(payload) {
     joined: join ? `${join.host}:${join.port}` : null,
     external: false,
     provider: providerId,
+    companionLauncherPid: companionLauncher?.pid ?? null,
   }
 }
 
@@ -5380,135 +5543,9 @@ function registerIpc() {
   // External communities are opened through the documented entry point in
   // provider.json. VAULTED does not inject credentials or fake a launcher
   // handshake; the project owns its sign-in, anticheat and season selection.
-  ipcMain.handle('arc:open-provider-launcher', async (_event, providerId, options = {}) => {
-    const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
-    const profile = id && providerForId(id) ? providerProfile(id) : null
-    if (!profile || profile.external !== true || profile.mode !== 'external') {
-      return { opened: false, error: 'That provider does not use an official launcher.' }
-    }
-
-    // A provider with documented runtime metadata starts its official launcher
-    // with the exact build flag it publishes when it has one. Single-season
-    // launchers are opened directly; Retrac additionally receives its 14.60
-    // manifest flag. VAULTED never edits a provider's private library.
-    const runtimeMetadata = providerRuntimeMetadata(id)
-    const launchOptions =
-      options && typeof options === 'object' && !Array.isArray(options) ? options : {}
-    if (runtimeMetadata) {
-      const requestedVersion =
-        typeof launchOptions.version === 'string' ? launchOptions.version.trim() : ''
-      const manifestVersions = Object.keys(runtimeMetadata.manifestIds || {})
-      const version = runtimeMetadata.manifestIds?.[requestedVersion]
-        ? requestedVersion
-        : manifestVersions[0] || runtimeMetadata.version || ''
-      let executable = installedExecutable(runtimeMetadata)
-      if (!executable) {
-        // The season archive may already have been installed before this
-        // runtime metadata existed. Prepare the signed launcher on Play as
-        // well, without requiring another 14.60 archive download.
-        try {
-          const runtime = await ensureProviderRuntime(id, runtimeMetadata, {
-            root: path.join(app.getPath('userData'), 'provider-runtimes'),
-          })
-          executable = runtime?.executable || ''
-        } catch (error) {
-          return {
-            opened: false,
-            error: error instanceof Error ? error.message : 'The provider runtime could not be prepared.',
-          }
-        }
-      }
-      if (!executable) {
-        return {
-          opened: false,
-          error: `${profile.label} is not installed yet. Use the launcher install step on the season card once.`,
-        }
-      }
-      const args = launchArguments(runtimeMetadata, version)
-      if (args) {
-        try {
-          const child = spawn(executable, args, {
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: false,
-            cwd: path.dirname(executable),
-          })
-          const started = await new Promise((resolve) => {
-            child.once('spawn', () => resolve(true))
-            child.once('error', () => resolve(false))
-            setTimeout(() => resolve(true), 1500).unref?.()
-          })
-          if (!started) {
-            return { opened: false, error: `${profile.label} could not be started.` }
-          }
-          child.unref()
-          trackProviderLauncher(id, child)
-          return {
-            opened: true,
-            path: executable,
-            args,
-            version,
-            pid: child.pid ?? null,
-            tracked: true,
-          }
-        } catch (error) {
-          return {
-            opened: false,
-            error: error instanceof Error ? error.message : 'The provider launcher could not be started.',
-          }
-        }
-      }
-      const error = await shell.openPath(executable)
-      return error ? { opened: false, error } : { opened: true, path: executable }
-    }
-
-    // Discord-only communities may have a companion launcher, but no public
-    // HTTPS installer metadata. Detect it on this PC and start it when present;
-    // otherwise fall through to the verified community handoff below.
-    const launcherMetadata = providerCatalog().find((entry) => entry.id === id)?.launcher
-    if (launcherMetadata) {
-      const executable = installedExecutable(launcherMetadata)
-      if (executable) {
-        try {
-          const child = spawn(executable, [], {
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: false,
-            cwd: path.dirname(executable),
-          })
-          const started = await new Promise((resolve) => {
-            child.once('spawn', () => resolve(true))
-            child.once('error', () => resolve(false))
-            setTimeout(() => resolve(true), 1500).unref?.()
-          })
-          if (!started) {
-            return { opened: false, error: `${profile.label} launcher could not be started.` }
-          }
-          child.unref()
-          trackProviderLauncher(id, child)
-          return {
-            opened: true,
-            path: executable,
-            version: '',
-            pid: child.pid ?? null,
-            tracked: true,
-          }
-        } catch (error) {
-          return {
-            opened: false,
-            error: error instanceof Error ? error.message : 'The community launcher could not be started.',
-          }
-        }
-      }
-    }
-
-    const launchUrl = profile.launchUrl || profile.website || profile.backendUrl
-    if (!/^https?:\/\//i.test(launchUrl)) {
-      return { opened: false, error: `${profile.label} has no safe launch URL.` }
-    }
-    await shell.openExternal(launchUrl)
-    return { opened: true, url: launchUrl }
-  })
+  ipcMain.handle('arc:open-provider-launcher', (_event, providerId, options = {}) =>
+    openProviderLauncherEntry(providerId, options),
+  )
 
   ipcMain.handle('arc:provider-launcher-status', () =>
     [...providerLaunchers.entries()].map(([providerId, entry]) => ({
@@ -5518,13 +5555,9 @@ function registerIpc() {
     })),
   )
 
-  ipcMain.handle('arc:stop-provider-launcher', async (_event, providerId) => {
-    const id = String(providerId || '').trim().toLowerCase()
-    const entry = id ? providerLaunchers.get(id) : null
-    if (!entry) return { stopped: false }
-    await closeProcessTreeGracefully(entry.pid)
-    return { stopped: true }
-  })
+  ipcMain.handle('arc:stop-provider-launcher', async (_event, providerId) => ({
+    stopped: await closeCompanionLauncherForProvider(providerId),
+  }))
 
   ipcMain.handle('arc:provider-runtime-status', (_event, providerId) =>
     providerRuntimeStatus(providerId),
@@ -5595,12 +5628,6 @@ function registerIpc() {
       throw new Error(`${profile.label} does not use a Discord community gate.`)
     }
     return verifyDiscordCommunity(profile.discordGate)
-  })
-
-  ipcMain.handle('arc:open-discord-invite', async (_event, inviteUrl) => {
-    if (!inviteCode(inviteUrl)) throw new Error('That Discord invite is not valid.')
-    await shell.openExternal(String(inviteUrl))
-    return true
   })
 
   ipcMain.handle('arc:provider-auth-status', () => providerAuth.statuses())
@@ -5748,6 +5775,9 @@ function registerIpc() {
     // crash message.
     expectedBuildCloses.add(id)
     await closeProcessTreeGracefully(entry.pid)
+    // Stop is the one close path that does not wait for the game to exit:
+    // the season's companion launcher goes down with it.
+    await closeCompanionLauncherForProvider(entry.providerId)
     void entry.eraBridge?.close()
     entry.realtimeSession?.close('game process closed by app')
 

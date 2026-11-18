@@ -91,7 +91,7 @@ function jsonResponse(status, body, raw = null) {
 
 function testLiveProviderMappings() {
   // A season with a real hosted backend must never silently default to a
-  // lobby-only local backend such as Neonite. The hosted providers serve the
+  // a lobby-only local backend. The hosted providers serve the
   // seasons mapped to them; local providers are only for unmapped seasons.
   const liveProviders = new Set(['era', 'stellar', 'ezfn'])
   const catalogById = new Map(providerCatalog().map((provider) => [provider.id, provider]))
@@ -186,8 +186,8 @@ function testLiveProviderMappings() {
   assert.equal(providerUsesLegacyRedirect('', 'ch1-s2'), true)
   assert.equal(providerUsesLegacyRedirect('4.10', 'ch1-s4'), false)
   assert.equal(providerUsesLegacyRedirect('14.60', 'ch2-s4'), false)
-  assert.match(providerRuntime(providerProfile('neo'), { legacy: true }).dll, /Cobalt\.dll$/)
-  assert.match(providerRuntime(providerProfile('neo')).dll, /Tellurium\.dll$/)
+  assert.match(providerRuntime(providerProfile('reboot'), { legacy: true }).dll, /Cobalt\.dll$/)
+  assert.match(providerRuntime(providerProfile('reboot')).dll, /Tellurium\.dll$/)
   const authSource = fs.readFileSync(path.join(__dirname, '..', 'electron', 'providerAuth.cjs'), 'utf8')
   assert.match(authSource, /authorisation_code/)
   assert.match(
@@ -251,7 +251,11 @@ function testRetracPendingLaunchRouting() {
   assert.match(pendingBody, /startBuildRef\.current\?\./, 'the post-download pending launch must resume through startBuild')
 
   assert.match(main, /launchArguments\(runtimeMetadata, version\)/, 'the Retrac CLI must receive its manifest flag')
-  assert.match(main, /trackProviderLauncher\(id, child\)/, 'the opened Retrac process must be tracked for auto-close')
+  assert.match(
+    main,
+    /registerProviderLauncher\(id, child\); startCompanionSessionMonitor\(id, executable\)/,
+    'the opened Retrac process must be tracked for auto-close',
+  )
   assert.match(main, /await closeProcessTreeGracefully\(entry\.pid\)/, 'tracked Retrac must be closed after the game exits')
 }
 
@@ -293,7 +297,7 @@ function testLaunchArguments() {
   assert.equal(localAuthLogin('Player 123!'), `Player123@${LOCAL_AUTH_DOMAIN}`)
   assert.equal(localAuthLogin(''), `Player@${LOCAL_AUTH_DOMAIN}`)
 
-  const local = providerFortniteArgs(backendUrl, '', 'neo', '', {
+  const local = providerFortniteArgs(backendUrl, '', 'reboot', '', {
     localAuth: true,
     username: 'Player 123!',
   })
@@ -304,7 +308,7 @@ function testLaunchArguments() {
   assert.equal(local.includes('-AUTH_LOGIN=unused'), false)
   assert.equal(local.at(-1), `-backend=${backendUrl}`)
 
-  const localExchange = providerFortniteArgs(backendUrl, '', 'neo', '', {
+  const localExchange = providerFortniteArgs(backendUrl, '', 'reboot', '', {
     localAuth: true,
     username: 'Player 123!',
     localExchangeCode: 'vlt_local_exchange_code',
@@ -335,7 +339,7 @@ function testLaunchArguments() {
   assert.equal(diagnostic.authCodePresent, true)
   assert.equal(diagnostic.authTokenPresent, true)
   const localDiagnostic = providerLaunchDiagnostic({
-    providerId: 'neo',
+    providerId: 'reboot',
     args: localExchange,
     backendUrl,
     localAuth: true,

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ExternalLink, Loader2, MessageCircle, ShieldCheck, X } from 'lucide-react'
+import { Check, Copy, Loader2, MessageCircle, ShieldCheck, X } from 'lucide-react'
 import { cx } from '../lib/cx'
 import type { DiscordGate } from '../types'
 
@@ -9,21 +9,21 @@ interface DiscordGateModalProps {
   busy: boolean
   error?: string | null
   onClose: () => void
-  onOpenInvite: () => void
+  onCopyInvite: () => void
   onVerify: () => void
 }
 
 /**
- * Native VAULTED gate for a community Discord. The invite is opened outside
- * the app (Discord/browser), but sign-in, verification state, redirect-DLL
- * preparation and the game launch all stay inside VAULTED.
+ * Native VAULTED gate for a community Discord. Sign-in, verification state,
+ * redirect-DLL preparation and the game launch all stay inside VAULTED. The
+ * invite is shown in-app and can be copied; VAULTED never opens a browser.
  */
 export function DiscordGateModal({
   gate,
   busy,
   error,
   onClose,
-  onOpenInvite,
+  onCopyInvite,
   onVerify,
 }: DiscordGateModalProps) {
   useEffect(() => {
@@ -105,9 +105,8 @@ export function DiscordGateModal({
                   No third-party launcher opens
                 </p>
                 <p className="mt-1 text-[11px] leading-relaxed text-fog">
-                  VAULTED verifies the official invite, then injects the matching season redirect
-                  and connects the client itself. Your Discord password is never requested by
-                  VAULTED.
+                  VAULTED verifies the official invite and keeps the handoff inside this app. Your
+                  Discord password is never requested by VAULTED.
                 </p>
               </div>
             </div>
@@ -118,7 +117,7 @@ export function DiscordGateModal({
               <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold text-mist">
                 1
               </span>
-              Open the invite and join {gate.label.replace(/ Discord$/i, '')}.
+              Copy the invite below and join {gate.label.replace(/ Discord$/i, '')} in Discord.
             </li>
             <li className="flex items-center gap-2">
               <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold text-mist">
@@ -152,18 +151,22 @@ export function DiscordGateModal({
             {busy ? 'Verifying community…' : "I've Joined — Verify Community"}
           </button>
 
-          <button
-            type="button"
-            onClick={onOpenInvite}
-            disabled={busy}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/[0.05] px-4 py-2.5 text-[12px] font-semibold text-mist transition-colors duration-200 hover:border-[#5865F2]/60 hover:bg-[#5865F2]/10 hover:text-white disabled:cursor-wait disabled:opacity-50"
-          >
-            <ExternalLink className="h-3.5 w-3.5" />
-            Open Discord Invite
-          </button>
+          <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2">
+            <code className="min-w-0 flex-1 truncate text-[11px] text-fog">{gate.inviteUrl}</code>
+            <button
+              type="button"
+              onClick={onCopyInvite}
+              disabled={busy}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.06] px-2.5 py-1.5 text-[11px] font-semibold text-mist transition-colors duration-200 hover:border-[#5865F2]/60 hover:bg-[#5865F2]/10 hover:text-white disabled:cursor-wait disabled:opacity-50"
+            >
+              <Copy className="h-3 w-3" />
+              Copy
+            </button>
+          </div>
 
-          <p className="mt-4 text-center text-[10px] leading-relaxed text-fog/70">
-            Invites open in your Discord app or browser. Close this panel to cancel the launch.
+          <p className="mt-3 text-center text-[10px] leading-relaxed text-fog/70">
+            The invite stays inside VAULTED — paste it into your Discord app. Close this panel to
+            cancel the launch.
           </p>
         </div>
       </div>

@@ -269,7 +269,7 @@ export function isLocalEngine(provider: Pick<GlobalBackend, 'global' | 'mode'>):
  * The badge and Play use one rule: any mapped engine whose probe is reachable
  * is routable. A missing population/server payload is not a reason to skip the
  * engine while the UI is already showing that season as ONLINE. A local
- * lobby-only engine (Neo/Neonite) never wins Auto over an exact live remote
+ * lobby-only engine never wins Auto over an exact live remote
  * server: its health probe only proves this PC can start a private lobby.
  */
 export function providerCanAutoRoute(
