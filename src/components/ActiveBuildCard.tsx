@@ -30,6 +30,9 @@ import { cx } from '../lib/cx'
 import { formatDownloadSize, formatSpeed } from '../lib/downloadSize'
 import { lobbyPlayers } from '../lib/friends'
 import {
+  ONLINE_UNAVAILABLE_MESSAGE,
+  onlineIsLive,
+  onlineIsUnavailable,
   onlinePlayerCount,
   onlineStatusLabel,
   seasonServerCount,
@@ -61,10 +64,6 @@ interface ActiveBuildCardProps {
   serverOptions?: CommunityServer[]
   /** explicitly selected external server address, null = Auto */
   selectedServer?: string | null
-  /** explicit global provider selection, e.g. the local Neo lobby-only option */
-  selectedGlobalId?: string | null
-  /** bundled local lobby-only engine exposed as an explicit fallback */
-  localBackend?: GlobalBackend | null
   onSelectServer?: (address: string | null) => void
   /** whether a VAULTED or verified provider session is active */
   signedIn?: boolean
@@ -91,6 +90,8 @@ interface ActiveBuildCardProps {
   discordGate?: DiscordGate | null
   /** the community invite has been verified on this PC */
   discordGateVerified?: boolean
+  /** this community's launcher executable was found on this PC */
+  launcherDetected?: boolean
   account: Account
   sourceKeys?: Set<string>
   downloadSize?: number | null
@@ -155,11 +156,19 @@ function statusToneFor(
   health: ServerHealth | null,
   playMode: SeasonPlayMode | undefined,
 ): 'up' | 'down' | 'checking' | 'muted' {
+  // An ONLINE · DISCORD community is an online route, even when a relay or
+  // directory probe for the same season is down.
+  if (playMode?.discordOnline === true) return 'up'
   if (health?.state === 'down') return 'down'
   if (health?.state === 'checking') return 'checking'
-  if (health?.state === 'link') return 'muted'
-  if (health?.state === 'up' || playMode?.online || playMode?.globalOnline) return 'up'
-  if (playMode?.availability === 'launcher' || playMode?.availability === 'directory') return 'muted'
+  // ONLINE and ONLINE · DISCORD cards get the green treatment. A plain
+  // launcher-only card (no ONLINE status) stays red.
+  if (health?.state === 'link') {
+    if (String(health.linkLabel || '').startsWith('ONLINE')) return 'up'
+    return onlineIsLive(playMode) ? 'up' : 'down'
+  }
+  if (health?.state === 'up' || onlineIsLive(playMode)) return 'up'
+  if (playMode?.externalAvailable === true) return onlineIsLive(playMode) ? 'up' : 'down'
   return 'down'
 }
 
@@ -210,7 +219,7 @@ function healthForBackend(provider: GlobalBackend | null | undefined): ServerHea
   // A bundled local engine is not a global server. Never turn its probe into
   // an ONLINE · 1 SERVER claim, even if the local backend responds.
   if (provider?.global !== true || provider?.mode === 'download') {
-    return { state: 'link', linkLabel: 'LOCAL' }
+    return { state: 'link', linkLabel: 'ONLINE UNAVAILABLE' }
   }
   if (!provider?.live) return { state: 'checking' }
   return {
@@ -287,8 +296,6 @@ export function ActiveBuildCard({
   autoGlobalBackend,
   serverOptions = [],
   selectedServer = null,
-  selectedGlobalId = null,
-  localBackend = null,
   onSelectServer,
   signedIn = true,
   onSignIn,
@@ -299,6 +306,7 @@ export function ActiveBuildCard({
   onConnectAccount,
   discordGate,
   discordGateVerified = false,
+  launcherDetected = false,
   account,
   sourceKeys,
   downloadSize,
@@ -380,7 +388,6 @@ export function ActiveBuildCard({
   const requiresSignIn =
     !archived &&
     !officialExternal &&
-    !externalHero &&
     signedOut &&
     ['missing', 'paused', 'ready', 'error'].includes(state)
   // Only offer the account prompt for an installed season. A missing build
@@ -407,13 +414,41 @@ export function ActiveBuildCard({
   const signInTarget = isInstalled ? 'Play' : 'Download'
 
   const hasDownloadSource = Boolean(artKeyFor(season) && sourceKeys?.has(artKeyFor(season)!))
-  const runtimeRequired = runtime?.required === true
+  const runtimeLabel = runtime?.label || autoGlobalBackend?.runtime?.label || 'companion launcher'
+  const runtimeRequired = runtime?.required === true || autoGlobalBackend?.runtime?.required === true
   const runtimeReady = !runtimeRequired || runtime?.installed === true
   const runtimeBusy =
     runtimeRequired &&
     (runtime?.phase === 'downloading' || runtime?.phase === 'installing')
+  const discordProjectLabel = discordGate?.label?.replace(/ Discord$/i, '') || 'Project'
+  const discordSetupEligible = Boolean(
+    discordGate && discordGate.statusOnly !== true && !runtimeRequired,
+  )
+  const discordSetupLocked = Boolean(
+    !archived &&
+      state === 'missing' &&
+      discordSetupEligible &&
+      !discordGateVerified &&
+      !launcherDetected,
+  )
+  const companionSeason = externalHero || runtimeRequired || discordSetupEligible
+  const stepOneComplete = runtimeRequired ? runtimeReady : Boolean(discordGateVerified || launcherDetected)
+  const setupBanner =
+    !archived && state === 'missing'
+      ? discordSetupLocked
+        ? `Step 1 — Join & Verify ${discordProjectLabel} Discord to unlock the season install.`
+        : runtimeRequired && !runtimeReady
+          ? `Step 1 — Install ${runtimeLabel} to unlock the season install.`
+          : null
+      : null
   const downloadUnlocked =
-    hasDownloadSource && runtimeReady && !requiresSignIn && !busy && !archived
+    hasDownloadSource &&
+    runtimeReady &&
+    !requiresSignIn &&
+    !busy &&
+    !archived &&
+    !discordSetupLocked &&
+    onlineIsLive(playMode)
   const setupSequence = !archived && state === 'missing'
   const etaLabel = download?.phase === 'downloading' ? formatEta(download.etaSeconds) : null
   const speedLabel = download?.phase === 'downloading' ? formatSpeed(download.speedBytesPerSecond) : null
@@ -434,18 +469,13 @@ export function ActiveBuildCard({
   const selectedServerOption = selectedServer
     ? serverOptions.find((server) => server.address === selectedServer) ?? null
     : null
-  const selectedLocalBackend =
-    localBackend && selectedGlobalId === localBackend.id ? localBackend : null
-  const serverBadge = selectedLocalBackend
-    ? 'LOCAL ONLY'
-    : liveServers > 0
+  const serverBadge =
+    liveServers > 0
       ? `ONLINE · ${liveServers} ${liveServers === 1 ? 'SERVER' : 'SERVERS'}`
-      : externalHero || playMode?.externalAvailable
+      : externalHero || playMode?.externalAvailable || playMode?.discordOnline
         ? 'LAUNCHER'
-        : playMode?.availability === 'launcher'
-          ? 'LOCAL'
-          : 'OFFLINE'
-  const serverBadgeLive = liveServers > 0 && !selectedLocalBackend
+        : 'ONLINE UNAVAILABLE'
+  const serverBadgeLive = liveServers > 0 || onlineIsLive(playMode)
   const activeBackendHealth = healthForBackend(activeGlobalBackend)
   const activeBackendOffline = activeBackendHealth.state === 'down'
   const heroHealth: ServerHealth | null = autoServer
@@ -459,17 +489,25 @@ export function ActiveBuildCard({
       : ''
   const activePopulationLabel = livePlayers > 0 ? playerCountLabel(livePlayers) : ''
   const activePopulationDetail = activePopulationLabel ? ` · ${activePopulationLabel}` : ''
-  const onlineStatus = heroHealth
-    ? heroHealth.state === 'up'
-      ? onlineStatusLabel(onlinePlayers, onlineServers)
-      : heroHealth.state === 'down'
-        ? 'OFFLINE'
-        : heroHealth.state === 'link'
-          ? heroHealth.linkLabel || 'LAUNCHER'
-          : 'CHECKING'
-    : seasonStatusLabel(playMode)
+  const onlineStatus =
+    playMode?.discordOnline === true
+      ? heroHealth?.state === 'up'
+        ? onlineStatusLabel(onlinePlayers, onlineServers)
+        : 'LAUNCHER'
+      : heroHealth
+        ? heroHealth.state === 'up'
+          ? onlineStatusLabel(onlinePlayers, onlineServers)
+          : heroHealth.state === 'down'
+            ? 'ONLINE UNAVAILABLE'
+            : heroHealth.state === 'link'
+              ? heroHealth.linkLabel || 'LAUNCHER'
+              : 'CHECKING'
+        : seasonStatusLabel(playMode)
+  const onlineUnavailable = onlineIsUnavailable(playMode)
+  const onlineUnavailableForPlay =
+    onlineUnavailable && isInstalled && !busy && state !== 'running'
   const statusTone = statusToneFor(heroHealth, playMode)
-  const heroStatusTitle = heroHealth ? healthTitle(heroHealth) : onlineStatus
+  const heroStatusTitle = onlineUnavailable ? ONLINE_UNAVAILABLE_MESSAGE : heroHealth ? healthTitle(heroHealth) : onlineStatus
   const lobbyCount = playMode?.lobbyCount ?? (hostedLobby?.public ? 1 : 0)
 
   const verifyReport = verify?.report
@@ -544,7 +582,7 @@ export function ActiveBuildCard({
       glow: 'rgba(124,140,255,0.45)',
     },
     running: {
-      label: 'Close',
+      label: 'Stop',
       icon: X,
       background: 'linear-gradient(120deg, #f43f5e, #b91c1c)',
       glow: 'rgba(244,63,94,0.55)',
@@ -556,6 +594,13 @@ export function ActiveBuildCard({
       glow: 'rgba(251,191,36,0.45)',
     },
   }[state]
+  const onlineUnavailablePrimary = {
+    label: 'Online unavailable',
+    icon: Ban,
+    background: 'linear-gradient(120deg, #64748b, #334155)',
+    glow: 'rgba(100,116,139,0.35)',
+  }
+  const downloadPausedOffline = state === 'paused' && !onlineIsLive(playMode)
   const statePrimary = archived
     ? {
         label: 'Archive only',
@@ -565,18 +610,20 @@ export function ActiveBuildCard({
       }
     : defaultStatePrimary
 
-  const externalPrimary =
-    externalHero && !['downloading', 'paused', 'launching', 'running'].includes(state)
+  const externalStart =
+    companionSeason && isInstalled && state === 'ready'
       ? {
-          label: `Open ${autoGlobalBackend?.label || 'community launcher'}`,
-          icon: Globe2,
-          background: 'linear-gradient(120deg, #7c8cff, #4752c4)',
-          glow: 'rgba(124,140,255,0.55)',
+          label: 'Start',
+          icon: Play,
+          background: 'linear-gradient(120deg, #34d399, #059669)',
+          glow: 'rgba(16,185,129,0.55)',
         }
       : null
 
   const primary = archived
     ? statePrimary
+    : onlineUnavailableForPlay || downloadPausedOffline
+      ? onlineUnavailablePrimary
     : accountConnectRequired
     ? {
         label: 'Connect online account',
@@ -584,6 +631,13 @@ export function ActiveBuildCard({
         background: 'linear-gradient(120deg, #7c8cff, #4752c4)',
         glow: 'rgba(124,140,255,0.55)',
       }
+    : discordSetupLocked
+      ? {
+          label: `Join & Verify ${discordGate?.label?.replace(/ Discord$/i, '') || 'Project'} Discord`,
+          icon: MessageCircle,
+          background: 'linear-gradient(120deg, #5865F2, #4752c4)',
+          glow: 'rgba(88,101,242,0.55)',
+        }
     : discordLocked
       ? {
           label: 'Join Discord to Play',
@@ -598,29 +652,40 @@ export function ActiveBuildCard({
           background: 'linear-gradient(120deg, #4b5563, #374151)',
           glow: 'rgba(75,85,99,0.35)',
         }
-      : externalPrimary ?? statePrimary
+      : externalStart ?? statePrimary
   const primaryBusy = busy && !requiresSignIn && !accountConnectRequired
   const primaryDisabled =
     archived ||
+    onlineUnavailableForPlay ||
+    downloadPausedOffline ||
     (!requiresSignIn &&
       !accountConnectRequired &&
+      !discordSetupLocked &&
       (busy || (state === 'missing' && !hasDownloadSource && !officialExternal && !externalHero)))
 
   const PrimaryIcon = primary.icon
 
   const statusText: Record<BuildState, string> = {
-    missing: externalHero
-      ? `Ready — Play opens ${autoGlobalBackend?.label || 'the community launcher'} for this season.`
+    missing: setupBanner
+      ? 'Complete Step 1 to unlock the season install.'
+      : discordSetupEligible
+        ? requiresSignIn
+          ? 'Step 2 — sign in to unlock the season install.'
+          : `Step 2 — Install Season downloads ${season.label}, then Start opens it.`
+      : externalHero
+      ? requiresSignIn
+        ? 'Step 2 — sign in to unlock the season install.'
+        : `Step 2 — Install Season downloads ${season.label}, then Start opens it.`
       : officialExternal
       ? runtimeRequired && !runtime?.installed
-        ? `Step 1 — install ${runtime?.label || 'the companion launcher'} to unlock the season download.`
+        ? `Step 1 — install ${runtimeLabel} to unlock the season download.`
         : requiresSignIn
           ? 'Step 2 — sign in to unlock the season download.'
           : hasDownloadSource
             ? `Ready — ${downloadSizeLabel ? `${downloadSizeLabel} download. ` : ''}Download Season unlocks the exact 14.60 build.`
             : 'No download source is configured for this season yet.'
       : runtimeRequired && !runtime?.installed
-        ? `Install ${runtime?.label || 'the companion launcher'} first.`
+        ? `Install ${runtimeLabel} first.`
         : requiresSignIn
           ? 'Sign in to unlock Download Season.'
           : hasDownloadSource
@@ -641,16 +706,20 @@ export function ActiveBuildCard({
             ? 'Verifying the archive checksum…'
             : 'Downloading the build…',
     ready:
-      discordLocked
+      companionSeason
+        ? `Ready — Start launches ${season.label} in ${autoGlobalBackend?.label || 'the community launcher'}.`
+        : discordLocked
         ? `Ready — join ${discordGate?.label || 'the community Discord'} to unlock online play.`
+        : onlineUnavailable
+        ? ONLINE_UNAVAILABLE_MESSAGE
         : playMode?.availability === 'launcher' && !playMode?.online
         ? playMode?.externalAvailable
           ? 'Ready — Play opens the community launcher that hosts this season.'
-          : 'Ready — local lobby only. Pick a live server or community launcher to go online.'
+          : ONLINE_UNAVAILABLE_MESSAGE
         : playMode?.availability === 'unsupported' && !playMode?.online
-          ? 'Ready — no live server is reporting for this season right now.'
+          ? ONLINE_UNAVAILABLE_MESSAGE
           : playMode?.availability === 'directory' && !playMode?.online
-            ? 'Ready — online play is available. Play connects automatically to a live server.'
+            ? ONLINE_UNAVAILABLE_MESSAGE
             : activeGlobalBackend
               ? activeBackendHealth.state === 'checking'
                 ? 'Ready — checking online status before launch.'
@@ -678,7 +747,9 @@ export function ActiveBuildCard({
   }
   const effectiveStatusText = archived
     ? 'Archive-only build. This season is no longer available online.'
-    : statusText[state]
+    : onlineUnavailable && !['missing', 'paused', 'downloading', 'launching', 'running'].includes(state)
+      ? ONLINE_UNAVAILABLE_MESSAGE
+      : statusText[state]
 
   return (
     <section className="relative isolate flex h-full flex-col overflow-hidden rounded-3xl border border-line bg-panel shadow-[0_30px_80px_-40px_rgba(0,0,0,0.9)]">
@@ -740,7 +811,7 @@ export function ActiveBuildCard({
                 Community · {heroCommunity}
               </span>
             )}
-            {discordGate && (
+            {discordGate && onlineStatus !== 'ONLINE · DISCORD' && (
               <span
                 title={
                   discordGate.statusOnly
@@ -786,6 +857,16 @@ export function ActiveBuildCard({
             {season.era}
           </p>
 
+          {onlineUnavailable && (
+            <div
+              role="status"
+              className="mt-4 flex max-w-xl items-start gap-2 rounded-xl border border-amber-400/35 bg-amber-400/[0.08] px-3 py-2.5 text-[11.5px] font-medium leading-relaxed text-amber-100 backdrop-blur"
+            >
+              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+              <span>{ONLINE_UNAVAILABLE_MESSAGE}</span>
+            </div>
+          )}
+
           {isInstalled && (
             <div className="mt-4 flex max-w-xl items-center gap-2 rounded-xl border border-emerald-400/20 bg-black/25 px-3 py-2 text-[10.5px] text-fog backdrop-blur">
               <HardDrive className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
@@ -804,8 +885,8 @@ export function ActiveBuildCard({
               <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[10.5px] text-fog backdrop-blur transition-colors duration-200 hover:border-emerald-400/35 [&::-webkit-details-marker]:hidden">
                 <Server className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
                 <span className="min-w-0 flex-1 truncate font-semibold text-mist">
-                  {selectedLocalBackend
-                    ? `${selectedLocalBackend.label} · Local Lobby Only`
+                  {onlineUnavailable
+                    ? 'No online server available yet'
                     : selectedServerOption
                       ? selectedServerOption.address
                       : 'Auto · best live server'}
@@ -813,9 +894,7 @@ export function ActiveBuildCard({
                 <span
                   className={cx(
                     'inline-flex shrink-0 items-center gap-1.5 rounded-md border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.06em]',
-                    selectedLocalBackend
-                      ? 'border-amber-300/40 bg-amber-400/15 text-amber-200'
-                      : serverBadgeLive
+                    serverBadgeLive
                         ? 'border-emerald-300/45 bg-emerald-400/20 text-emerald-200'
                         : 'border-rose-400/25 bg-rose-500/[0.08] text-rose-200/80',
                   )}
@@ -823,11 +902,9 @@ export function ActiveBuildCard({
                   <span
                     className={cx(
                       'h-1.5 w-1.5 rounded-full',
-                      selectedLocalBackend
-                        ? 'bg-amber-400'
-                        : serverBadgeLive
-                          ? 'bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]'
-                          : 'bg-rose-400/80',
+                      serverBadgeLive
+                        ? 'bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]'
+                        : 'bg-rose-400/80',
                     )}
                   />
                   {serverBadge}
@@ -851,7 +928,9 @@ export function ActiveBuildCard({
                       Auto · best live server
                     </span>
                     <span className="mt-0.5 block text-[9.5px] text-fog/80">
-                      {serverBadge} · Play connects automatically
+                      {onlineUnavailable
+                        ? ONLINE_UNAVAILABLE_MESSAGE
+                        : `${serverBadge} · Play connects automatically`}
                     </span>
                   </span>
                 </button>
@@ -892,38 +971,6 @@ export function ActiveBuildCard({
                         </span>
                       </button>
                     ))}
-                  </>
-                )}
-                {localBackend && (
-                  <>
-                    <p className="px-2.5 pb-1 pt-2 text-[8.5px] font-bold uppercase tracking-[0.16em] text-fog/60">
-                      Local fallback · lobby only
-                    </p>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        onSelectServer(`global:${localBackend.id}`)
-                        event.currentTarget.closest('details')?.removeAttribute('open')
-                      }}
-                      className={cx(
-                        'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
-                        selectedGlobalId === localBackend.id
-                          ? 'bg-amber-400/[0.09]'
-                          : 'hover:bg-white/[0.05]',
-                      )}
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[11.5px] font-semibold text-mist">
-                          {localBackend.label} · Local Lobby Only
-                        </span>
-                        <span className="mt-0.5 block truncate text-[9.5px] text-fog/80">
-                          {localBackend.id === 'neo' ? 'Neonite V2' : localBackend.name} · 127.0.0.1 · local lobby, no global matchmaking
-                        </span>
-                      </span>
-                      <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-amber-300/35 bg-amber-400/15 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-[0.06em] text-amber-200">
-                        LOCAL ONLY
-                      </span>
-                    </button>
                   </>
                 )}
               </div>
@@ -1168,6 +1215,15 @@ export function ActiveBuildCard({
       {/* actions stay outside the scroll area so a long error log cannot hide them */}
       <div className="relative shrink-0 pt-4">
         <div className="rounded-2xl border border-white/10 bg-ink/90 p-2 shadow-[0_36px_70px_-22px_rgba(0,0,0,0.95),0_10px_26px_-12px_rgba(0,0,0,0.85),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl">
+                {setupBanner && (
+                  <div
+                    role="status"
+                    className="mb-2 flex items-start gap-2 rounded-xl border border-amber-400/35 bg-amber-400/[0.08] px-3 py-2.5 text-[11px] font-medium leading-relaxed text-amber-100"
+                  >
+                    <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+                    <span>{setupBanner}</span>
+                  </div>
+                )}
                 <div className="relative flex flex-wrap items-center gap-2">
                   {setupSequence ? (
                     <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -1182,8 +1238,8 @@ export function ActiveBuildCard({
                             disabled={runtimeBusy || !onInstallRuntime}
                             title={
                               runtimeBusy
-                                ? `Installing ${runtime?.label || 'the companion launcher'}…`
-                                : `Download and silently install ${runtime?.label || 'the companion launcher'}`
+                                ? `Installing ${runtimeLabel}…`
+                                : `Download and run the official ${runtimeLabel} installer`
                             }
                             className={cx(
                               'inline-flex items-center gap-2 rounded-xl px-4 py-3 text-[12.5px] font-semibold text-white shadow-[0_14px_34px_-16px_rgba(124,140,255,0.65)] transition-all duration-200',
@@ -1201,11 +1257,11 @@ export function ActiveBuildCard({
                             <span>
                               {runtimeBusy
                                 ? `${runtime?.phase === 'installing' ? 'Installing' : 'Downloading'} ${
-                                    runtime?.label || 'runtime'
+                                    runtimeLabel
                                   }${runtime?.percent != null ? ` · ${runtime.percent}%` : '…'}`
                                 : runtime?.phase === 'error'
-                                  ? `Retry ${runtime?.label || 'runtime'}`
-                                  : `Download ${runtime?.label || 'runtime'}`}
+                                  ? `Retry ${runtimeLabel}`
+                                  : `Install ${runtimeLabel}`}
                             </span>
                           </button>
                         )}
@@ -1225,20 +1281,20 @@ export function ActiveBuildCard({
                           </button>
                         )}
 
-                        {externalHero ? (
+                        {discordSetupLocked ? (
                           <button
                             type="button"
                             onClick={(event) => {
                               event.stopPropagation()
                               onPrimary()
                             }}
-                            title={`Open ${autoGlobalBackend?.label || 'the community launcher'} for ${season.label}`}
-                            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#7c8cff] to-[#4752c4] px-4 py-3 text-[12.5px] font-semibold text-white shadow-[0_14px_34px_-16px_rgba(124,140,255,0.65)] transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]"
+                            title={`Verify ${discordProjectLabel} Discord to unlock Install Season`}
+                            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#5865F2] to-[#4752c4] px-4 py-3 text-[12.5px] font-semibold text-white shadow-[0_14px_34px_-16px_rgba(88,101,242,0.75)] transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]"
                           >
-                            <Globe2 className="h-4 w-4" />
-                            <span>Open {autoGlobalBackend?.label || 'community launcher'}</span>
+                            <MessageCircle className="h-4 w-4" />
+                            <span>Verify {discordProjectLabel} Discord</span>
                           </button>
-                        ) : (
+                        ) : runtimeRequired && !runtimeReady ? null : (
                           <button
                             type="button"
                             onClick={(event) => {
@@ -1248,15 +1304,19 @@ export function ActiveBuildCard({
                             disabled={!downloadUnlocked}
                             aria-disabled={!downloadUnlocked}
                             title={
-                              !hasDownloadSource
+                              discordSetupLocked
+                                ? `Join and verify ${discordGate?.label || 'the community Discord'} first.`
+                                : !onlineIsLive(playMode)
+                                ? 'Download unlocks when this season has a live online server.'
+                                : !hasDownloadSource
                                 ? 'No download source is available for this season.'
                                 : !runtimeReady
-                                  ? `Install ${runtime?.label || 'the companion launcher'} first.`
+                                  ? `Install ${runtimeLabel} first.`
                                   : requiresSignIn
                                     ? 'Sign in to unlock the season download.'
                                     : busy
                                       ? 'A download is already running.'
-                                      : `Download ${season.label}`
+                                      : `Install ${season.label}`
                             }
                             className={cx(
                               'inline-flex items-center gap-2 rounded-xl px-4 py-3 text-[12.5px] font-semibold transition-all duration-200',
@@ -1267,17 +1327,19 @@ export function ActiveBuildCard({
                           >
                             <Download className="h-4 w-4" />
                             <span>
-                              Download Season
+                              {discordSetupEligible || (runtimeRequired && runtimeReady)
+                                ? 'Install Season'
+                                : 'Download Season'}
                               {downloadSizeLabel ? ` · ${downloadSizeLabel}` : ''}
                             </span>
                           </button>
                         )}
                       </div>
 
-                      {runtimeRequired && !runtimeReady && (
+                      {(runtimeRequired || discordSetupEligible) && (
                         <div className="flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.1em]">
-                          <span className={runtimeReady ? 'text-emerald-300' : 'text-fog'}>
-                            1 · Runtime
+                          <span className={stepOneComplete ? 'text-emerald-300' : 'text-fog'}>
+                            1 · {runtimeRequired ? 'Runtime' : 'Discord'}
                           </span>
                           <span className="text-fog/40">→</span>
                           <span className={!requiresSignIn ? 'text-emerald-300' : 'text-fog'}>
@@ -1297,8 +1359,8 @@ export function ActiveBuildCard({
                             <div className="flex items-center justify-between text-[10px] text-fog">
                               <span>
                                 {runtime.phase === 'installing'
-                                  ? 'Installing verified runtime…'
-                                  : 'Downloading verified runtime…'}
+                                  ? 'Running the official installer…'
+                                  : 'Downloading the official installer…'}
                               </span>
                               <span className="font-mono">
                                 {runtime.percent != null ? `${runtime.percent}%` : 'starting…'}
@@ -1355,11 +1417,13 @@ export function ActiveBuildCard({
                       disabled={primaryDisabled}
                       aria-disabled={requiresSignIn || accountConnectRequired || primaryDisabled}
                       title={
-                        accountConnectRequired
-                          ? 'Connect an online account to play this season'
-                          : requiresSignIn
-                            ? `Sign in to ${signInTarget.toLowerCase()} ${season.label}`
-                            : undefined
+                        onlineUnavailableForPlay
+                          ? ONLINE_UNAVAILABLE_MESSAGE
+                          : accountConnectRequired
+                            ? 'Connect an online account to play this season'
+                            : requiresSignIn
+                              ? `Sign in to ${signInTarget.toLowerCase()} ${season.label}`
+                              : undefined
                       }
                       className={cx(
                         'group relative inline-flex items-center gap-2.5 overflow-hidden px-5 py-3 text-[13.5px] font-semibold text-white',

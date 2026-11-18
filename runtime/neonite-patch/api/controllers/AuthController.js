@@ -56,13 +56,35 @@ module.exports = {
 				account.accountId = req.body.account_id;
 				break;
 
-			case "exchange_code":
+						case "exchange_code": {
 				if (!req.body.exchange_code) {
 					throw new ApiException(errors.com.epicgames.common.oauth.invalid_request).with("exchange_code")
 				}
-				account.displayName = req.body.exchange_code;
-				account.accountId = req.body.exchange_code;
+				// VAULTED writes a short-lived local exchange code before launch.
+				// Accepting the raw string as an account id (the old behaviour)
+				// let any code log in, but the launcher never issued one. A real
+				// code lets the client take its automatic exchange-code login path
+				// instead of showing Epic's manual username/password form.
+				let issued = null
+				try {
+					issued = JSON.parse(fs.readFileSync(path.join(__dirname, '../../vaulted-auth.json'), 'utf8'))
+				} catch {
+					issued = null
+				}
+				if (
+					!issued ||
+					typeof issued.code !== 'string' ||
+					issued.code !== req.body.exchange_code ||
+					!Number.isFinite(Number(issued.expiresAt)) ||
+					Number(issued.expiresAt) < Date.now()
+				) {
+					throw new ApiException(errors.com.epicgames.common.oauth.invalid_request).with("exchange_code")
+				}
+				const issuedName = String(issued.username || '').replace(/[^a-z0-9_]/gi, '').slice(0, 24)
+				account.displayName = issuedName || 'Player'
+				account.accountId = account.displayName
 				break;
+			}
 
 			case "external_auth":
 				NeoLog.warn("Cannot Grab Account Id from body")
@@ -83,7 +105,11 @@ module.exports = {
 
 		// The host client logs in with its own password account. Never let the
 		// launcher-wide username override merge the host and player accounts.
-		if (config.bEnableOverride === true && req.body.grant_type !== "password") {
+		if (
+			config.bEnableOverride === true &&
+			req.body.grant_type !== "password" &&
+			req.body.grant_type !== "exchange_code"
+		) {
 			account.displayName = config.username
 			account.accountId = config.username
 		}

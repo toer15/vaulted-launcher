@@ -1,13 +1,6 @@
 /**
- * Coordinates automatic public-lobby joins and the one local-host fallback
- * that is allowed when such a join fails after the client has launched.
- *
- * Two things need to be true at once:
- *  - a join failure may close the failed client and start the local host only
- *    once, even if main emits a duplicate failure;
- *  - the original launch call can resolve after that fallback has started. Its
- *    completion must be ignored rather than restoring "running/joined" state or
- *    starting a second host.
+ * Tracks automatic public-lobby joins so a stale launch cannot overwrite the
+ * current attempt or turn a failed join into a second launch.
  */
 
 export type LaunchKind = 'join' | 'host'

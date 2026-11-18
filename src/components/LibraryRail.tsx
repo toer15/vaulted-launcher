@@ -204,7 +204,8 @@ export function LibraryRail({
             play. <span className="text-emerald-300">ONLINE</span> = live servers are reporting.{" "}
             <span className="text-sky-200">CHECKING</span> = verifying server status;{" "}
             <span className="text-[#c7ccff]">ONLINE · DISCORD</span> = join the community to unlock;{" "}
-            <span className="text-rose-200">OFFLINE</span> = no live server right now.
+            <span className="text-rose-200">ONLINE UNAVAILABLE</span> = online isn't available yet; the owner is
+            working on it.
           </span>
         </p>
       </footer>

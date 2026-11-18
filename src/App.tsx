@@ -15,9 +15,10 @@ import { artKeyFor } from './lib/art'
 import { fetchFriends, type LobbyInfo } from './lib/friends'
 import {
   mergeLobbies,
+  ONLINE_UNAVAILABLE_MESSAGE,
+  onlineIsLive,
   playModesForBuilds,
   providerCanAutoRoute,
-  providerMatches,
   routeExternalServer,
   seasonLabelForId,
   isLocalEngine,
@@ -34,8 +35,10 @@ import {
   canDownloadBuilds,
   cancelDownload,
   checkInstalledBuilds,
+  cleanupBuildStorage,
   closeBuildProcess,
   deleteBuild,
+  detectProviderLauncher,
   fetchProviderRuntimeStatus,
   getBuildSize,
   hasNativeBridge,
@@ -49,12 +52,15 @@ import {
   pickInstallDir,
   scanInstalledBuilds,
   startDownload,
+  stopProviderLauncher,
   syncProviderBuild,
   subscribeBuildExit,
   subscribeDownloadProgress,
   subscribeJoinFailed,
+  subscribeProviderLauncherExit,
   subscribeProviderRuntimeProgress,
   verifyBuildFiles,
+  type ProviderLauncherDetection,
   type ProviderRuntimeProgress,
   type ProviderRuntimeStatus,
 } from './lib/launch'
@@ -343,10 +349,23 @@ export default function App() {
   const requestedDiskSizes = useRef(new Set<string>())
   const [downloads, setDownloads] = useState<Record<string, DownloadState>>({})
   const [runtimeStatuses, setRuntimeStatuses] = useState<Record<string, ProviderRuntimeStatus>>({})
+  const runtimeInstallRef = useRef<string | null>(null)
+  const [launcherDetections, setLauncherDetections] = useState<
+    Record<string, ProviderLauncherDetection>
+  >({})
   const [runtimeProgress, setRuntimeProgress] = useState<Record<string, ProviderRuntimeProgress>>({})
   const pausedDownloadIds = useRef(new Set<string>())
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [runningId, setRunningId] = useState<string | null>(null)
+  // A season can be owned by an external launcher rather than a game process
+  // that VAULTED spawned. Keep that session visible so it can be stopped from
+  // the same card and is cleared when the launcher or its game exits.
+  const [externalLauncher, setExternalLauncher] = useState<{
+    providerId: string
+    buildId: string
+    pid: number | null
+  } | null>(null)
+  const externalLauncherRef = useRef<typeof externalLauncher>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
@@ -779,6 +798,8 @@ export default function App() {
     const seasons = new Set<string>()
     for (const provider of seasonProviders) {
       if (provider.live?.online !== true) continue
+      // A responding local lobby engine is not an online season.
+      if (isLocalEngine(provider)) continue
       for (const season of provider.supportedSeasons) seasons.add(season)
     }
     return seasons.size
@@ -889,38 +910,12 @@ export default function App() {
   )
   const activePlayMode = activeBuild ? playModes[activeBuild.id] : undefined
 
-  const activeRuntime = useMemo(() => {
-    const providerId = activeBuild?.onlineProvider?.id ?? null
-    if (!providerId) return null
-    const declared =
-      providerCatalog.find((provider) => provider.id === providerId)?.runtime ?? null
-    const status = runtimeStatuses[providerId]
-    const progress = runtimeProgress[providerId]
-    if (!declared && !status && providerId !== 'retrac-official') return null
-    return {
-      providerId,
-      required: true,
-      label: status?.label || declared?.label || 'Retrac Launcher',
-      installed: status?.installed === true,
-      phase:
-        progress && progress.phase !== 'done' ? progress.phase : undefined,
-      percent: progress?.percent ?? null,
-      error: progress?.phase === 'error' ? progress.error || 'The runtime install failed.' : null,
-    }
-  }, [activeBuild?.onlineProvider?.id, providerCatalog, runtimeProgress, runtimeStatuses])
-
-
   // The hero dropdown and Play read one route: exact-season relay/manual rows
   // first, then external directories. A different-season external server is
   // only a fallback when no global backend or exact lobby is available.
   const activeServerRoute = useMemo(
     () => (activeBuild ? routeExternalServer(activeBuild, serverCatalog) : null),
     [activeBuild, serverCatalog],
-  )
-  const activeDiscordGate = activeBuild?.discordGates?.[0] ?? null
-  const activeDiscordGateVerified = Boolean(
-    activeBuild?.discordGates?.length &&
-      activeBuild.discordGates.every((gate) => isDiscordGateVerified(discordGateVerifications, gate)),
   )
   const activeGlobalBackends = useMemo(() => {
     if (!activeKey) return []
@@ -942,7 +937,15 @@ export default function App() {
       ? (() => {
           const remote = healthyAutoProviders.filter((provider) => !isLocalEngine(provider))
           const mappedId = activeBuild.onlineProvider?.id
+          // Ch1 seasons map to the bundled Reboot/Neo launcher. A same-project
+          // external catalog entry must not steal Auto from that local mapping:
+          // otherwise Play opens the project website instead of the installed
+          // game. An explicit server choice still bypasses this branch.
+          const mappedLocal = healthyAutoProviders.find(
+            (provider) => provider.id === mappedId && isLocalEngine(provider),
+          )
           return (
+            mappedLocal ??
             remote.find((provider) => provider.id === mappedId) ??
             remote[0] ??
             healthyAutoProviders.find((provider) => provider.id === mappedId) ??
@@ -951,6 +954,72 @@ export default function App() {
           )
         })()
       : null
+
+  // One selected external provider owns the whole companion flow. This must be
+  // the provider autoGlobalBackend chose, not an arbitrary catalog match for the
+  // season: several seasons have more than one Discord community and each has
+  // its own invite, launcher and installer.
+  const activeCompanionProvider = useMemo(() => {
+    if (autoGlobalBackend && (autoGlobalBackend.external || autoGlobalBackend.mode === 'external')) {
+      return autoGlobalBackend
+    }
+    const buildProviderId = activeBuild?.onlineProvider?.id ?? null
+    if (!buildProviderId) return null
+    return providerCatalog.find((provider) => provider.id === buildProviderId) ?? null
+  }, [activeBuild?.onlineProvider?.id, autoGlobalBackend, providerCatalog])
+  const activeCompanionProviderId = activeCompanionProvider?.id ?? null
+
+  const activeRuntime = useMemo(() => {
+    const providerId = activeCompanionProviderId
+    if (!providerId) return null
+    const declared = activeCompanionProvider?.runtime ?? null
+    const status = runtimeStatuses[providerId]
+    const progress = runtimeProgress[providerId]
+    if (!declared && !status) return null
+    return {
+      providerId,
+      required: true,
+      label: status?.label || declared?.label || 'Companion Launcher',
+      installed: status?.installed === true,
+      phase:
+        progress && progress.phase !== 'done' ? progress.phase : undefined,
+      percent: progress?.percent ?? null,
+      error: progress?.phase === 'error' ? progress.error || 'The runtime install failed.' : null,
+    }
+  }, [activeCompanionProvider, activeCompanionProviderId, runtimeProgress, runtimeStatuses])
+
+  const activeLauncher = useMemo(() => {
+    const providerId = activeCompanionProviderId
+    if (!providerId) return null
+    const declared = activeCompanionProvider?.launcher ?? null
+    const detection = launcherDetections[providerId]
+    if (!declared && !detection) return null
+    return {
+      providerId,
+      label: detection?.label || declared?.label || 'Community Launcher',
+      installed: detection?.installed === true,
+    }
+  }, [activeCompanionProvider, activeCompanionProviderId, launcherDetections])
+
+  // Bind the card to the selected companion's gate. Never fall back to another
+  // community's gate just because it appears first on the build.
+  const activeDiscordGate =
+    activeCompanionProvider?.discordGate ??
+    activeBuild?.discordGates?.find((gate) => gate.providerId === activeCompanionProviderId) ??
+    null
+  const activeDiscordGateVerified = Boolean(
+    activeDiscordGate && isDiscordGateVerified(discordGateVerifications, activeDiscordGate),
+  )
+  const activeDiscordSetupLocked = Boolean(
+    activeBuild &&
+      !installed[activeBuild.id] &&
+      activeDiscordGate &&
+      activeDiscordGate.statusOnly !== true &&
+      !activeDiscordGateVerified &&
+      !activeLauncher?.installed &&
+      !activeRuntime?.required,
+  )
+
   // The card offers the generic account connection for any hosted backend
   // that needs an account. Local `auth: "none"` engines never show it, and a
   // signed-in provider hides it automatically.
@@ -1529,7 +1598,23 @@ export default function App() {
     }
   }, [native])
 
-  const activeRuntimeProviderId = activeBuild?.onlineProvider?.id ?? null
+  useEffect(() => {
+    externalLauncherRef.current = externalLauncher
+  }, [externalLauncher])
+
+  useEffect(() => {
+    if (!native) return
+    return subscribeProviderLauncherExit((payload) => {
+      const active = externalLauncherRef.current
+      if (!active || active.providerId !== payload.providerId) return
+      setExternalLauncher(null)
+      setRunningId((current) => (current === active.buildId ? null : current))
+      setPhase((current) => (current === 'running' ? 'idle' : current))
+      setLaunchStage(null)
+    })
+  }, [native])
+
+  const activeRuntimeProviderId = activeCompanionProviderId
 
   // The season card needs the companion launcher state before it can enable
   // Download Season. Main owns the installer and returns only safe metadata.
@@ -1549,6 +1634,34 @@ export default function App() {
       .catch(() => {})
     return () => {
       cancelled = true
+    }
+  }, [activeRuntimeProviderId, native])
+
+  // Discord-only communities do not expose a public installer. Detect a
+  // launcher that the player already installed, and re-check when they return
+  // from Discord/Explorer so the big card unlocks without another restart.
+  useEffect(() => {
+    if (!native || !activeRuntimeProviderId) return
+    let cancelled = false
+    const check = () => {
+      void detectProviderLauncher(activeRuntimeProviderId)
+        .then((status) => {
+          if (cancelled) return
+          setLauncherDetections((prev) => {
+            const next = { ...prev }
+            if (status) next[status.providerId] = status
+            else delete next[activeRuntimeProviderId]
+            return next
+          })
+        })
+        .catch(() => {})
+    }
+    check()
+    const onFocus = () => check()
+    window.addEventListener('focus', onFocus)
+    return () => {
+      cancelled = true
+      window.removeEventListener('focus', onFocus)
     }
   }, [activeRuntimeProviderId, native])
 
@@ -1591,12 +1704,47 @@ export default function App() {
     }, toast.ttlMs ?? TOAST_TTL)
   }, [])
 
-  /** Step 1 of the season unlock: verified silent companion-runtime install. */
+  // Older VAULTED versions kept the downloaded archive and a second complete
+  // client tree beside the active install. Reclaim that space once at startup;
+  // main only removes data when a complete selected client still exists.
+  const cleanupRequested = useRef(false)
+  useEffect(() => {
+    if (!native || !profilesLoaded || cleanupRequested.current) return
+    cleanupRequested.current = true
+    void cleanupBuildStorage()
+      .then(async (result) => {
+        if (!result || result.freedBytes <= 0) return
+        requestedDiskSizes.current.clear()
+        for (const folder of result.folders) {
+          const size = await getBuildSize(folder).catch(() => null)
+          if (size != null) setDiskSizes((prev) => ({ ...prev, [folder]: size }))
+        }
+        const gigabytes = result.freedBytes / 1024 ** 3
+        const amount =
+          gigabytes >= 1
+            ? `${gigabytes.toFixed(1)} GB`
+            : `${Math.max(1, Math.round(result.freedBytes / 1024 ** 2))} MB`
+        pushToast({
+          tone: 'info',
+          title: `Reclaimed ${amount} of disk space`,
+          description: 'Removed duplicate build copies and downloaded archives that were already extracted.',
+        })
+      })
+      .catch(() => {
+        /* cleanup is best-effort and never blocks startup */
+      })
+  }, [native, profilesLoaded, pushToast])
+
+  /** Step 1 of the season unlock: official companion-launcher install. */
   const handleInstallRuntime = useCallback(async () => {
-    const providerId = activeBuild?.onlineProvider?.id
+    const providerId = activeCompanionProviderId
     if (!providerId) return
+    // State updates are asynchronous, so two rapid clicks can otherwise start
+    // two IPC installs before the runtimeBusy prop renders.
+    if (runtimeInstallRef.current) return
     const current = runtimeProgress[providerId]
     if (current?.phase === 'downloading' || current?.phase === 'installing') return
+    runtimeInstallRef.current = providerId
     setRuntimeProgress((prev) => ({
       ...prev,
       [providerId]: {
@@ -1628,7 +1776,7 @@ export default function App() {
       pushToast({
         tone: 'success',
         title: `${result.label} ${result.version} installed`,
-        description: 'The verified runtime is ready — Download Season is now unlocked.',
+        description: 'The official launcher is ready — Install Season is now unlocked.',
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'The runtime install failed.'
@@ -1648,8 +1796,10 @@ export default function App() {
         },
       }))
       pushToast({ tone: 'error', title: 'Runtime install failed', description: message })
+    } finally {
+      runtimeInstallRef.current = null
     }
-  }, [activeBuild?.onlineProvider?.id, pushToast, runtimeProgress])
+  }, [activeCompanionProviderId, pushToast, runtimeProgress])
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((item) => item.id !== id))
@@ -2185,7 +2335,7 @@ export default function App() {
               description: options.launchAfter
                 ? `${build.season.label} now matches the live build — signing in and launching…`
                 : result.runtimeVersion
-                  ? `${build.season.label} and its signed runtime ${result.runtimeVersion} are ready — press Play. Retrac may ask you to add the downloaded folder to its library once.`
+                  ? `${build.season.label} and its official launcher ${result.runtimeVersion} are ready — press Play.`
                   : `${build.season.label} is ready — press Play.`,
             })
           }
@@ -2478,6 +2628,14 @@ export default function App() {
    */
   const openRetracBuild = useCallback(
     async (build: Build) => {
+      if (activeRuntime?.required && !activeRuntime.installed) {
+        pushToast({
+          tone: 'info',
+          title: `Install ${activeRuntime.label} first`,
+          description: 'The big card installs the launcher before it offers the season download.',
+        })
+        return
+      }
       if (!installed[build.id]) {
         requestDownload(build, { launchAfter: true })
         return
@@ -2512,7 +2670,7 @@ export default function App() {
         })
       }
     },
-    [installed, pushToast, requestDownload],
+    [activeRuntime, installed, pushToast, requestDownload],
   )
 
   /** Show the generic account prompt and remember the Play that should resume. */
@@ -2585,7 +2743,6 @@ export default function App() {
         /** true when this target belongs to a different season */
         fallback?: boolean
       },
-      options: { allowLocalLobby?: boolean } = { allowLocalLobby: true },
     ): Promise<boolean> => {
       if (!window.arc?.launchOnlineProvider) {
         pushToast({
@@ -2623,12 +2780,20 @@ export default function App() {
             })
             return false
           }
+          if (result.tracked && result.pid) {
+            setExternalLauncher({ providerId: provider.id, buildId: build.id, pid: result.pid })
+            setRunningId(build.id)
+            setPhase('running')
+            setLaunchStage(null)
+            setHostedLobby(null)
+            shop.sets.recordLaunch(build.id)
+          }
           pushToast({
             tone: 'success',
             title: result.tracked ? `${provider.label} is launching ${build.version}` : `${provider.label} opened`,
             description:
               result.tracked
-                ? 'The provider launcher owns the game process. VAULTED closes it when Fortnite exits.'
+                ? 'The provider launcher stays open while Fortnite runs. Use Stop on the season card to close it.'
                 : provider.launchKind === 'discord'
                   ? 'Join the community to download its launcher and select this season.'
                   : 'Finish this season in the community launcher that owns its backend.',
@@ -2644,8 +2809,17 @@ export default function App() {
         }
       }
 
-      const localLauncher = provider.global !== true
-      if (!localLauncher && !['oauth', 'deeplink', 'embedded_web'].includes(provider.auth)) {
+      // Local, lobby-only engines are not online play. Never launch one from
+      // Play; the season card explains that online is not available yet.
+      if (isLocalEngine(provider)) {
+        pushToast({
+          tone: 'info',
+          title: 'Online not available yet',
+          description: ONLINE_UNAVAILABLE_MESSAGE,
+        })
+        return false
+      }
+      if (!['oauth', 'deeplink', 'embedded_web'].includes(provider.auth)) {
         pushToast({
           tone: 'info',
           title: 'Sign-in required',
@@ -2653,7 +2827,7 @@ export default function App() {
         })
         return false
       }
-      if (!localLauncher) {
+      {
         let oauthSignedIn = Boolean(
           providerAuthRef.current[provider.id]?.signedIn ||
             normalizeProviderId(session?.user.providerId) === provider.id,
@@ -2705,7 +2879,7 @@ export default function App() {
               : 'Joining a public server…'
             : `Starting ${build.season.label} online…`,
         )
-        const result = await launchOnlineProvider(build, provider, server, options)
+        const result = await launchOnlineProvider(build, provider, server)
         if (!result.launched) throw new Error('Online play could not be started.')
         const applied = launchAttempts.commitIfCurrent(attemptToken, () => {
           setRunningId(build.id)
@@ -2953,6 +3127,9 @@ export default function App() {
         if (join || selectedValue || options.forceProviderId) return null
         const seasonKey = artKeyFor(build.season)
         if (!seasonKey) return null
+        // Local launchers are no longer a destination. If this season has an
+        // external online project, Auto may open it instead of a dead local
+        // lobby.
         const candidates = seasonProviders.filter(
           (provider) =>
             provider.mode === 'external' &&
@@ -3015,15 +3192,36 @@ export default function App() {
 
       // Downloaded seasons launch directly through their provider. Uninstalled
       // cards stay on the existing Download → Play path.
+      // Download and Play are online-only. A season with no live ONLINE status
+      // cannot be downloaded or launched, including a launcher-only route that
+      // does not show an ONLINE status.
+      if (!onlineIsLive(playModes[build.id])) {
+        setPhase('error')
+        setLaunchStage(null)
+        setLaunchFailure({ id: build.id, message: ONLINE_UNAVAILABLE_MESSAGE })
+        pushToast({
+          tone: 'info',
+          title: 'Online not available yet',
+          description: ONLINE_UNAVAILABLE_MESSAGE,
+        })
+        return
+      }
+
       if (!installed[build.id]) {
         requestDownload(build, { launchAfter: true })
         return
       }
 
       // Discord-gated communities are checked at Play time, after the build is
-      // installed. The normal provider/account/redirect route resumes unchanged
-      // once the community unlock has been verified.
-      const lockedGate = nextDiscordGate(build.discordGates, discordGateVerifications)
+      // installed. A detected companion launcher is an alternate Step 1 unlock,
+      // so do not send the player back to Discord after Install Season.
+      const launcherOpened = Boolean(
+        build.onlineProvider?.id && launcherDetections[build.onlineProvider.id]?.installed,
+      )
+      const selectedGate = activeBuild?.id === build.id ? activeDiscordGate : null
+      const lockedGate = launcherOpened
+        ? null
+        : nextDiscordGate(selectedGate ? [selectedGate] : [], discordGateVerifications)
       if (lockedGate) {
         const pending: DiscordPrompt = {
           build,
@@ -3128,7 +3326,10 @@ export default function App() {
       const selection = !join ? serverSelections[build.id] : undefined
       const seasonKey = artKeyFor(build.season)
       const globalOptions = seasonKey
-        ? autoGlobalProviders.filter((provider) => provider.supportedSeasons.includes(seasonKey))
+        ? autoGlobalProviders.filter(
+            (provider) =>
+              provider.supportedSeasons.includes(seasonKey) && !isLocalEngine(provider),
+          )
         : []
       const selectedGlobal = selection?.startsWith('global:')
         ? globalOptions.find((provider) => `global:${provider.id}` === selection) ?? null
@@ -3151,16 +3352,9 @@ export default function App() {
       const mappedGlobal = build.onlineProvider
         ? globalOptions.find((provider) => provider.id === build.onlineProvider?.id) ?? null
         : null
-      // Only an explicit local pick or a season with no exact remote server may
-      // use the bundled lobby-only engine. The final fallback below used to
-      // route a live remote season back into Neo's 127.0.0.1 matchmaker.
-      const remoteExactServer = isRemoteServer(route.exactServer)
-      const autoLocalAllowed = !remoteExactServer
-      const autoCandidates = globalOptions.filter(
-        (provider) => autoLocalAllowed || !isLocalEngine(provider),
-      )
-      const autoRemoteCandidates = autoCandidates.filter((provider) => !isLocalEngine(provider))
-      const autoLocalCandidates = autoCandidates.filter((provider) => isLocalEngine(provider))
+      // VAULTED only auto-routes to an online backend. Bundled local engines
+      // are deliberately excluded, even when no remote server is live.
+      const autoRemoteCandidates = globalOptions
       const findAuto = (candidates: GlobalBackend[]) =>
         candidates.find(
           (provider) =>
@@ -3183,14 +3377,12 @@ export default function App() {
         null
       const autoGlobal =
         findAuto(autoRemoteCandidates) ??
-        (autoLocalAllowed ? findAuto(autoLocalCandidates) : null) ??
         // The badge can be ONLINE through any mapped engine. If the mapped
         // engine is the only route left, still attempt it instead of falling
         // through to a dead-end "no live server" message.
         (playModes[build.id]?.online || playModes[build.id]?.globalOnline
           ? autoRemoteCandidates.find((provider) => provider.id === mappedGlobal?.id) ??
             autoRemoteCandidates[0] ??
-            (autoLocalAllowed ? autoLocalCandidates[0] : null) ??
             null
           : null)
       const chosen = join
@@ -3214,28 +3406,7 @@ export default function App() {
       const globalTarget =
         selectedGlobal?.mode === 'external' ? selectedGlobal : preferredGlobal
 
-      // A season without a hosted backend still has a bundled launcher. When a
-      // matching live server is selected, start the client through that
-      // launcher's redirect profile instead of the generic VAULTED runtime.
-      const localLauncher =
-        !remoteExactServer && !globalTarget && !selectedGlobal && build.onlineProvider
-          ? providerCatalog.find(
-              (provider) =>
-                provider.id === build.onlineProvider?.id &&
-                provider.global !== true &&
-                provider.auth === 'none',
-            ) ?? null
-          : null
-      const localServer =
-        localLauncher && target && (!chosen || providerMatches(chosen.providerId, localLauncher.id))
-          ? {
-              ...target,
-              name: chosen?.name || (join ? 'Friend lobby' : 'Live server'),
-              seasonId: chosen?.seasonId ?? seasonKey,
-              fallback: Boolean(fallbackNote),
-            }
-          : null
-      const providerTarget = globalTarget ?? (localServer ? localLauncher : null)
+      const providerTarget = globalTarget
 
       if (providerTarget) {
         // Do not run a full file scan before asking an unsigned player to
@@ -3255,19 +3426,14 @@ export default function App() {
         const started = await startOnlineProvider(
           build,
           providerTarget,
-          localServer ??
-            (chosen
-              ? {
-                  ...target!,
-                  name: chosen.name,
-                  seasonId: chosen.seasonId,
-                  fallback: Boolean(fallbackNote),
-                }
-              : undefined),
-          {
-            allowLocalLobby:
-              autoLocalAllowed || Boolean(selectedGlobal && isLocalEngine(selectedGlobal)),
-          },
+          chosen
+            ? {
+                ...target!,
+                name: chosen.name,
+                seasonId: chosen.seasonId,
+                fallback: Boolean(fallbackNote),
+              }
+            : undefined,
         )
         if (started) return
         if (accountPromptRef.current) return
@@ -3372,6 +3538,7 @@ export default function App() {
       openRetracBuild,
       phase,
       installed,
+      launcherDetections,
       requestDownload,
       runManagedPreflight,
       startOnlineProvider,
@@ -3488,8 +3655,30 @@ export default function App() {
     const build = activeBuild
     if (!build) return
 
-    // running -> close the client
+    // running -> stop the client or the external season launcher
     if (runningId === build.id) {
+      if (externalLauncher?.buildId === build.id) {
+        try {
+          const stopped = await stopProviderLauncher(externalLauncher.providerId)
+          setExternalLauncher(null)
+          setRunningId(null)
+          setPhase('idle')
+          setLaunchFailure((current) => (current?.id === build.id ? null : current))
+          if (!providerOnly) void clearOnlineLobby(onlineServiceUrlRef.current).catch(() => {})
+          pushToast({
+            tone: stopped ? 'info' : 'error',
+            title: stopped ? 'Season launcher stopped' : 'Could not stop the launcher',
+            description: stopped ? build.season.label : 'The launcher was already gone.',
+          })
+        } catch (error) {
+          pushToast({
+            tone: 'error',
+            title: 'Could not stop the launcher',
+            description: error instanceof Error ? error.message : 'Unknown error.',
+          })
+        }
+        return
+      }
       try {
         const closed = await closeBuildProcess(build.id)
         setRunningId(null)
@@ -3498,34 +3687,53 @@ export default function App() {
         if (!providerOnly) void clearOnlineLobby(onlineServiceUrlRef.current).catch(() => {})
         pushToast({
           tone: closed ? 'info' : 'error',
-          title: closed ? 'Fortnite closed' : 'Could not close Fortnite',
+          title: closed ? 'Fortnite stopped' : 'Could not stop Fortnite',
           description: closed ? build.season.label : 'The process was already gone.',
         })
       } catch (error) {
         pushToast({
           tone: 'error',
-          title: 'Could not close Fortnite',
+          title: 'Could not stop Fortnite',
           description: error instanceof Error ? error.message : 'Unknown error.',
         })
       }
       return
     }
 
-    // External companions own their own install and matchmaking. Play must open
-    // that launcher before the local runtime/download gates.
+    // Discord-only seasons use the same first step as a launcher install:
+    // verify the community (or detect its already-installed launcher) before
+    // the card offers Install Season. This is deliberately before the external
+    // handoff, because opening Discord is Step 1, not the season launch.
+    if (activeDiscordSetupLocked && activeDiscordGate) {
+      setDiscordPrompt({ build, gate: activeDiscordGate })
+      setDiscordError(null)
+      return
+    }
+
+    // External companions own their own install and matchmaking. A launcher
+    // that declares a runtime must be installed before the season download;
+    // once it is ready, Download Season becomes the next card action.
     if (autoGlobalBackend && (autoGlobalBackend.mode === 'external' || autoGlobalBackend.external)) {
+      if (activeRuntime?.required) {
+        if (!activeRuntime.installed) {
+          await handleInstallRuntime()
+          return
+        }
+        const seasonKey = artKeyFor(build.season)
+        const source = seasonKey ? seasonManifest[seasonKey] : undefined
+        if (!installed[build.id] && (source?.downloadUrl || source?.providerBuild)) {
+          requestDownload(build, { launchAfter: true })
+          return
+        }
+      }
       await startOnlineProvider(build, autoGlobalBackend)
       return
     }
 
-    // The companion launcher is step one of the card's unlock sequence. Never
-    // spend a season download before the verified runtime is installed.
+    // A companion without an external backend still gates the season download
+    // behind its official launcher.
     if (activeRuntime?.required && !activeRuntime.installed) {
-      pushToast({
-        tone: 'info',
-        title: `Install ${activeRuntime.label} first`,
-        description: 'Step 1 unlocks the green Download Season button automatically.',
-      })
+      await handleInstallRuntime()
       return
     }
 
@@ -3540,13 +3748,19 @@ export default function App() {
     await startBuild(build, undefined, { promptOnEmpty: true })
   }, [
     activeBuild,
+    activeDiscordGate,
+    activeDiscordSetupLocked,
+    activeRuntime,
     autoGlobalBackend,
     downloads,
+    handleInstallRuntime,
     installed,
     openRetracBuild,
+    seasonManifest,
     phase,
     providerOnly,
     pushToast,
+    externalLauncher,
     runningId,
     signedIn,
     startBuild,
@@ -4427,19 +4641,6 @@ export default function App() {
                     ? selectedServerValue
                     : null
                 }
-                selectedGlobalId={
-                  selectedServerValue?.startsWith('global:')
-                    ? selectedServerValue.slice('global:'.length)
-                    : null
-                }
-                localBackend={
-                  activeBuild?.onlineProvider
-                    ? autoGlobalProviders.find(
-                        (provider) =>
-                          provider.id === activeBuild.onlineProvider?.id && isLocalEngine(provider),
-                      ) ?? null
-                    : null
-                }
                 onSelectServer={(address) => {
                   if (!activeBuild) return
                   setServerSelections((prev) => {
@@ -4464,6 +4665,7 @@ export default function App() {
                 }}
                 discordGate={activeDiscordGate}
                 discordGateVerified={activeDiscordGateVerified}
+                launcherDetected={activeLauncher?.installed === true}
                 account={account}
                 sourceKeys={sourceKeys}
                 downloadSize={activeDownloadSize}

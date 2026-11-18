@@ -304,6 +304,18 @@ function testLaunchArguments() {
   assert.equal(local.includes('-AUTH_LOGIN=unused'), false)
   assert.equal(local.at(-1), `-backend=${backendUrl}`)
 
+  const localExchange = providerFortniteArgs(backendUrl, '', 'neo', '', {
+    localAuth: true,
+    username: 'Player 123!',
+    localExchangeCode: 'vlt_local_exchange_code',
+  })
+  assert.equal(localExchange.includes('-AUTH_LOGIN=unused'), true)
+  assert.equal(localExchange.includes('-AUTH_PASSWORD=vlt_local_exchange_code'), true)
+  assert.equal(localExchange.includes('-AUTH_TYPE=exchangecode'), true)
+  assert.equal(localExchange.includes('-AUTH_TYPE=epic'), false)
+  assert.equal(localExchange.includes('-log'), true)
+  assert.equal(localExchange.at(-1), `-backend=${backendUrl}`)
+
   const unauth = providerFortniteArgs('', '', 'stellar')
   assert.equal(unauth.some((arg) => arg.startsWith('-AUTH_')), false)
   assert.equal(unauth.at(-1), '-skippatchcheck')
@@ -322,6 +334,14 @@ function testLaunchArguments() {
   assert.equal(diagnostic.authMode, 'exchangecode')
   assert.equal(diagnostic.authCodePresent, true)
   assert.equal(diagnostic.authTokenPresent, true)
+  const localDiagnostic = providerLaunchDiagnostic({
+    providerId: 'neo',
+    args: localExchange,
+    backendUrl,
+    localAuth: true,
+    localExchange: true,
+  })
+  assert.equal(localDiagnostic.authMode, 'local-exchange')
   assert.equal(diagnostic.backendHost, '127.0.0.1:3551')
   assert.equal(diagnostic.backendLast, true)
   assert.equal(diagnostic.args.includes('-AUTH_PASSWORD=[redacted]'), true)

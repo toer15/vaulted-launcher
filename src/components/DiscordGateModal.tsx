@@ -75,12 +75,12 @@ export function DiscordGateModal({
               id="discord-gate-title"
               className="mt-2 font-display text-2xl font-black uppercase tracking-[0.03em] text-mist"
             >
-              Join Community Discord to Unlock Online Play
+              Join Community Discord to Unlock Install Season
             </h2>
             <p className="mt-2 text-[12.5px] leading-relaxed text-fog">
-              <span className="font-semibold text-mist">{gate.label}</span> gates online play for this
-              season. Join the community once, verify it here, and VAULTED will handle the redirect
-              DLL, backend connection and launch.
+              <span className="font-semibold text-mist">{gate.label}</span> unlocks this season
+              on the big card. Join the community once, verify it here, and VAULTED will unlock
+              Install Season for this PC.
             </p>
           </div>
           <button
@@ -149,7 +149,7 @@ export function DiscordGateModal({
             )}
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            {busy ? 'Verifying community…' : "I've Joined — Verify & Launch"}
+            {busy ? 'Verifying community…' : "I've Joined — Verify Community"}
           </button>
 
           <button

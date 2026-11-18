@@ -144,7 +144,37 @@
       "seasons": [
         "ch2-s7"
       ],
-      "statusUrl": "https://projecteon.dev/"
+      "statusUrl": "https://projecteon.dev/",
+      "runtime": {
+        "kind": "exe",
+        "label": "Eon Launcher",
+        "version": "2.4.44",
+        "downloadUrl": "https://projecteon.dev/launcher",
+        "downloadHosts": [
+          "projecteon.dev"
+        ],
+        "installerName": "Eon_Launcher_2.4.44_x64_en-US.exe",
+        "allowUnsigned": true,
+        "interactive": true,
+        "autoInstall": true,
+        "installedExecutables": [
+          "%LOCALAPPDATA%/Programs/Eon/Eon.exe",
+          "%LOCALAPPDATA%/Programs/Eon Launcher/Eon Launcher.exe",
+          "%LOCALAPPDATA%/Eon/Eon.exe",
+          "%PROGRAMFILES%/Eon/Eon.exe",
+          "%PROGRAMFILES%/Project Eon/Eon.exe"
+        ],
+        "executableNames": [
+          "Eon.exe",
+          "Eon Launcher.exe"
+        ],
+        "installRoots": [
+          "%LOCALAPPDATA%/Programs",
+          "%PROGRAMFILES%"
+        ],
+        "launchArgs": [],
+        "processName": "Eon.exe"
+      }
     },
     {
       "id": "hydro",
@@ -166,7 +196,36 @@
       "seasons": [
         "ch2-s5"
       ],
-      "statusUrl": "https://hydromp.site/"
+      "statusUrl": "https://hydromp.site/",
+      "runtime": {
+        "kind": "exe",
+        "label": "Hydro Launcher",
+        "version": "current",
+        "downloadUrl": "https://hydromp.site/launcher/Hydro_Setup.exe",
+        "downloadHosts": [
+          "hydromp.site"
+        ],
+        "installerName": "Hydro_Setup.exe",
+        "allowUnsigned": true,
+        "interactive": true,
+        "autoInstall": true,
+        "installedExecutables": [
+          "%LOCALAPPDATA%/Programs/Hydro/Hydro.exe",
+          "%LOCALAPPDATA%/Programs/Hydro Launcher/Hydro Launcher.exe",
+          "%LOCALAPPDATA%/Hydro/Hydro.exe",
+          "%PROGRAMFILES%/Hydro/Hydro.exe"
+        ],
+        "executableNames": [
+          "Hydro.exe",
+          "Hydro Launcher.exe"
+        ],
+        "installRoots": [
+          "%LOCALAPPDATA%/Programs",
+          "%PROGRAMFILES%"
+        ],
+        "launchArgs": [],
+        "processName": "Hydro.exe"
+      }
     },
     {
       "id": "interloop",
@@ -188,7 +247,37 @@
       "seasons": [
         "ch2-s2"
       ],
-      "statusUrl": "https://interloopfn.org/"
+      "statusUrl": "https://interloopfn.org/",
+      "runtime": {
+        "kind": "exe",
+        "label": "Interloop Launcher",
+        "version": "3.4.6",
+        "downloadUrl": "https://github.com/YouTube-Xercaii/project-interloop-releases/releases/download/v3.4.6/Interloop-Setup-3.4.6.exe",
+        "downloadHosts": [
+          "github.com",
+          "objects.githubusercontent.com"
+        ],
+        "installerName": "Interloop-Setup-3.4.6.exe",
+        "allowUnsigned": true,
+        "interactive": true,
+        "autoInstall": true,
+        "installedExecutables": [
+          "%LOCALAPPDATA%/Programs/Interloop/Interloop.exe",
+          "%LOCALAPPDATA%/Programs/Project Interloop/Interloop.exe",
+          "%LOCALAPPDATA%/Interloop/Interloop.exe",
+          "%PROGRAMFILES%/Interloop/Interloop.exe"
+        ],
+        "executableNames": [
+          "Interloop.exe",
+          "Interloop Launcher.exe"
+        ],
+        "installRoots": [
+          "%LOCALAPPDATA%/Programs",
+          "%PROGRAMFILES%"
+        ],
+        "launchArgs": [],
+        "processName": "Interloop.exe"
+      }
     },
     {
       "id": "crystal",
@@ -232,7 +321,36 @@
       "seasons": [
         "ch1-s3"
       ],
-      "statusUrl": "https://echofn.org/"
+      "statusUrl": "https://echofn.org/",
+      "runtime": {
+        "kind": "exe",
+        "label": "Echo Launcher",
+        "version": "current",
+        "downloadUrl": "https://projectecho.dev/download",
+        "downloadHosts": [
+          "projectecho.dev"
+        ],
+        "installerName": "EchoLauncher-Setup.exe",
+        "allowUnsigned": true,
+        "interactive": true,
+        "autoInstall": true,
+        "installedExecutables": [
+          "%LOCALAPPDATA%/Programs/Echo/Echo.exe",
+          "%LOCALAPPDATA%/Programs/Echo Launcher/Echo Launcher.exe",
+          "%LOCALAPPDATA%/Echo/Echo.exe",
+          "%PROGRAMFILES%/Echo/Echo.exe"
+        ],
+        "executableNames": [
+          "Echo.exe",
+          "Echo Launcher.exe"
+        ],
+        "installRoots": [
+          "%LOCALAPPDATA%/Programs",
+          "%PROGRAMFILES%"
+        ],
+        "launchArgs": [],
+        "processName": "Echo.exe"
+      }
     },
     {
       "id": "arc",
@@ -346,6 +464,16 @@
       "auth": "none",
       "external": true,
       "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "ambient-1511812282751914144",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/ambient-1511812282751914144",
+        "guildId": "1511812282751914144",
+        "label": "Ambient Discord"
+      },
       "seasons": [
         "ch2-s1"
       ],

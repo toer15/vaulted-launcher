@@ -155,8 +155,203 @@ function parseEmbeddedWeb(raw) {
  * full Discord invite URL or a bare vanity code, and keep it constrained to
  * Discord's two invite hosts so the renderer can open it safely.
  */
+function parseLauncherMetadata(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const label =
+    typeof raw.label === 'string' && raw.label.trim()
+      ? raw.label.trim().slice(0, 48)
+      : ''
+  if (!label) return null
+  const installedExecutables = Array.isArray(raw.installedExecutables)
+    ? raw.installedExecutables
+        .filter(
+          (value) =>
+            typeof value === 'string' &&
+            /^%(?:LOCALAPPDATA|PROGRAMFILES|PROGRAMFILES\(X86\))%[\\/][A-Za-z0-9 ._\\/-]+\.exe$/i.test(
+              value.trim(),
+            ) &&
+            !value.includes('..'),
+        )
+        .map((value) => value.trim().slice(0, 260))
+    : []
+  const executableNames = Array.isArray(raw.executableNames)
+    ? raw.executableNames
+        .filter(
+          (value) =>
+            typeof value === 'string' &&
+            SAFE_EXE_NAME.test(value.trim()) &&
+            path.basename(value.trim()) === value.trim(),
+        )
+        .map((value) => value.trim().slice(0, 128))
+    : []
+  const installRoots = Array.isArray(raw.installRoots)
+    ? raw.installRoots
+        .filter(
+          (value) =>
+            typeof value === 'string' &&
+            /^%(?:LOCALAPPDATA|PROGRAMFILES|PROGRAMFILES\(X86\))%(?:[\\/][A-Za-z0-9 ._-]+){0,4}$/i.test(
+              value.trim(),
+            ) &&
+            !value.includes('..'),
+        )
+        .map((value) => value.trim().slice(0, 260))
+    : []
+  if (installedExecutables.length === 0 && (executableNames.length === 0 || installRoots.length === 0)) {
+    return null
+  }
+  const processName =
+    typeof raw.processName === 'string' && SAFE_EXE_NAME.test(raw.processName.trim())
+      ? raw.processName.trim()
+      : executableNames[0] || path.basename(installedExecutables[0] || '') || ''
+  if (!processName) return null
+  return {
+    label,
+    installedExecutables,
+    executableNames,
+    installRoots,
+    processName,
+  }
+}
+
+function defaultLauncherMetadata(name, label) {
+  const clean = (value) =>
+    String(value || '')
+      .replace(/[^A-Za-z0-9 ._-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  const bases = [...new Set([clean(label), clean(name)].filter(Boolean))]
+  const names = []
+  for (const base of bases) {
+    for (const candidate of [base, `${base} Launcher`, base.replace(/\s+/g, ''), `${base.replace(/\s+/g, '')}Launcher`]) {
+      const fileName = `${candidate}.exe`
+      if (SAFE_EXE_NAME.test(fileName) && !names.includes(fileName)) names.push(fileName)
+    }
+  }
+  if (names.length === 0) return null
+  const display = bases[0] || 'Companion'
+  const installedExecutables = [
+    `%LOCALAPPDATA%/Programs/${display}/${display}.exe`,
+    `%LOCALAPPDATA%/Programs/${display} Launcher/${display} Launcher.exe`,
+    `%LOCALAPPDATA%/Programs/${display}/${display} Launcher.exe`,
+    `%PROGRAMFILES%/${display}/${display}.exe`,
+  ]
+  return {
+    label: `${display} Launcher`,
+    installedExecutables,
+    executableNames: names.slice(0, 8),
+    installRoots: ['%LOCALAPPDATA%/Programs', '%PROGRAMFILES%'],
+    processName: names[0],
+  }
+}
+
+function parseExeRuntimeMetadata(raw) {
+  const downloadUrl = parseHttpUrl(raw.downloadUrl)
+  if (!downloadUrl || downloadUrl.protocol !== 'https:') return null
+  const downloadHosts = Array.isArray(raw.downloadHosts)
+    ? [
+        ...new Set(
+          raw.downloadHosts
+            .filter(
+              (host) =>
+                typeof host === 'string' &&
+                /^(?:[a-z0-9-]+\.)*[a-z0-9-]+$/i.test(host.trim()),
+            )
+            .map((host) => host.trim().toLowerCase()),
+        ),
+      ]
+    : []
+  if (downloadHosts.length === 0 || downloadHosts.length > 8) return null
+  const host = downloadUrl.hostname.toLowerCase()
+  if (!downloadHosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) {
+    return null
+  }
+  const version =
+    typeof raw.version === 'string' ? raw.version.trim().slice(0, 64) : ''
+  if (!/^[0-9A-Za-z][0-9A-Za-z._-]{0,63}$/.test(version)) return null
+  const label =
+    typeof raw.label === 'string' && raw.label.trim()
+      ? raw.label.trim().slice(0, 48)
+      : 'Companion Launcher'
+  const installerName =
+    typeof raw.installerName === 'string' ? raw.installerName.trim().slice(0, 128) : ''
+  if (!/^[^\\/:*?"<>|]+\.exe$/i.test(installerName)) return null
+  const signerSubject =
+    typeof raw.signerSubject === 'string' ? raw.signerSubject.trim().slice(0, 256) : ''
+  // An unsigned installer may only be run after the player sees and confirms
+  // the official installer UI. This is deliberately opt-in per provider.
+  if (!signerSubject && raw.allowUnsigned !== true) return null
+  if (raw.interactive === false) return null
+  const installedExecutables = Array.isArray(raw.installedExecutables)
+    ? raw.installedExecutables
+        .filter(
+          (value) =>
+            typeof value === 'string' &&
+            /^%(?:LOCALAPPDATA|PROGRAMFILES|PROGRAMFILES\(X86\))%[\\/][A-Za-z0-9 ._\\/-]+\.exe$/i.test(
+              value.trim(),
+            ) &&
+            !value.includes('..'),
+        )
+        .map((value) => value.trim().slice(0, 260))
+    : []
+  const executableNames = Array.isArray(raw.executableNames)
+    ? raw.executableNames
+        .filter(
+          (value) =>
+            typeof value === 'string' &&
+            SAFE_EXE_NAME.test(value.trim()) &&
+            path.basename(value.trim()) === value.trim(),
+        )
+        .map((value) => value.trim().slice(0, 128))
+    : []
+  const installRoots = Array.isArray(raw.installRoots)
+    ? raw.installRoots
+        .filter(
+          (value) =>
+            typeof value === 'string' &&
+            /^%(?:LOCALAPPDATA|PROGRAMFILES|PROGRAMFILES\(X86\))%(?:[\\/][A-Za-z0-9 ._-]+){0,4}$/i.test(
+              value.trim(),
+            ) &&
+            !value.includes('..'),
+        )
+        .map((value) => value.trim().slice(0, 260))
+    : []
+  if (installedExecutables.length === 0 && (executableNames.length === 0 || installRoots.length === 0)) {
+    return null
+  }
+  const launchArgs = Array.isArray(raw.launchArgs)
+    ? raw.launchArgs
+        .filter((value) => typeof value === 'string' && /^-[^\s"'`]{1,160}$/.test(value.trim()))
+        .map((value) => value.trim())
+    : []
+  const processName =
+    typeof raw.processName === 'string' && SAFE_EXE_NAME.test(raw.processName.trim())
+      ? raw.processName.trim()
+      : executableNames[0] || path.basename(installedExecutables[0] || '') || ''
+  if (!processName) return null
+  return {
+    kind: 'exe',
+    label,
+    version,
+    downloadUrl: downloadUrl.toString(),
+    downloadHosts,
+    installerName,
+    allowUnsigned: !signerSubject,
+    interactive: true,
+    autoInstall: raw.autoInstall !== false,
+    installedExecutables,
+    executableNames,
+    installRoots,
+    signerSubject,
+    manifestIds: {},
+    launchArgs,
+    processName,
+  }
+}
+
 function parseRuntimeMetadata(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.kind !== 'msi') return null
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  if (raw.kind === 'exe') return parseExeRuntimeMetadata(raw)
+  if (raw.kind !== 'msi') return null
   const versionUrl = parseHttpUrl(raw.versionUrl)
   if (!versionUrl || versionUrl.protocol !== 'https:') return null
   const downloadHosts = Array.isArray(raw.downloadHosts)
@@ -384,6 +579,11 @@ function catalogData() {
     const discordAuth = entry.discordAuth === true || discordAuthorize
     const parsedDiscordGate = parseDiscordGate(entry.discordGate)
     const runtimeMetadata = parseRuntimeMetadata(entry.runtime)
+    const launcherMetadata =
+      parseLauncherMetadata(entry.launcher) ||
+      (mode === 'external' && launchKind === 'discord'
+        ? defaultLauncherMetadata(name, label)
+        : null)
 
     providers.push({
       id,
@@ -398,6 +598,7 @@ function catalogData() {
         ? { providerId: id, ...parsedDiscordGate }
         : undefined,
       runtime: runtimeMetadata,
+      launcher: launcherMetadata,
       mode,
       external: mode === 'external' || entry.external === true,
       launchKind,
@@ -455,6 +656,7 @@ function providerCatalog() {
     mode: entry.mode,
     external: entry.external === true,
     runtime: entry.runtime ? { required: true, label: entry.runtime.label } : undefined,
+    launcher: entry.launcher,
     launchKind: entry.launchKind,
     launchUrl: entry.launchUrl,
     launchHandshakePending: entry.launchHandshakePending,

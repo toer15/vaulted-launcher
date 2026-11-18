@@ -85,6 +85,15 @@ export interface ProviderLiveStatus {
   checkedAt: string
 }
 
+/** Optional companion-launcher detection metadata for a Discord community. */
+export interface ProviderLauncherConfig {
+  label: string
+  installedExecutables: string[]
+  executableNames: string[]
+  installRoots: string[]
+  processName: string
+}
+
 /** A live global OGFN backend configured in resources/providers/provider.json. */
 export interface GlobalBackend extends OnlineProviderConfig {
   backendUrl: string
@@ -99,6 +108,8 @@ export interface GlobalBackend extends OnlineProviderConfig {
   external?: boolean
   /** signed companion launcher that must be installed before the season download */
   runtime?: { required: boolean; label: string }
+  /** installed companion launcher detection for Discord-only communities */
+  launcher?: ProviderLauncherConfig
   /** official launcher, or a Discord community for projects without a site */
   launchKind?: 'official' | 'discord'
   /** official launcher, download page, or Discord invite opened when external */

@@ -5,6 +5,8 @@ import { cx } from '../lib/cx'
 import { formatDownloadSize, formatEtaMinutes } from '../lib/downloadSize'
 import {
   DEFAULT_PLAY_MODE,
+  ONLINE_UNAVAILABLE_MESSAGE,
+  onlineIsUnavailable,
   onlinePlayerCount,
   seasonStatusLabel,
   type SeasonPlayMode,
@@ -98,12 +100,13 @@ export function BuildList({
                     ? 'Verifying…'
                     : null
           : null
-        const isLive = playMode.online || playMode.globalOnline === true
+        // ONLINE and ONLINE · DISCORD are green. A plain launcher-only card
+        // stays red, even when its external project is reachable.
+        const isLive =
+          playMode.online || playMode.globalOnline === true || playMode.discordOnline === true
         const isChecking =
           !isLive && playMode.availability === 'global' && playMode.globalOffline !== true
-        const isLauncher = playMode.availability === 'launcher'
-        const isDirectoryOnly = playMode.availability === 'directory'
-        const isMuted = !isLive && (isLauncher || isDirectoryOnly)
+        const isUnavailable = onlineIsUnavailable(playMode)
         const onlineStatus = seasonStatusLabel(playMode)
         const chapterChanged = index === 0 || builds[index - 1].season.chapter !== build.season.chapter
         const hasSource = Boolean(sourceKey && sourceKeys?.has(sourceKey))
@@ -180,8 +183,19 @@ export function BuildList({
                     {!installed?.[build.id] &&
                       (hasSource ? (
                         <span
-                          title={sizeLabel ? `${sizeLabel} download` : 'Download available for this season'}
-                          className="shrink-0 rounded bg-emerald-400/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-emerald-300"
+                          title={
+                            isLive
+                              ? sizeLabel
+                                ? `${sizeLabel} download`
+                                : 'Download available for this season'
+                              : 'Download unlocks when this season has a live online server'
+                          }
+                          className={cx(
+                            'shrink-0 rounded px-1 py-px text-[9px] font-semibold uppercase tracking-wide',
+                            isLive
+                              ? 'bg-emerald-400/10 text-emerald-300'
+                              : 'bg-white/5 text-fog/70',
+                          )}
                         >
                           {sizeLabel ?? 'downloadable'}
                         </span>
@@ -204,9 +218,7 @@ export function BuildList({
                           ? 'border-emerald-300/45 bg-emerald-400/20 text-emerald-200 shadow-[0_0_16px_rgba(16,185,129,0.18)]'
                           : isChecking
                             ? 'border-amber-400/35 bg-amber-400/[0.08] text-amber-200/90'
-                            : isMuted
-                              ? 'border-sky-400/25 bg-sky-400/[0.08] text-sky-200/80'
-                              : 'border-rose-400/25 bg-rose-500/[0.08] text-rose-200/80',
+                            : 'border-rose-400/25 bg-rose-500/[0.08] text-rose-200/80',
                       )}
                     >
                       <span
@@ -216,9 +228,7 @@ export function BuildList({
                             ? 'bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]'
                             : isChecking
                               ? 'bg-amber-300'
-                              : isMuted
-                                ? 'bg-sky-400'
-                                : 'bg-rose-400/80',
+                              : 'bg-rose-400/80',
                           isLive && onlinePlayers > 0 && 'animate-pulse',
                         )}
                       />
@@ -253,6 +263,14 @@ export function BuildList({
                       {!downloadLabel && !build.onlineProvider && !installed?.[build.id] && hasSource && ` · ${sizeLabel ?? 'size unavailable'}`}
                     </span>
                   </span>
+                  {isUnavailable && (
+                    <span
+                      className="mt-1 block text-[9.5px] leading-snug text-amber-200/75"
+                      title={ONLINE_UNAVAILABLE_MESSAGE}
+                    >
+                      {ONLINE_UNAVAILABLE_MESSAGE}
+                    </span>
+                  )}
                   {installedNow && build.path && (
                     <span className="mt-1 flex min-w-0 items-center gap-1 text-[9px] text-fog" title={build.path}>
                       <HardDrive className="h-2.5 w-2.5 shrink-0" />

@@ -14,12 +14,14 @@ contextBridge.exposeInMainWorld('arc', {
   downloadBuild: (payload) => ipcRenderer.invoke('arc:download-build', payload),
   syncProviderBuild: (payload) => ipcRenderer.invoke('arc:sync-provider-build', payload),
   deleteBuild: (payload) => ipcRenderer.invoke('arc:delete-build', payload),
+  cleanupBuildStorage: () => ipcRenderer.invoke('arc:cleanup-build-storage'),
   verifyBuild: (payload) => ipcRenderer.invoke('arc:verify-build', payload),
   cancelDownload: (payload) => ipcRenderer.invoke('arc:cancel-download', payload),
   pauseDownload: (payload) => ipcRenderer.invoke('arc:pause-download', payload),
   listInterruptedDownloads: () => ipcRenderer.invoke('arc:list-interrupted-downloads'),
   onDownloadProgress: (callback) => subscribe('arc:download-progress', callback),
   onBuildExited: (callback) => subscribe('arc:build-exited', callback),
+  onProviderLauncherExited: (callback) => subscribe('arc:provider-launcher-exited', callback),
   onJoinFailed: (callback) => subscribe('arc:join-failed', callback),
   onLaunchStatus: (callback) => subscribe('arc:launch-status', callback),
   pickFolder: () => ipcRenderer.invoke('arc:pick-folder'),
@@ -41,6 +43,8 @@ contextBridge.exposeInMainWorld('arc', {
   fetchText: (url, options) => ipcRenderer.invoke('arc:fetch-text', url, options),
   fetchCommunityServers: (query) => ipcRenderer.invoke('arc:community-servers', query),
   providerCatalog: () => ipcRenderer.invoke('arc:provider-catalog'),
+  providerLauncherDetect: (providerId) =>
+    ipcRenderer.invoke('arc:provider-launcher-detect', providerId),
   discordGateVerify: (providerId) => ipcRenderer.invoke('arc:discord-gate-verify', providerId),
   openDiscordInvite: (inviteUrl) => ipcRenderer.invoke('arc:open-discord-invite', inviteUrl),
   providerLiveStatus: () => ipcRenderer.invoke('arc:provider-live-status'),
@@ -81,6 +85,9 @@ contextBridge.exposeInMainWorld('arc', {
   launchOnlineProvider: (payload) => ipcRenderer.invoke('arc:online-provider-launch', payload),
   openProviderLauncher: (providerId, options) =>
     ipcRenderer.invoke('arc:open-provider-launcher', providerId, options),
+  stopProviderLauncher: (providerId) =>
+    ipcRenderer.invoke('arc:stop-provider-launcher', providerId),
+  providerLauncherStatus: () => ipcRenderer.invoke('arc:provider-launcher-status'),
   providerRuntimeStatus: (providerId) =>
     ipcRenderer.invoke('arc:provider-runtime-status', providerId),
   installProviderRuntime: (providerId) =>

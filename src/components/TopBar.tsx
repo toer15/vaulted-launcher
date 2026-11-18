@@ -105,7 +105,7 @@ export function TopBar({
                   ? `${communityOnline} seasons have a live online server`
                   : onlineStatus === 'checking'
                     ? 'Checking the online server…'
-                    : 'Online server unreachable — local play only'
+                    : 'Online play is unavailable right now — the owner is working on it'
           }
         >
           <Radio className="h-3 w-3" />
@@ -119,7 +119,7 @@ export function TopBar({
                 ? 'Online'
                 : onlineStatus === 'checking'
                   ? 'Checking online…'
-                  : 'Offline — Local Play only'}
+                  : 'Online unavailable'}
         </span>
 
         <button

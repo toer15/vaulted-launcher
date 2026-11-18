@@ -8,8 +8,16 @@ export type PlayModeLabel =
   | 'SERVER CHECKING'
   | 'SERVER DOWN'
   | 'READY'
+  | 'LAUNCHER'
+  | 'ONLINE UNAVAILABLE'
   | 'OFFLINE'
   | 'ARCHIVED'
+
+/** Shown on cards whose season has no online route yet. */
+export const ONLINE_UNAVAILABLE_LABEL = 'ONLINE UNAVAILABLE'
+/** Full explanation used by the big card and the small-card subtitle. */
+export const ONLINE_UNAVAILABLE_MESSAGE =
+  "Online play isn't available to enter yet. The app owner is working hard to get this season online."
 
 /** How a season can actually be played today. */
 export type SeasonAvailability = 'global' | 'launcher' | 'directory' | 'unsupported'
@@ -47,6 +55,8 @@ export interface SeasonPlayMode {
   externalAvailable?: boolean
   /** compact label for the reachable external project(s) */
   externalProviderLabel?: string
+  /** Discord-gated online community (the card shows ONLINE · DISCORD) */
+  discordOnline?: boolean
   /** archive-only card; never offers Play */
   archived?: boolean
 }
@@ -54,10 +64,40 @@ export interface SeasonPlayMode {
 /** Shared neutral state for a season with no live route. */
 export const DEFAULT_PLAY_MODE: SeasonPlayMode = {
   online: false,
-  label: 'OFFLINE',
+  label: ONLINE_UNAVAILABLE_LABEL,
   lobbyCount: 0,
   playerCount: 0,
   availability: 'unsupported',
+}
+
+/**
+ * True only when this season has a route another player can actually join.
+ * A local lobby, a launcher profile, or an unknown directory listing is not
+ * online play and must not be presented as one.
+ */
+export function onlineIsAvailable(mode: SeasonPlayMode | null | undefined): boolean {
+  if (!mode || mode.archived) return false
+  return Boolean(mode.online || mode.globalOnline || mode.externalAvailable || mode.discordOnline)
+}
+
+/**
+ * True for both card states that count as online: a live ONLINE server or an
+ * ONLINE · DISCORD community. An external launcher link alone does not
+ * qualify: those cards show only LAUNCHER and keep the red launcher badge and
+ * a disabled download action.
+ */
+export function onlineIsLive(mode: SeasonPlayMode | null | undefined): boolean {
+  return Boolean(
+    mode && !mode.archived && (mode.online || mode.globalOnline || mode.discordOnline),
+  )
+}
+
+/** True when the probe has finished and no online route was found. */
+export function onlineIsUnavailable(mode: SeasonPlayMode | null | undefined): boolean {
+  if (!mode || mode.archived || onlineIsAvailable(mode)) return false
+  // A global backend that has not answered yet is still checking, not absent.
+  if (mode.availability === 'global' && mode.globalOffline !== true) return false
+  return true
 }
 
 /**
@@ -116,11 +156,14 @@ export function seasonStatusLabel(mode: SeasonPlayMode | null | undefined): stri
     return onlineStatusLabel(onlinePlayerCount(mode), seasonServerCount(mode))
   }
   if (mode?.availability === 'global') {
-    return mode.globalOffline ? 'OFFLINE' : 'CHECKING'
+    return mode.globalOffline ? ONLINE_UNAVAILABLE_LABEL : 'CHECKING'
   }
-  if (mode?.availability === 'launcher') return mode.externalAvailable ? 'LAUNCHER' : 'LOCAL'
-  if (mode?.availability === 'directory') return 'CHECKING'
-  return 'OFFLINE'
+  if (mode?.availability === 'launcher') {
+    return mode.externalAvailable || mode.discordOnline
+      ? 'LAUNCHER'
+      : ONLINE_UNAVAILABLE_LABEL
+  }
+  return ONLINE_UNAVAILABLE_LABEL
 }
 
 /** Human label for a directory season id, used to describe fallback targets. */
@@ -232,10 +275,12 @@ export function isLocalEngine(provider: Pick<GlobalBackend, 'global' | 'mode'>):
 export function providerCanAutoRoute(
   provider: GlobalBackend,
   live: ProviderLiveStatus | undefined,
-  exactServer?: CommunityServer | null,
+  _exactServer?: CommunityServer | null,
 ): boolean {
   if (live?.online !== true) return false
-  if (isLocalEngine(provider) && isRemoteServer(exactServer)) return false
+  // VAULTED only routes seasons to online servers. A bundled local launcher
+  // is never a fallback, even when its health probe responds on this PC.
+  if (isLocalEngine(provider)) return false
   return true
 }
 
@@ -518,11 +563,15 @@ export function playModesForBuilds(
     const hasGlobal = !archived && Boolean(seasonKey && globalBySeason.has(seasonKey))
     const external = !archived && seasonKey ? externalBySeason.get(seasonKey) ?? [] : []
     const hasExternal = external.length > 0
+    // A provider Discord gate is an online community route and produces the
+    // card's ONLINE · DISCORD badge. It is online even when no relay/backend
+    // health probe exists for the season.
+    const hasDiscord = !archived && (build.discordGates?.length ?? 0) > 0
     const availability: SeasonAvailability = archived
       ? 'unsupported'
       : hasGlobal
         ? 'global'
-        : hasExternal || build.onlineProvider
+        : hasExternal || hasDiscord || build.onlineProvider
           ? 'launcher'
           : 'unsupported'
     modes[build.id] = {
@@ -531,9 +580,9 @@ export function playModesForBuilds(
         ? 'ARCHIVED'
         : hasGlobal
           ? 'SERVER CHECKING'
-          : availability === 'launcher'
-            ? 'READY'
-            : 'OFFLINE',
+          : hasExternal || hasDiscord
+            ? 'LAUNCHER'
+            : ONLINE_UNAVAILABLE_LABEL,
       lobbyCount: 0,
       playerCount: 0,
       ...(build.onlineProvider
@@ -546,6 +595,7 @@ export function playModesForBuilds(
             externalProviderLabel: external.map((provider) => provider.label).join(' / '),
           }
         : {}),
+      ...(hasDiscord ? { discordOnline: true } : {}),
       ...(archived ? { archived: true } : {}),
     }
   }
@@ -602,6 +652,7 @@ export function playModesForBuilds(
       const onlineBackends = backends.filter((backend) => backend.live?.online === true)
       const globalOnline = onlineBackends.length > 0
       const globalOffline = known.length > 0 && onlineBackends.length === 0
+      const discordRoute = existing.discordOnline === true && !globalOnline && !existing.online
       const backendPlayers = onlineBackends.reduce(
         (total, backend) => total + Math.max(0, Math.floor(backend.live?.players ?? 0)),
         0,
@@ -617,10 +668,12 @@ export function playModesForBuilds(
           ? 'ONLINE'
           : existing.online
             ? existing.label
-            : globalOffline
-              ? 'SERVER DOWN'
-              : 'SERVER CHECKING',
-        availability: 'global',
+            : discordRoute
+              ? 'LAUNCHER'
+              : globalOffline
+                ? 'SERVER DOWN'
+                : 'SERVER CHECKING',
+        availability: discordRoute ? 'launcher' : 'global',
         globalOnline,
         globalChecking: known.length === 0,
         globalOffline,

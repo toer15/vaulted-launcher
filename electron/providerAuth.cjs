@@ -1714,6 +1714,7 @@ function createProviderAuth({
       let forceTokenRefresh = false
       let gamePid = null
       let nextRef = 0
+      const presenceWaiters = new Set()
 
       const log = (message) =>
         console.log(`[provider-auth] ${config.label} realtime: ${message}`)
@@ -1748,6 +1749,14 @@ function createProviderAuth({
         deadTimer = null
       }
 
+      function resolvePresenceWaiters(value) {
+        for (const waiter of presenceWaiters) {
+          clearTimeout(waiter.timer)
+          waiter.resolve(value)
+        }
+        presenceWaiters.clear()
+      }
+
       function close(reason = 'requested') {
         if (closed) return
         closed = true
@@ -1758,6 +1767,7 @@ function createProviderAuth({
         clearProcessTimer()
         clearKeepaliveTimer()
         clearDeadTimer()
+        resolvePresenceWaiters(false)
         const current = socket
         socket = null
         try {
@@ -1879,6 +1889,51 @@ function createProviderAuth({
             scheduleReconnect(reason)
           }
         },
+        /**
+         * Re-announce the running game immediately before a matchmaking
+         * request. Era's FindSingleSession rejects a game whose presence lease
+         * has lapsed with "The Era client isn't running" even when the OAuth
+         * token is valid. If the gateway socket is not currently verified,
+         * reconnect it and resolve once build.verify succeeds.
+         */
+        reassertPresence(reason = 'matchmaking requested presence', force = false) {
+          if (closed) return Promise.resolve(false)
+          const ws = socket
+          if (!force && ws && socketVerified && ws.readyState === WebSocket.OPEN) {
+            sendInGamePresence()
+            return new Promise((resolve) => {
+              const timer = setTimeout(() => resolve(true), 250)
+              timer.unref?.()
+            })
+          }
+          return new Promise((resolve) => {
+            const timer = setTimeout(() => {
+              presenceWaiters.delete(waiter)
+              resolve(false)
+            }, 8_000)
+            timer.unref?.()
+            const waiter = {
+              timer,
+              resolve: (value) => {
+                clearTimeout(timer)
+                resolve(Boolean(value))
+              },
+            }
+            presenceWaiters.add(waiter)
+            if (force && ws) {
+              // The socket may still claim to be open after the backend dropped
+              // its presence lease. Reconnect rather than sending on a stale
+              // connection.
+              try {
+                ws.close(1000)
+              } catch {
+                refresh(reason)
+              }
+            } else {
+              refresh(reason)
+            }
+          })
+        },
         close(reason = 'requested') {
           close(reason)
         },
@@ -1900,6 +1955,7 @@ function createProviderAuth({
         closed = true
         verified = false
         socketVerified = false
+        resolvePresenceWaiters(false)
         clearVerificationTimer()
         clearReconnectTimer()
         clearProcessTimer()
@@ -2126,6 +2182,7 @@ function createProviderAuth({
             // presence so the backend does not treat the fresh socket as a
             // launcher that is merely sitting online.
             if (gamePid && processIsAlive(gamePid)) sendInGamePresence()
+            resolvePresenceWaiters(true)
             log('gateway re-verified after reconnect')
             return
           }

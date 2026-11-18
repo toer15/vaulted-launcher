@@ -6,8 +6,15 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { execFile } = require('node:child_process')
 
-const matchmakerVersion = 3
+const matchmakerVersion = 4
 const matchmakerPort = Number(process.env.VAULTED_MATCHMAKER_PORT || 3552)
+// The hidden host has to boot a second Fortnite client, finish its login, and
+// inject the server before it owns UDP 7777. That routinely takes longer than
+// the old 8-second allowance after a match, while the restarting host is still
+// loading. Assigning the dead address is what sends the player into a failed
+// join; keep the queue alive long enough for the replacement host instead.
+const HOST_READY_TIMEOUT_MS = Number(process.env.VAULTED_HOST_READY_TIMEOUT_MS || 90_000)
+const WAITING_STATUS_INTERVAL_MS = 5000
 const gamePort = Number(process.env.VAULTED_GAME_PORT || 7777)
 const gameHost = process.env.VAULTED_GAME_HOST || '127.0.0.1'
 const gameStateFile = process.env.VAULTED_GAME_STATE_FILE ||
@@ -212,6 +219,7 @@ function websocketClient(socket) {
     )
 
     let waitingOnStateSince = 0
+    let lastWaitingStatusAt = 0
     // The host writes game-server-state.json when its selected mode is loaded.
     // Probing TCP 7777 was wrong: UE listens on UDP, so the queue never left
     // "Waiting for server" even though the host was ready.
@@ -229,12 +237,26 @@ function websocketClient(socket) {
         if (!ready) {
           if (!waitingOnStateSince) {
             waitingOnStateSince = Date.now()
+            lastWaitingStatusAt = 0
             log('hidden host is not ready for the selected playlist yet')
           }
-          if (Date.now() - waitingOnStateSince > 8000) {
-            log('host not ready after 8s; attempting join anyway')
-            announced = true
-            finishMatch()
+          const now = Date.now()
+          if (now - lastWaitingStatusAt >= WAITING_STATUS_INTERVAL_MS) {
+            lastWaitingStatusAt = now
+            sendStatus('Waiting', {
+              totalPlayers: 1,
+              connectedPlayers: 0,
+              estimatedWaitSec: Math.max(
+                1,
+                Math.ceil((HOST_READY_TIMEOUT_MS - (now - waitingOnStateSince)) / 1000),
+              ),
+            })
+          }
+          if (now - waitingOnStateSince > HOST_READY_TIMEOUT_MS) {
+            // Never point the client at a port nobody owns. Returning to the
+            // lobby is recoverable; joining the stale address is not.
+            log(`host not ready after ${HOST_READY_TIMEOUT_MS}ms; cancelling the queue`)
+            cancel()
           }
           return
         }

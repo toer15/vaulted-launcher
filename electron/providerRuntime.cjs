@@ -3,23 +3,26 @@
 const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
-const { execFile } = require('node:child_process')
+const { execFile, spawn } = require('node:child_process')
 
 /**
  * Download and verify a provider's documented desktop runtime.
  *
  * This module only understands catalog metadata that main has already
  * validated. It never accepts a URL or a filesystem path from the renderer.
- * The release endpoint is the provider's own version service; the installer
- * must be an HTTPS MSI from a configured host and must carry a valid
- * Authenticode signature from the configured publisher.
+ * The release endpoint is the provider's own version service, or a pinned
+ * official installer URL. The installer must be HTTPS from a configured host.
+ * MSI releases must carry a valid Authenticode signature. Interactive EXE
+ * releases may be unsigned only when the catalog explicitly opts in, because
+ * the player sees and confirms the installer UI instead of a silent install.
  */
 
 const VERSION_TIMEOUT_MS = 15_000
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000
-const INSTALL_TIMEOUT_MS = 4 * 60_000
+const INSTALL_TIMEOUT_MS = 10 * 60_000
 const MIN_INSTALLER_BYTES = 64 * 1024
-const MAX_INSTALLER_BYTES = 512 * 1024 * 1024
+const MAX_INSTALLER_BYTES = 900 * 1024 * 1024
+const MAX_EXE_SEARCH_ENTRIES = 3_000
 const runtimeTasks = new Map()
 
 function expandEnvironmentPath(value, env = process.env) {
@@ -41,10 +44,54 @@ function safeVersion(value) {
 
 function installerFileName(metadata, version) {
   const name = String(metadata.installerName || '').replace('{version}', version)
-  if (!/^[^\\/:*?"<>|]+\.msi$/i.test(name)) {
+  const extension = metadata.kind === 'msi' ? 'msi' : 'exe'
+  if (!new RegExp(`^[^\\\\/:*?"<>|]+\\.${extension}$`, 'i').test(name)) {
     throw new Error('The provider runtime metadata has an invalid installer name.')
   }
   return name
+}
+
+function executableInRoots(metadata, env = process.env) {
+  const names = new Set(
+    (metadata.executableNames || []).map((name) => String(name).toLowerCase()),
+  )
+  if (names.size === 0) return ''
+  const roots = [
+    ...new Set(
+      (metadata.installRoots || [])
+        .map((root) => path.normalize(expandEnvironmentPath(root, env)))
+        .filter((root) => path.isAbsolute(root)),
+    ),
+  ]
+  let inspected = 0
+  const visit = (directory, depth) => {
+    if (depth > 3 || inspected >= MAX_EXE_SEARCH_ENTRIES) return ''
+    let entries
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true })
+    } catch {
+      return ''
+    }
+    for (const entry of entries) {
+      if (++inspected >= MAX_EXE_SEARCH_ENTRIES) return ''
+      const full = path.join(directory, entry.name)
+      if (entry.isFile() && names.has(entry.name.toLowerCase())) return full
+      if (
+        entry.isDirectory() &&
+        depth < 3 &&
+        !/^(?:node_modules|\.git|cache|temp|tmp|logs?)$/i.test(entry.name)
+      ) {
+        const found = visit(full, depth + 1)
+        if (found) return found
+      }
+    }
+    return ''
+  }
+  for (const root of roots) {
+    const found = visit(root, 0)
+    if (found) return found
+  }
+  return ''
 }
 
 function installedExecutable(metadata, env = process.env) {
@@ -57,12 +104,16 @@ function installedExecutable(metadata, env = process.env) {
       /* not installed at this documented location */
     }
   }
-  return ''
+  return executableInRoots(metadata, env)
 }
 
 function launchArguments(metadata, version) {
   const manifestId = metadata.manifestIds?.[String(version || '').trim()]
-  if (!manifestId) return null
+  if (!manifestId) {
+    // Single-season launchers do not need a build flag; opening the official
+    // executable is the complete handoff.
+    return (metadata.launchArgs || []).map((arg) => String(arg))
+  }
   return (metadata.launchArgs || []).map((arg) =>
     String(arg).replace(/\{manifestId\}/g, manifestId),
   )
@@ -73,6 +124,29 @@ function runtimeFolder(root, providerId) {
 }
 
 async function resolveRelease(metadata, options = {}) {
+  if (metadata.kind === 'exe') {
+    let downloadUrl
+    try {
+      downloadUrl = new URL(String(metadata.downloadUrl || ''))
+    } catch {
+      throw new Error('The provider launcher metadata has no valid download URL.')
+    }
+    if (
+      downloadUrl.protocol !== 'https:' ||
+      downloadUrl.username ||
+      downloadUrl.password ||
+      !hostAllowed(downloadUrl.hostname, metadata.downloadHosts || [])
+    ) {
+      throw new Error('The provider launcher download is not from a trusted HTTPS host.')
+    }
+    // The official download route may be extensionless (for example
+    // /launcher) and send Content-Disposition instead. The installer name and
+    // host are validated separately, and the downloaded file is always saved
+    // with the catalog's .exe name.
+    const version = safeVersion(metadata.version)
+    if (!version) throw new Error('The provider launcher metadata has no valid version.')
+    return { version, url: downloadUrl.toString(), signature: '' }
+  }
   const fetchImpl = options.fetchImpl || fetch
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), VERSION_TIMEOUT_MS)
@@ -298,8 +372,91 @@ function installMsi(file) {
   })
 }
 
+function installExeElevated(file) {
+  return new Promise((resolve, reject) => {
+    const escaped = String(file).replace(/'/g, "''")
+    const script =
+      `$p = Start-Process -FilePath '${escaped}' -Verb RunAs -Wait -PassThru; ` +
+      'if ($null -eq $p) { exit 1 }; exit $p.ExitCode'
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { windowsHide: true, timeout: INSTALL_TIMEOUT_MS },
+      (error, _stdout, stderr) => {
+        const code = typeof error?.code === 'number' ? error.code : error ? 1 : 0
+        if (code === 0 || code === 3010) {
+          resolve(code)
+          return
+        }
+        const detail = String(stderr || '').trim()
+        reject(
+          new Error(
+            `The provider launcher installer needs Windows administrator approval. ` +
+              `Approve the UAC prompt to finish installing it.${detail ? ` ${detail}` : ''}`,
+          ),
+        )
+      },
+    )
+  })
+}
+
+function installExe(file) {
+  return new Promise((resolve, reject) => {
+    if (process.platform !== 'win32') {
+      reject(new Error('The provider launcher EXE can only be installed on Windows.'))
+      return
+    }
+    const child = spawn(file, [], {
+      detached: false,
+      stdio: 'ignore',
+      windowsHide: false,
+    })
+    let settled = false
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      callback(value)
+    }
+    const timer = setTimeout(() => {
+      child.kill()
+      finish(
+        reject,
+        new Error('The provider launcher installer did not finish within 10 minutes.'),
+      )
+    }, INSTALL_TIMEOUT_MS)
+    timer.unref?.()
+    child.once('error', (error) => {
+      // Node reports ERROR_ELEVATION_REQUIRED from CreateProcess as EACCES on
+      // Windows. These installers carry a requireAdministrator manifest, so
+      // relaunch them through ShellExecute with the normal UAC prompt instead
+      // of surfacing a misleading permission error.
+      if (error?.code === 'EACCES' || error?.code === 'EPERM') {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        installExeElevated(file).then(resolve, reject)
+        return
+      }
+      finish(reject, error)
+    })
+    child.once('exit', (code) => {
+      if (code === 0 || code === 3010 || code === null) {
+        finish(resolve, code ?? 0)
+        return
+      }
+      finish(
+        reject,
+        new Error(
+          `The provider launcher installer was closed before setup completed (exit ${code}).`,
+        ),
+      )
+    })
+  })
+}
+
 async function ensureProviderRuntime(providerId, metadata, options = {}) {
-  if (!metadata || metadata.kind !== 'msi') return null
+  if (!metadata || (metadata.kind !== 'msi' && metadata.kind !== 'exe')) return null
   const cacheKey = `${providerId}:${options.root}`
   if (runtimeTasks.has(cacheKey)) return runtimeTasks.get(cacheKey)
 
@@ -325,7 +482,7 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
       try {
         const size = (await fs.promises.stat(installer)).size
         if (size === Number(meta.size) && (await sha256File(installer)) === meta.sha256) {
-          await authenticode(installer, metadata.signerSubject)
+          if (metadata.signerSubject) await authenticode(installer, metadata.signerSubject)
           verified = true
         }
       } catch {
@@ -347,7 +504,9 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
         ...options,
         target: installer,
       })
-      const publisher = await authenticode(installer, metadata.signerSubject)
+      const publisher = metadata.signerSubject
+        ? await authenticode(installer, metadata.signerSubject)
+        : 'unsigned-interactive-installer'
       meta = {
         version: release.version,
         url: release.url,
@@ -362,7 +521,8 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
 
     let executable = installedExecutable(metadata, options.env)
     const currentInstall =
-      executable && (await fileVersion(executable)).startsWith(release.version)
+      executable &&
+      (metadata.kind === 'exe' || (await fileVersion(executable)).startsWith(release.version))
     if (!currentInstall && metadata.autoInstall !== false && options.install !== false) {
       options.report?.({
         received: meta.size,
@@ -373,11 +533,15 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
         phase: 'installing',
         url: release.url,
       })
-      await installMsi(installer)
+      if (metadata.kind === 'msi') {
+        await installMsi(installer)
+      } else {
+        await installExe(installer)
+      }
       executable = installedExecutable(metadata, options.env)
       if (!executable) {
         throw new Error(
-          `The signed provider runtime installed, but ${metadata.processName} was not found in its documented install folders.`,
+          `The provider launcher installed, but ${metadata.processName} was not found in its documented install folders.`,
         )
       }
       await fs.promises.writeFile(

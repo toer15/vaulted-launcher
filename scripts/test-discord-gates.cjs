@@ -42,6 +42,18 @@ for (const [id, seasonId] of Object.entries(expected)) {
   assert.equal(profile.discordGate?.providerId, id, `${id} profile lost its Discord gate`)
 }
 
+// Every Discord-only community must have a usable Step 1 gate, not just the
+// six season mappings exercised above. This catches a new Discord season that
+// is added to the catalogue without an invite or pinned guild.
+for (const provider of catalog.filter((entry) => entry.external && entry.launchKind === 'discord')) {
+  assert.ok(provider.discordGate, `${provider.id} has no Discord gate`)
+  assert.notEqual(provider.discordGate.statusOnly, true, `${provider.id} gate is status-only`)
+  assert.equal(provider.discordGate.providerId, provider.id)
+  assert.ok(inviteCode(provider.discordGate.inviteUrl), `${provider.id} invite is not openable`)
+  assert.match(provider.discordGate.guildId || '', /^\d{17,20}$/, `${provider.id} has no pinned Discord guild`)
+  assert.ok(provider.launcher, `${provider.id} has no launcher detection metadata`)
+}
+
 // Retrac's Discord is the official community badge, not a Play gate.
 const retrac = byId.get('retrac-official')
 assert.ok(retrac?.discordGate, 'Retrac has no official Discord badge')
@@ -69,6 +81,27 @@ async function main() {
   assert.equal(result.ok, true)
   assert.equal(result.guildId, gate.guildId)
   assert.equal(result.memberCount, 1234)
+
+  // discord.com can answer desktop clients with a Cloudflare 429. The public
+  // legacy API host must still complete the same pinned-guild verification.
+  const attempted = []
+  const fallback = await verifyDiscordCommunity(gate, {
+    fetchImpl: async (url) => {
+      attempted.push(url)
+      if (attempted.length === 1) {
+        return { ok: false, status: 429, json: async () => ({ message: 'rate limited' }) }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ guild: { id: gate.guildId, name: 'ARC' } }),
+      }
+    },
+  })
+  assert.equal(fallback.ok, true)
+  assert.equal(fallback.guildId, gate.guildId)
+  assert.ok(attempted.length >= 2, 'Discord API fallback was not attempted')
+  assert.match(attempted[1], /^https:\/\/discordapp\.com\/api\/v9\/invites\//)
 
   await assert.rejects(
     verifyDiscordCommunity(gate, {

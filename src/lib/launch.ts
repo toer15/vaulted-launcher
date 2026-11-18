@@ -13,6 +13,18 @@ import type {
 } from '../types'
 import type { CommunityServer, CommunityServerQuery, CommunityServerResult } from './network'
 
+export interface ProviderLauncherStatus {
+  providerId: string
+  pid: number
+  startedAt: string
+}
+
+export interface ProviderLauncherExit {
+  providerId: string
+  pid: number
+  reason: string
+}
+
 export interface InventoryItem {
   id: string
   type: ShopItemType
@@ -41,7 +53,7 @@ export interface LaunchPayload {
   username?: string
   /** the account's owned shop items, written into the in-game athena profile */
   inventory?: InventoryPayload
-  /** set to join a friend's lobby instead of starting a local host */
+      /** set to join a friend's lobby instead of starting a host */
   joinHost?: string
   joinPort?: number
   /** only automatic public-lobby joins are allowed to fall back to hosting */
@@ -96,6 +108,12 @@ export interface DownloadProgress {
 export interface ProviderRuntimeStatus {
   providerId: string
   required: boolean
+  label: string
+  installed: boolean
+}
+
+export interface ProviderLauncherDetection {
+  providerId: string
   label: string
   installed: boolean
 }
@@ -213,6 +231,7 @@ export interface LauncherBridge {
     buildId?: string
   }): Promise<ProviderSyncResult>
   deleteBuild?(payload: { id: string; path: string }): Promise<{ deleted: boolean; managed: boolean; running?: boolean }>
+  cleanupBuildStorage?(): Promise<{ folders: string[]; freedBytes: number; removed: string[] }>
   verifyBuild?(payload: { id: string; path: string; executable: string }): Promise<BuildVerifyReport>
   cancelDownload?(payload: { id: string }): Promise<{ cancelled: boolean }>
   pauseDownload?(payload: { id: string }): Promise<{ paused: boolean }>
@@ -220,6 +239,7 @@ export interface LauncherBridge {
   listInterruptedDownloads?(): Promise<InterruptedDownload[]>
   onDownloadProgress?(callback: (progress: DownloadProgress) => void): () => void
   onBuildExited?(callback: (payload: BuildExitInfo) => void): () => void
+  onProviderLauncherExited?(callback: (payload: ProviderLauncherExit) => void): () => void
   onJoinFailed?(callback: (payload: { id?: string; host: string; port: number; reason: string }) => void): () => void
   onLaunchStatus?(callback: (payload: { id?: string; message: string }) => void): () => void
   pickFolder?(): Promise<string | null>
@@ -283,6 +303,8 @@ export interface LauncherBridge {
   fetchCommunityServers?(query: CommunityServerQuery): Promise<CommunityServerResult>
   /** live global OGFN backends from resources/providers/provider.json */
   providerCatalog?(): Promise<GlobalBackend[]>
+  /** Detect an installed community launcher without downloading anything. */
+  providerLauncherDetect?(providerId: string): Promise<ProviderLauncherDetection | null>
   /** Verify the public invite for a Discord-gated community. */
   discordGateVerify?(providerId: string): Promise<{
     ok: boolean
@@ -355,6 +377,8 @@ export interface LauncherBridge {
     pid?: number | null
     tracked?: boolean
   }>
+  stopProviderLauncher?(providerId: string): Promise<{ stopped: boolean }>
+  providerLauncherStatus?(): Promise<ProviderLauncherStatus[]>
   providerRuntimeStatus?(providerId: string): Promise<ProviderRuntimeStatus | null>
   installProviderRuntime?(providerId: string): Promise<{
     ok: boolean
@@ -373,8 +397,6 @@ export interface LauncherBridge {
     buildFolderPath: string
     joinHost?: string
     joinPort?: number
-    /** explicit opt-in for the bundled lobby-only backend when no remote server exists */
-    allowLocalLobby?: boolean
   }): Promise<OnlineProviderLaunchResult>
   window?: WindowControls
 }
@@ -491,7 +513,6 @@ export async function launchOnlineProvider(
   build: Build,
   provider: OnlineProviderConfig,
   server?: Pick<CommunityServer, 'host' | 'port'> | null,
-  options: { allowLocalLobby?: boolean } = {},
 ): Promise<OnlineProviderLaunchResult> {
   if (!window.arc?.launchOnlineProvider) {
     throw new Error('Online play needs the desktop app.')
@@ -504,7 +525,6 @@ export async function launchOnlineProvider(
       version: build.version,
       buildFolderPath: build.path,
       ...(server ? { joinHost: server.host, joinPort: server.port } : {}),
-      ...(options.allowLocalLobby ? { allowLocalLobby: true } : {}),
     })
   } catch (error) {
     throw cleanIpcError(error)
@@ -566,6 +586,19 @@ export async function startDownload(
   }
 }
 
+export async function cleanupBuildStorage(): Promise<{
+  folders: string[]
+  freedBytes: number
+  removed: string[]
+}> {
+  if (!window.arc?.cleanupBuildStorage) return { folders: [], freedBytes: 0, removed: [] }
+  try {
+    return await window.arc.cleanupBuildStorage()
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
 export async function deleteBuild(id: string, path: string): Promise<{ deleted: boolean; managed: boolean; running?: boolean }> {
   if (!window.arc?.deleteBuild) return { deleted: false, managed: false }
   try {
@@ -619,6 +652,17 @@ export async function fetchProviderRuntimeStatus(
   }
 }
 
+export async function detectProviderLauncher(
+  providerId: string,
+): Promise<ProviderLauncherDetection | null> {
+  if (!window.arc?.providerLauncherDetect) return null
+  try {
+    return await window.arc.providerLauncherDetect(providerId)
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
 export async function installProviderRuntime(providerId: string) {
   if (!window.arc?.installProviderRuntime) {
     throw new Error('Companion runtime installation needs the desktop app.')
@@ -638,6 +682,22 @@ export function subscribeProviderRuntimeProgress(
 
 export function subscribeBuildExit(callback: (payload: BuildExitInfo) => void): () => void {
   return window.arc?.onBuildExited?.(callback) ?? (() => {})
+}
+
+export function subscribeProviderLauncherExit(
+  callback: (payload: ProviderLauncherExit) => void,
+): () => void {
+  return window.arc?.onProviderLauncherExited?.(callback) ?? (() => {})
+}
+
+export async function stopProviderLauncher(providerId: string): Promise<boolean> {
+  if (!window.arc?.stopProviderLauncher) return false
+  try {
+    const result = await window.arc.stopProviderLauncher(providerId)
+    return result?.stopped === true
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
 }
 
 export function subscribeJoinFailed(

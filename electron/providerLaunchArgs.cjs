@@ -56,6 +56,16 @@ function providerFortniteArgs(backendUrl, authCode = '', providerId = '', authTo
       `-AUTH_PASSWORD=${authCode}`,
       '-AUTH_TYPE=exchangecode',
     )
+  } else if (options.localExchangeCode) {
+    // The bundled private server issues this short-lived code. An exchange
+    // login reaches the lobby directly; the password path can leave older
+    // clients on Epic's manual login form when they ignore -AUTH_LOGIN.
+    args.push(
+      '-AUTH_LOGIN=unused',
+      `-AUTH_PASSWORD=${options.localExchangeCode}`,
+      '-AUTH_TYPE=exchangecode',
+      '-log',
+    )
   } else if (options.localAuth === true) {
     // Local profiles (Reboot, Neo, EZFN Hybrid) have no provider-issued
     // exchange code. The bundled Neonite backend accepts a password grant, but
@@ -110,6 +120,7 @@ function providerLaunchDiagnostic({
   authCode = '',
   authToken = '',
   localAuth = false,
+  localExchange = false,
 } = {}) {
   const redactedArgs = Array.isArray(args) ? args.map(redactLaunchArg) : []
   return {
@@ -119,7 +130,13 @@ function providerLaunchDiagnostic({
     buildId: safeText(buildId, 200) || null,
     seasonId: safeText(seasonId, 40) || null,
     version: safeText(version, 40) || null,
-    authMode: authCode ? 'exchangecode' : localAuth === true ? 'local' : 'none',
+    authMode: authCode
+      ? 'exchangecode'
+      : localExchange
+        ? 'local-exchange'
+        : localAuth === true
+          ? 'local'
+          : 'none',
     authCodePresent: Boolean(authCode),
     authTokenPresent: Boolean(authToken),
     backendPresent: Boolean(backendUrl),

@@ -157,7 +157,7 @@ export function SettingsView({
             <div className="min-w-0">
               <p className="text-[12px] font-semibold text-mist">Download defaults</p>
               <p className="mt-1 text-[11px] leading-relaxed text-fog">
-                Seasons with a live online server download here, then Play launches straight in. Other builds use this root and launch locally.
+                Seasons with a live online server download here, then Play launches straight in. Other builds use this root; online play unlocks when a server is available.
               </p>
             </div>
             <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-400/[0.06] px-2.5 py-1 text-[10px] font-semibold text-emerald-300">

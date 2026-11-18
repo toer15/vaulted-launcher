@@ -32,6 +32,7 @@ const {
   logProviderLaunchDiagnostic,
 } = require('./providerLaunchArgs.cjs')
 const { createEraBridge } = require('./eraBridge.cjs')
+const { cleanupManagedBuild: cleanupBuildFolder } = require('./buildCleanup.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
@@ -95,7 +96,7 @@ const BACKEND_URL = `http://127.0.0.1:${BACKEND_PORT}/`
 const BACKEND_START_TIMEOUT = 60_000
 const MATCHMAKER_PORT = 3552
 const MATCHMAKER_URL = `http://127.0.0.1:${MATCHMAKER_PORT}`
-const MATCHMAKER_PROTOCOL = 3
+const MATCHMAKER_PROTOCOL = 4
 const GAME_SERVER_PORT = 7777
 const BACKEND_PASSWORD = 'Rebooted'
 
@@ -419,6 +420,48 @@ async function folderSize(folder) {
 
   folderSizePending.set(resolved, pending)
   return pending
+}
+
+/* ------------------------------------------------------------ disk cleanup */
+
+async function cleanupManagedBuild(key, targetDir, canonicalHint = '') {
+  const cleanup = await cleanupBuildFolder({
+    targetDir,
+    buildsRoot: buildsRoot(),
+    profile: readProfilesFile()?.builds?.[key] || null,
+    canonicalHint,
+  })
+  if (cleanup) {
+    folderSizeCache.delete(path.resolve(targetDir))
+    folderSizeCache.delete(path.resolve(cleanup.folder))
+  }
+  return cleanup
+}
+
+async function cleanupManagedBuildStorage() {
+  const root = path.resolve(buildsRoot())
+  const result = { folders: [], freedBytes: 0, removed: [] }
+  let entries
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true })
+  } catch {
+    return result
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const key = entry.name
+    if (running.has(key) || downloads.has(key)) continue
+    try {
+      const cleanup = await cleanupManagedBuild(key, path.join(root, key))
+      if (!cleanup) continue
+      result.folders.push(cleanup.folder)
+      result.freedBytes += cleanup.freedBytes
+      result.removed.push(...cleanup.removed)
+    } catch (error) {
+      console.warn(`[VAULTED] Could not clean ${key}: ${error instanceof Error ? error.message : error}`)
+    }
+  }
+  return result
 }
 
 function assertBuild(payload) {
@@ -816,6 +859,22 @@ function patchBackendRuntime(paths) {
 }
 
 /** Persist the launcher account so EOS/external-auth logins use the same name. */
+function writeBackendAuthCode(paths, username) {
+  const safe = normalizeUsername(username)
+  const code = `vlt_${crypto.randomBytes(24).toString('hex')}`
+  const file = path.join(paths.cwd, 'vaulted-auth.json')
+  try {
+    fs.writeFileSync(
+      file,
+      JSON.stringify({ code, username: safe, expiresAt: Date.now() + 10 * 60 * 1000 }),
+      { mode: 0o600 },
+    )
+  } catch (error) {
+    throw new Error(`Could not prepare the local game login: ${error.message}`)
+  }
+  return code
+}
+
 function writeBackendUsername(paths, username) {
   const configPath = path.join(paths.cwd, 'config.ini')
   let config = ''
@@ -1308,7 +1367,10 @@ function syncVaultedInventory(payload) {
 async function ensureLocalBackend(username) {
   const requestedUser = normalizeUsername(username)
   if (backendReady && backendUsername === requestedUser && (await backendResponds())) {
-    return { reused: true, pid: null }
+    // Every launch gets a fresh one-time code so the client can skip Epic's
+    // manual login form even when the private server is already running.
+    const gameCode = writeBackendAuthCode(backendPaths(), requestedUser)
+    return { reused: true, pid: null, gameCode }
   }
   if (backendStartPromise) return backendStartPromise
 
@@ -1316,6 +1378,7 @@ async function ensureLocalBackend(username) {
     const paths = await ensureBackendRuntime()
     patchBackendRuntime(paths)
     writeBackendUsername(paths, requestedUser)
+    const gameCode = writeBackendAuthCode(paths, requestedUser)
 
     // The previous release has no ticket/session fix. Stop only our own
     // Neonite listener so the patched files are loaded for this launch.
@@ -1367,7 +1430,7 @@ async function ensureLocalBackend(username) {
 
     backendReady = true
     backendUsername = requestedUser
-    return { reused: false, pid: child.pid }
+    return { reused: false, pid: child.pid, gameCode }
   })().finally(() => {
     backendStartPromise = null
   })
@@ -2394,6 +2457,18 @@ function trackProviderLauncher(providerId, child) {
   if (!child?.pid) return
   const entry = { pid: child.pid, startedAt: Date.now(), sawGame: false, checking: false }
   providerLaunchers.set(providerId, entry)
+  let stopped = false
+  const stop = (reason = 'exited') => {
+    if (stopped) return
+    stopped = true
+    clearInterval(timer)
+    if (providerLaunchers.get(providerId) === entry) providerLaunchers.delete(providerId)
+    send('arc:provider-launcher-exited', {
+      providerId,
+      pid: entry.pid,
+      reason,
+    })
+  }
   const timer = setInterval(async () => {
     if (entry.checking) return
     entry.checking = true
@@ -2405,22 +2480,32 @@ function trackProviderLauncher(providerId, child) {
       }
       if (!entry.sawGame) {
         // Retrac may still be signing in or showing its own UI. Do not close a
-        // helper just because the game has not appeared yet.
-        if (Date.now() - entry.startedAt > 15 * 60_000) stop()
+        // helper just because the game has not appeared yet. Keep it up until
+        // the game exits or the user presses Stop, with no auto-close timeout.
         return
       }
       await closeProcessTreeGracefully(entry.pid)
-      stop()
+      stop('game-exited')
     } finally {
       entry.checking = false
     }
   }, 5000)
   timer.unref?.()
-  const stop = () => {
-    clearInterval(timer)
-    if (providerLaunchers.get(providerId) === entry) providerLaunchers.delete(providerId)
+  child.once('exit', () => stop('exited'))
+}
+
+/** Public companion-launcher detection; never returns the filesystem path. */
+function providerLauncherStatus(providerId) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id) return null
+  const provider = providerCatalog().find((entry) => entry.id === id)
+  const metadata = provider?.launcher
+  if (!metadata) return null
+  return {
+    providerId: id,
+    label: metadata.label,
+    installed: Boolean(installedExecutable(metadata)),
   }
-  child.once('exit', stop)
 }
 
 /** Public runtime state for the season card; no URLs or filesystem internals. */
@@ -3783,13 +3868,19 @@ async function downloadBuild(payload) {
     const mobile = !executable && (mobileArchive || hasMobilePayload(targetDir))
     const reason = executable ? null : mobile ? 'mobile' : 'no-executable'
 
-    if (previousRootBackup) {
-      await fs.promises.rm(previousRootBackup, { recursive: true, force: true }).catch(() => {})
-      previousRootBackup = ''
+    // Keep the previous install on disk. It is the user's only local rollback
+    // point if a newer provider build turns out to be bad.
+    previousRootBackup = ''
+
+    if (executable && !mobile) {
+      // Reclaim the downloaded archive. Duplicate client trees are only removed
+      // when profiles.json confirms the selected tree and the other copy is
+      // incomplete; repair backups and two complete clients are preserved.
+      await cleanupManagedBuild(safeKey, targetDir, folderForExecutable(executable)).catch((error) => {
+        console.warn(`[VAULTED] Could not clean up the installed build: ${error.message}`)
+      })
     }
 
-    // Deliberately never delete filePath here. The user's download is kept even
-    // after a successful install, and nothing is removed on failure either.
     return {
       filePath,
       executable,
@@ -4341,6 +4432,9 @@ async function syncProviderBuild(payload) {
         `Era's live build was downloaded, but ${CLIENT_EXE} is missing. Try the update again.`,
       )
     }
+    await cleanupManagedBuild(key, targetDir, targetDir).catch((error) => {
+      console.warn(`[VAULTED] Could not clean up the synced build: ${error.message}`)
+    })
     return {
       folder: targetDir,
       executable,
@@ -4729,6 +4823,13 @@ async function launchOnlineProvider(payload) {
       `${profile.label} uses its ${externalName}. Open ${profile.website || profile.label} to get that build.`,
     )
   }
+  // VAULTED no longer starts local lobby-only engines. Play is online-only;
+  // seasons without a live route are shown as unavailable on their cards.
+  if (profile.auth === 'none') {
+    throw new Error(
+      `${profile.label} has no online server available yet. The app owner is working hard to get this season online.`,
+    )
+  }
   const seasonId = typeof payload?.seasonId === 'string' ? payload.seasonId : id
   const version = typeof payload?.version === 'string' ? payload.version : ''
   const legacy = providerUsesLegacyRedirect(version, seasonId)
@@ -4765,10 +4866,6 @@ async function launchOnlineProvider(payload) {
   const launchPayload = { ...payload, path: folder, executable }
   assertBuild(launchPayload)
 
-  // Reboot, Neo and EZFN Hybrid ship local launcher profiles without an
-  // account exchange. They can still join an advertised server through their
-  // own redirect backend; only hosted providers need a game-code exchange.
-  const localLauncher = profile.auth === 'none'
   // A verified Discord OAuth session is the authorization for this launch.
   // Do not keep the pre-auth "handshake pending" gate in front of the live
   // exchange attempt after the player has completed that sign-in.
@@ -4780,12 +4877,12 @@ async function launchOnlineProvider(payload) {
       discordAuthorized = false
     }
   }
-  if (!localLauncher && profile.launchHandshakePending && !discordAuthorized) {
+  if (profile.launchHandshakePending && !discordAuthorized) {
     throw new Error(
       `${profile.label} is signed in, but its launch handshake is pending. VAULTED has no verified game-code exchange for this provider yet.`,
     )
   }
-  if (!localLauncher && !['oauth', 'embedded_web', 'deeplink'].includes(profile.auth)) {
+  if (!['oauth', 'embedded_web', 'deeplink'].includes(profile.auth)) {
     throw new Error(
       `VAULTED requires verified in-app sign-in for ${profile.label}. Manual provider codes are no longer supported.`,
     )
@@ -4797,7 +4894,7 @@ async function launchOnlineProvider(payload) {
   // main-process handle until the client process exits; never send it to the
   // renderer or close it after build.verify.
   let realtimeSession = null
-  if (!localLauncher) {
+  {
     try {
       const exchange = await providerAuth.exchangeCode(providerId, {
         seasonId,
@@ -4842,16 +4939,6 @@ async function launchOnlineProvider(payload) {
   }
 
   const join = joinTargetFromPayload(payload)
-  // A local launcher profile is a private Neonite-style lobby, not a hosted
-  // multiplayer backend. It may only start without a remote join target when
-  // the renderer explicitly asked for that lobby-only fallback (the "Local
-  // Lobby Only" dropdown choice, or a season with no exact remote server).
-  // This prevents Auto from silently queueing a global season on 127.0.0.1.
-  if (localLauncher && !join && payload?.allowLocalLobby !== true) {
-    throw new Error(
-      `${profile.label} is a local lobby-only backend. Choose a live server, or select ${profile.label} · Local Lobby Only to play a private lobby.`,
-    )
-  }
   if (join) writeJoinTarget(join.host, join.port)
   else clearJoinTarget()
 
@@ -4861,32 +4948,6 @@ async function launchOnlineProvider(payload) {
   // registers the running process for matchmaking.
   let backendUrl = profile.backendUrl
   let eraBridge = null
-  if (localLauncher) {
-    // Reboot/Neo/EZFN have no hosted token service. Point their Tellurium
-    // redirect at the bundled Neonite backend, which implements the password
-    // grant those clients send. The old profile backendUrl values are public
-    // websites (for example rebootfn.org) and answer the game's form POST with
-    // Cloudflare 403, leaving the player on the manual Epic login screen.
-    try {
-      await ensureLocalBackend(payload.username)
-      backendUrl = BACKEND_URL
-      // Matchmaking is not required to reach the lobby. A stale helper or a
-      // busy port must not turn auto-login into a launch failure.
-      try {
-        await ensureLocalMatchmaker()
-      } catch (error) {
-        console.warn(
-          `[VAULTED] Local matchmaker unavailable: ${error instanceof Error ? error.message : error}`,
-        )
-      }
-    } catch (error) {
-      throw new Error(
-        `VAULTED could not prepare the local ${profile.label} backend.\n\n${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      )
-    }
-  }
   if (providerId === 'era') {
     try {
       const account = providerAuth.status('era')
@@ -4896,6 +4957,12 @@ async function launchOnlineProvider(payload) {
         displayName: account.displayName || '',
         onSessionKilled: () =>
           realtimeSession?.refresh('game login killed the launcher session'),
+        // Era requires a live client-presence lease for matchmaking session
+        // lookup. Reassert it at verify and immediately before FindSingleSession
+        // instead of letting a long queue consume the lease.
+        onPresenceRequired: (force = false) =>
+          realtimeSession?.reassertPresence?.('matchmaking requested presence', force === true) ??
+          Promise.resolve(false),
       })
       backendUrl = eraBridge.url
     } catch (error) {
@@ -4909,14 +4976,7 @@ async function launchOnlineProvider(payload) {
     }
   }
 
-  // Every local/hybrid client needs an explicit non-exchange auth shape.
-  // Without it older builds fall through to Epic's exchange-code path and
-  // modern builds exit before the redirect hook can take over the login.
-  const localAuth = localLauncher
-  const providerArgs = providerFortniteArgs(backendUrl, authCode, providerId, authToken, {
-    localAuth,
-    username: localAuth ? payload.username : '',
-  })
+  const providerArgs = providerFortniteArgs(backendUrl, authCode, providerId, authToken)
   logProviderLaunchDiagnostic(
     providerLaunchDiagnostic({
       providerId,
@@ -4927,7 +4987,6 @@ async function launchOnlineProvider(payload) {
       backendUrl,
       authCode,
       authToken,
-      localAuth,
     }),
   )
 
@@ -5106,6 +5165,8 @@ function registerIpc() {
   ipcMain.handle('arc:sync-provider-build', (_event, payload) => syncProviderBuild(payload))
   ipcMain.handle('arc:list-interrupted-downloads', () => listInterruptedDownloads())
 
+  ipcMain.handle('arc:cleanup-build-storage', () => cleanupManagedBuildStorage())
+
   ipcMain.handle('arc:delete-build', async (_event, payload) => {
     const id = typeof payload?.id === 'string' ? payload.id : ''
     if (!id || typeof payload?.path !== 'string' || !payload.path) {
@@ -5199,17 +5260,11 @@ function registerIpc() {
 
     const id = typeof payload.id === 'string' ? payload.id : null
     let join = joinTargetFromPayload(payload)
-    let localHost = false
+    const localHost = false
     if (!join) {
-      // No live directory/manual/relay target was available. Bring the local
-      // auth backend up before the hidden host starts: the host has to sign in
-      // before it can open port 7777.
-      send('arc:launch-status', { id: id ?? undefined, message: 'Starting a VAULTED public lobby…' })
-      await ensureLocalBackend(payload.username)
-      await ensureGameServer(payload)
-      await awaitGameServerReady()
-      join = { host: '127.0.0.1', port: GAME_SERVER_PORT }
-      localHost = true
+      throw new Error(
+        'Online play is not available for this season yet. The app owner is working hard to get it online.',
+      )
     }
     const joinFallback = join && payload.joinFallback === true
     if (id) stopJoinWatchdog(id)
@@ -5332,19 +5387,20 @@ function registerIpc() {
       return { opened: false, error: 'That provider does not use an official launcher.' }
     }
 
-    // A provider with documented runtime metadata starts its signed launcher
-    // with the exact build flag it publishes. Retrac keeps its library in a
-    // private WebView2 store, so VAULTED never edits that undocumented store;
-    // it only asks Retrac for the build after the player has added it there.
+    // A provider with documented runtime metadata starts its official launcher
+    // with the exact build flag it publishes when it has one. Single-season
+    // launchers are opened directly; Retrac additionally receives its 14.60
+    // manifest flag. VAULTED never edits a provider's private library.
     const runtimeMetadata = providerRuntimeMetadata(id)
     const launchOptions =
       options && typeof options === 'object' && !Array.isArray(options) ? options : {}
     if (runtimeMetadata) {
       const requestedVersion =
         typeof launchOptions.version === 'string' ? launchOptions.version.trim() : ''
-      const version = runtimeMetadata.manifestIds[requestedVersion]
+      const manifestVersions = Object.keys(runtimeMetadata.manifestIds || {})
+      const version = runtimeMetadata.manifestIds?.[requestedVersion]
         ? requestedVersion
-        : Object.keys(runtimeMetadata.manifestIds)[0]
+        : manifestVersions[0] || runtimeMetadata.version || ''
       let executable = installedExecutable(runtimeMetadata)
       if (!executable) {
         // The season archive may already have been installed before this
@@ -5365,7 +5421,7 @@ function registerIpc() {
       if (!executable) {
         return {
           opened: false,
-          error: `${profile.label} is not installed yet. Download its ${version} build from VAULTED once to install the verified launcher.`,
+          error: `${profile.label} is not installed yet. Use the launcher install step on the season card once.`,
         }
       }
       const args = launchArguments(runtimeMetadata, version)
@@ -5406,6 +5462,46 @@ function registerIpc() {
       return error ? { opened: false, error } : { opened: true, path: executable }
     }
 
+    // Discord-only communities may have a companion launcher, but no public
+    // HTTPS installer metadata. Detect it on this PC and start it when present;
+    // otherwise fall through to the verified community handoff below.
+    const launcherMetadata = providerCatalog().find((entry) => entry.id === id)?.launcher
+    if (launcherMetadata) {
+      const executable = installedExecutable(launcherMetadata)
+      if (executable) {
+        try {
+          const child = spawn(executable, [], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: false,
+            cwd: path.dirname(executable),
+          })
+          const started = await new Promise((resolve) => {
+            child.once('spawn', () => resolve(true))
+            child.once('error', () => resolve(false))
+            setTimeout(() => resolve(true), 1500).unref?.()
+          })
+          if (!started) {
+            return { opened: false, error: `${profile.label} launcher could not be started.` }
+          }
+          child.unref()
+          trackProviderLauncher(id, child)
+          return {
+            opened: true,
+            path: executable,
+            version: '',
+            pid: child.pid ?? null,
+            tracked: true,
+          }
+        } catch (error) {
+          return {
+            opened: false,
+            error: error instanceof Error ? error.message : 'The community launcher could not be started.',
+          }
+        }
+      }
+    }
+
     const launchUrl = profile.launchUrl || profile.website || profile.backendUrl
     if (!/^https?:\/\//i.test(launchUrl)) {
       return { opened: false, error: `${profile.label} has no safe launch URL.` }
@@ -5414,8 +5510,28 @@ function registerIpc() {
     return { opened: true, url: launchUrl }
   })
 
+  ipcMain.handle('arc:provider-launcher-status', () =>
+    [...providerLaunchers.entries()].map(([providerId, entry]) => ({
+      providerId,
+      pid: entry.pid,
+      startedAt: new Date(entry.startedAt).toISOString(),
+    })),
+  )
+
+  ipcMain.handle('arc:stop-provider-launcher', async (_event, providerId) => {
+    const id = String(providerId || '').trim().toLowerCase()
+    const entry = id ? providerLaunchers.get(id) : null
+    if (!entry) return { stopped: false }
+    await closeProcessTreeGracefully(entry.pid)
+    return { stopped: true }
+  })
+
   ipcMain.handle('arc:provider-runtime-status', (_event, providerId) =>
     providerRuntimeStatus(providerId),
+  )
+
+  ipcMain.handle('arc:provider-launcher-detect', (_event, providerId) =>
+    providerLauncherStatus(providerId),
   )
 
   ipcMain.handle('arc:install-provider-runtime', async (_event, providerId) => {
@@ -5964,11 +6080,6 @@ app.whenReady().then(async () => {
   registerIpc()
   createWindow()
   startPlaylistWatcher()
-
-  // Warm the local matchmaker while the user is still choosing a season, so a
-  // Start click does not pay for process startup. It waits for port 7777 on its
-  // own, so running it before the host exists is safe.
-  void ensureLocalMatchmaker().catch(() => {})
 
   // Check on launch and every five minutes; downloads install themselves.
   if (!DEV && !SMOKE) {
