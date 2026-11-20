@@ -2791,10 +2791,16 @@ export default function App() {
             return false
           }
           if (!result?.opened) {
+            // A launcher that exited on startup must not leave the card stuck
+            // on "Starting…": show the exact reason and offer Try again.
+            const message = result?.error || 'Check the community link and try again.'
+            setLaunchFailure({ id: build.id, message })
+            setPhase('error')
+            setLaunchStage(null)
             pushToast({
               tone: 'error',
               title: `${provider.label} could not be opened`,
-              description: result?.error || 'Check the community link and try again.',
+              description: message,
             })
             return false
           }

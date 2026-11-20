@@ -259,7 +259,7 @@ function testRetracPendingLaunchRouting() {
   assert.match(main, /launchArguments\(runtimeMetadata, version\)/, 'the Retrac CLI must receive its manifest flag')
   assert.match(
     main,
-    /registerProviderLauncher\(id, child\); startCompanionSessionMonitor\(id, executable\)/,
+    /registerProviderLauncher\(id, launch\.child\); startCompanionSessionMonitor\(id, current\)/,
     'the opened Retrac process must be tracked for auto-close',
   )
   assert.match(main, /await closeProcessTreeGracefully\(entry\.pid\)/, 'tracked Retrac must be closed after the game exits')

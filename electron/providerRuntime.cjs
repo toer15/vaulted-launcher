@@ -138,6 +138,29 @@ function installedExecutable(metadata, env = process.env) {
   return executableInRoots(metadata, env)
 }
 
+/**
+ * Every documented launcher location that exists on this PC, in order.
+ *
+ * A provider that has been reinstalled can leave an old, partially removed
+ * copy behind at an earlier path. The caller tries these in turn, so a broken
+ * leftover never hides the working install next to it.
+ */
+function installedExecutables(metadata, env = process.env) {
+  const found = []
+  for (const candidate of metadata.installedExecutables || []) {
+    const resolved = path.normalize(expandEnvironmentPath(candidate, env))
+    if (!path.isAbsolute(resolved) || found.includes(resolved)) continue
+    try {
+      if (fs.statSync(resolved).isFile()) found.push(resolved)
+    } catch {
+      /* not installed at this documented location */
+    }
+  }
+  const inRoots = executableInRoots(metadata, env)
+  if (inRoots && !found.includes(inRoots)) found.push(inRoots)
+  return found
+}
+
 function launchArguments(metadata, version) {
   const manifestId = metadata.manifestIds?.[String(version || '').trim()]
   if (!manifestId) {
@@ -656,7 +679,11 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
     }
 
     let executable = installedExecutable(metadata, options.env)
+    // A launcher that is on disk but crashes on startup is not a working
+    // install. `forceInstall` runs the vendor's own setup again over it, which
+    // is the only repair that restores its bundled Flutter assets.
     const currentInstall =
+      options.forceInstall !== true &&
       executable &&
       (metadata.kind === 'exe' || (await fileVersion(executable)).startsWith(release.version))
     if (!currentInstall && metadata.autoInstall !== false && options.install !== false) {
@@ -745,6 +772,7 @@ module.exports = {
   ensureProviderRuntime,
   installExe,
   installedExecutable,
+  installedExecutables,
   launchArguments,
   resolveRelease,
   waitForExecutable,

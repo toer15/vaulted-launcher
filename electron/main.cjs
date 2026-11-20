@@ -42,6 +42,7 @@ const rangeDownload = require('./rangeDownloader.cjs')
 const {
   ensureProviderRuntime,
   installedExecutable,
+  installedExecutables,
   launchArguments,
 } = require('./providerRuntime.cjs')
 
@@ -4736,6 +4737,52 @@ function providerAccountIssue(profile, error) {
   }
 }
 
+const EXTERNAL_LAUNCH_STABILITY_MS = 4_000
+
+/**
+ * Start an external project's launcher and prove it is actually alive.
+ *
+ * A broken or half-uninstalled launcher (a Flutter app missing its bundled
+ * `data` folder, for example) starts and exits within a second. Reporting that
+ * as a running season leaves the card on "Running" with no window open and no
+ * game process for the session monitor to watch, so the early exit is captured
+ * here instead.
+ */
+function spawnExternalLauncher(executable, args) {
+  return new Promise((resolve) => {
+    let child
+    try {
+      // Visible on purpose: this is the player's game entry, so the window it
+      // creates must show. `windowsHide` would start it minimised/hidden.
+      child = spawn(executable, args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: false,
+        cwd: path.dirname(executable),
+      })
+    } catch (error) {
+      resolve({ child: null, exitCode: null, error })
+      return
+    }
+    let settled = false
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+    const timer = setTimeout(
+      () => finish({ child, exitCode: null, error: null }),
+      EXTERNAL_LAUNCH_STABILITY_MS,
+    )
+    timer.unref?.()
+    child.once('error', (error) => finish({ child, exitCode: null, error }))
+    child.once('exit', (code, signal) =>
+      finish({ child, exitCode: Number.isInteger(code) ? code : -1, signal, error: null }),
+    )
+  })
+}
+
 async function openProviderLauncherEntry(providerId, options = {}) {
     const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
     const profile = id && providerForId(id) ? providerProfile(id) : null
@@ -4743,11 +4790,122 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       return { opened: false, error: 'That provider does not use an official launcher.' }
     }
 
+    /** PIDs of a launcher that is already running under any of its names. */
+    const runningLauncherPids = (names) => {
+      const clean = [...new Set((names || []).map((name) => String(name || '').replace(/\.exe$/i, '').trim()))]
+        .filter((name) => /^[A-Za-z0-9 ._-]{1,80}$/.test(name))
+      if (clean.length === 0 || process.platform !== 'win32') return Promise.resolve([])
+      return new Promise((resolve) => {
+        execFile(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `Get-Process -Name ${clean.map((name) => `'${name}'`).join(',')} -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }`,
+          ],
+          { windowsHide: true, timeout: 8_000 },
+          (error, stdout) => {
+            if (error || !stdout) return resolve([])
+            resolve(
+              String(stdout)
+                .split(/\r?\n/)
+                .map((value) => Number(value.trim()))
+                .filter((value) => Number.isInteger(value) && value > 0),
+            )
+          },
+        )
+      })
+    }
+
+    /**
+     * Start a launcher from every documented install location, repair the
+     * install once when all of them die on startup, and register the launcher
+     * only after it survives. `repair` runs the provider's own installer and
+     * returns the executable that is now on disk.
+     */
+    const startVisibleLauncher = async (executablePaths, args, repair = null, names = []) => {
+      const candidates = (Array.isArray(executablePaths) ? executablePaths : [executablePaths]).filter(
+        Boolean,
+      )
+      if (candidates.length === 0) {
+        return { opened: false, error: `${profile.label} is not installed yet.` }
+      }
+      let current = candidates[0]
+      const adoptRunning = async () => {
+        const pids = await runningLauncherPids(names)
+        if (pids.length === 0) return null
+        providerLaunchers.set(id, { pid: pids[0], startedAt: Date.now() })
+        startCompanionSessionMonitor(id, current)
+        return { opened: true, path: current, pid: pids[0], tracked: true, alreadyRunning: true }
+      }
+      // Most companions are single-instance: spawning a second copy exits at
+      // once. Adopt the running window instead of calling it a broken install.
+      const already = await adoptRunning()
+      if (already) return already
+
+      let lastExit = null
+      let lastError = null
+      const tryStart = async (paths) => {
+        for (const candidate of paths) {
+          current = candidate
+          const attempt = await spawnExternalLauncher(candidate, args)
+          if (attempt.error) {
+            lastError = attempt.error
+            continue
+          }
+          if (attempt.exitCode === null) return attempt
+          lastExit = attempt.exitCode
+          const raced = await adoptRunning()
+          if (raced) return raced
+        }
+        return null
+      }
+
+      let launch = await tryStart(candidates)
+      if (!launch && typeof repair === 'function') {
+        const firstExit = lastExit
+        try {
+          const repairedExecutable = await repair()
+          if (repairedExecutable) launch = await tryStart([repairedExecutable])
+        } catch (error) {
+          return {
+            opened: false,
+            error: `${profile.label} closed immediately after it started (exit code ${firstExit}) and its installer could not repair it. ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          }
+        }
+      }
+      if (!launch) {
+        const adopted = await adoptRunning()
+        if (adopted) return adopted
+        if (lastExit !== null) {
+          return {
+            opened: false,
+            error: `${profile.label} closed immediately after it started (exit code ${lastExit}), so its installation at ${path.dirname(current)} is incomplete. Reinstall it from its official installer, then press Start again.`,
+          }
+        }
+        return {
+          opened: false,
+          error: `${profile.label} could not be started: ${lastError?.message || 'unknown error'}`,
+        }
+      }
+      launch.child.unref()
+      // Visible on purpose: this launcher is how the player starts the game.
+      // Only a managed provider's background companion (startCompanionLauncher)
+      // is hidden. The session monitor keeps this launcher alive for the whole
+      // game session and closes it after Fortnite exits or on Stop.
+      registerProviderLauncher(id, launch.child); startCompanionSessionMonitor(id, current)
+      return { opened: true, path: current, pid: launch.child.pid ?? null, tracked: true }
+    }
+
     // A provider with documented runtime metadata starts its official launcher
     // with the exact build flag it publishes when it has one. Single-season
     // launchers are opened directly; Retrac additionally receives its 14.60
     // manifest flag. VAULTED never edits a provider's private library.
     const runtimeMetadata = providerRuntimeMetadata(id)
+    const runtimeRoot = path.join(app.getPath('userData'), 'provider-runtimes')
     const launchOptions =
       options && typeof options === 'object' && !Array.isArray(options) ? options : {}
     if (runtimeMetadata) {
@@ -4781,37 +4939,20 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         }
       }
       const args = launchArguments(runtimeMetadata, version)
+      const repairRuntime = async () => {
+        const repaired = await ensureProviderRuntime(id, runtimeMetadata, {
+          root: runtimeRoot,
+          forceInstall: true,
+        })
+        return repaired?.executable || ''
+      }
+      const launcherNames = providerWindowNames(runtimeMetadata)
+      const launcherCandidates = installedExecutables(runtimeMetadata)
+      if (!launcherCandidates.includes(executable)) launcherCandidates.unshift(executable)
       if (args) {
         try {
-          // An external project's launcher is the player's game entry: it owns
-          // sign-in, build selection and the online handoff, so its window must
-          // stay visible. Only a managed provider's background companion (see
-          // startCompanionLauncher) is hidden. The launcher is still tracked by
-          // the session monitor and closed after Fortnite exits or on Stop.
-          const child = spawn(executable, args, {
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: true,
-            cwd: path.dirname(executable),
-          })
-          const started = await new Promise((resolve) => {
-            child.once('spawn', () => resolve(true))
-            child.once('error', () => resolve(false))
-            setTimeout(() => resolve(true), 1500).unref?.()
-          })
-          if (!started) {
-            return { opened: false, error: `${profile.label} could not be started.` }
-          }
-          child.unref()
-          registerProviderLauncher(id, child); startCompanionSessionMonitor(id, executable)
-          return {
-            opened: true,
-            path: executable,
-            args,
-            version,
-            pid: child.pid ?? null,
-            tracked: true,
-          }
+          const started = await startVisibleLauncher(launcherCandidates, args, repairRuntime, launcherNames)
+          return started.opened ? { ...started, args, version } : started
         } catch (error) {
           return {
             opened: false,
@@ -4820,16 +4961,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         }
       }
       try {
-        // Visible on purpose: this launcher is how the player starts the game.
-        const child = spawn(executable, [], {
-          detached: true,
-          stdio: 'ignore',
-          windowsHide: true,
-          cwd: path.dirname(executable),
-        })
-        child.unref()
-        registerProviderLauncher(id, child); startCompanionSessionMonitor(id, executable)
-        return { opened: true, path: executable, pid: child.pid ?? null, tracked: true }
+        return await startVisibleLauncher(launcherCandidates, [], repairRuntime, launcherNames)
       } catch (error) {
         return {
           opened: false,
@@ -4846,30 +4978,15 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       const executable = installedExecutable(launcherMetadata)
       if (executable) {
         try {
-          // Visible on purpose: this launcher is how the player starts the game.
-          const child = spawn(executable, [], {
-            detached: true,
-            stdio: 'ignore',
-            windowsHide: true,
-            cwd: path.dirname(executable),
-          })
-          const started = await new Promise((resolve) => {
-            child.once('spawn', () => resolve(true))
-            child.once('error', () => resolve(false))
-            setTimeout(() => resolve(true), 1500).unref?.()
-          })
-          if (!started) {
-            return { opened: false, error: `${profile.label} launcher could not be started.` }
-          }
-          child.unref()
-          registerProviderLauncher(id, child); startCompanionSessionMonitor(id, executable)
-          return {
-            opened: true,
-            path: executable,
-            version: '',
-            pid: child.pid ?? null,
-            tracked: true,
-          }
+          // No installer metadata exists for this community, so an early exit
+          // is reported instead of being silently repaired.
+          const started = await startVisibleLauncher(
+            installedExecutables(launcherMetadata),
+            [],
+            null,
+            providerWindowNames(launcherMetadata),
+          )
+          return started.opened ? { ...started, version: '' } : started
         } catch (error) {
           return {
             opened: false,

@@ -276,7 +276,7 @@ function testOnlineRoutes() {
   )
   assert.match(
     externalHandoff,
-    /registerProviderLauncher\(id, child\); startCompanionSessionMonitor\(id, executable\)/,
+    /registerProviderLauncher\(id, launch\.child\); startCompanionSessionMonitor\(id, current\)/,
     'an external launcher must still be tracked and closed after the game exits',
   )
   const companionAt = MAIN.indexOf('async function startCompanionLauncher(')
@@ -285,6 +285,51 @@ function testOnlineRoutes() {
     MAIN.slice(companionAt, companionAt + 2200),
     /startHiddenWindowWatcher/,
     'a managed companion launcher must stay hidden',
+  )
+
+  // A launcher that dies on startup (half-uninstalled) must never be reported
+  // as a running season: Start has to notice the early exit and repair the
+  // install once through the provider's own setup.
+  assert.match(MAIN, /const EXTERNAL_LAUNCH_STABILITY_MS = 4_000/)
+  assert.match(MAIN, /function spawnExternalLauncher\(executable, args\)/)
+  const handoff = MAIN.slice(
+    MAIN.indexOf('async function openProviderLauncherEntry('),
+    MAIN.indexOf('async function launchOnlineProvider(', MAIN.indexOf('async function openProviderLauncherEntry(')),
+  )
+  assert.equal(
+    /child\.once\('spawn', \(\) => resolve\(true\)\)/.test(handoff),
+    false,
+    'an external launcher must be verified alive instead of assumed started',
+  )
+  assert.match(handoff, /startVisibleLauncher\(launcherCandidates, args, repairRuntime, launcherNames\)/)
+  assert.match(
+    handoff,
+    /const launcherCandidates = installedExecutables\(runtimeMetadata\)/,
+    'a broken leftover install must not hide the working one',
+  )
+  assert.match(handoff, /const already = await adoptRunning\(\)/)
+  const spawnHelper = MAIN.slice(
+    MAIN.indexOf('function spawnExternalLauncher('),
+    MAIN.indexOf('async function openProviderLauncherEntry('),
+  )
+  assert.match(
+    spawnHelper,
+    /windowsHide: false/,
+    'an external launcher window must not be started hidden',
+  )
+  assert.match(read('electron/providerRuntime.cjs'), /\n  installedExecutables,\n/)
+  assert.match(handoff, /alreadyRunning: true/)
+  assert.match(handoff, /forceInstall: true/)
+  assert.match(
+    handoff,
+    /closed immediately after it started/,
+    'an early launcher exit must be reported to the player',
+  )
+  assert.match(read('electron/providerRuntime.cjs'), /options\.forceInstall !== true/)
+  assert.match(
+    read('src/App.tsx'),
+    /setLaunchFailure\(\{ id: build\.id, message \}\)/,
+    'a failed launcher handoff must surface on the card',
   )
 
   // EZFN Hybrid is a lobby-only cosmetic tool, not a match server. Seasons that
