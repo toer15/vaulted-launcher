@@ -211,11 +211,6 @@
       "sizeGB": 10.83,
       "downloadUrl": "https://archive.org/download/fortnite_6.21/6.21.rar",
       "fallbackDownloadUrl": "https://ia800803.us.archive.org/20/items/fortnite_6.21/6.21.rar",
-      "providerBuild": {
-        "providerId": "era",
-        "seasonId": "ch1-s6",
-        "buildId": "928551d8-c2b6-457e-9201-90144cc519d3"
-      },
       "runtimeProfile": "legacy",
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s6",
       "url": "https://archive.org/download/fortnite_6.21/6.21.rar",
@@ -232,10 +227,17 @@
       ],
       "sizeBytes": 10830177578,
       "onlineProvider": {
-        "id": "era",
-        "name": "Project Era",
-        "label": "Era"
-      }
+        "id": "reboot-official",
+        "name": "Project Reboot",
+        "label": "Reboot"
+      },
+      "onlineProviders": [
+        {
+          "id": "reboot-official",
+          "name": "Project Reboot",
+          "label": "Reboot"
+        }
+      ]
     },
     "ch1-s7": {
       "id": "ch1-s7",

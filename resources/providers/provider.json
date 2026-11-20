@@ -37,10 +37,8 @@
         "label": "Discord"
       },
       "global": true,
-      "dynamicSeasons": true,
-      "seasons": [
-        "ch1-s6"
-      ],
+      "dynamicSeasons": false,
+      "seasons": [],
       "runtime": {
         "kind": "exe",
         "label": "Era Launcher",
@@ -687,6 +685,7 @@
         "ch1-s1",
         "ch1-s2",
         "ch1-s5",
+        "ch1-s6",
         "ch1-s8",
         "ch1-s9",
         "ch2-s1",

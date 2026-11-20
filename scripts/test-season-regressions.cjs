@@ -274,13 +274,49 @@ function testLauncherOutlivesBootstrapper() {
 }
 
 function testWorkingSeasons() {
-  // Era keeps the 6.21 managed route and Tellurium.
-  const era = season('ch1-s6')
-  assert.equal(era.version, '6.21')
-  assert.equal(era.onlineProvider?.id, 'era')
-  assert.equal(providerProfile('era').auth, 'oauth')
-  assert.match(providerRuntime(providerProfile('era')).dll, /Tellurium\.dll$/)
+  // Chapter 1 Season 6 runs on Project Reboot's online launcher. Era's own
+  // binary closed itself mid-session on 6.21, which broke skin saving and
+  // matchmaking, so this season never routes through Era again.
+  const ch1s6 = season('ch1-s6')
+  assert.equal(ch1s6.version, '6.21')
+  assert.equal(ch1s6.onlineProvider?.id, 'reboot-official')
+  assert.deepEqual(
+    [...new Set(routeIds(ch1s6))],
+    ['reboot-official'],
+    'ch1-s6 must only route to Project Reboot',
+  )
+  assert.equal(ch1s6.providerBuild, undefined, "ch1-s6 must not keep Era's live build id")
+  assert.ok(ch1s6.downloadUrl, 'ch1-s6 must keep its real 6.21 season build download')
+  assert.equal(ch1s6.runtimeProfile, 'legacy')
+  const rebootOnline = providerCatalog().find((entry) => entry.id === 'reboot-official')
+  assert.equal(rebootOnline?.mode, 'external', 'Project Reboot is the online launcher route')
+  assert.ok(
+    rebootOnline.supportedSeasons.includes('ch1-s6'),
+    'reboot-official must advertise ch1-s6',
+  )
+  assert.match(
+    providerRuntimeMetadata('reboot-official')?.label || '',
+    /Reboot Launcher/,
+    'the Season 6 companion launcher must stay installable',
+  )
+  // Real online multiplayer only: the replacement route is never loopback.
+  const rebootProfile = providerProfile('reboot-official')
+  assert.match(rebootProfile.backendUrl, /^https:\/\//, 'the Season 6 route must be online')
+  assert.equal(
+    /127\.0\.0\.1|localhost|\[::1\]|\b10\.\d+\.\d+\.\d+/.test(rebootProfile.backendUrl),
+    false,
+    'the Season 6 route must never be a local/loopback backend',
+  )
+  // Era keeps its launcher runtime for DLL staging and repair, but owns no
+  // season and may not re-claim one from its live build list.
+  const eraCatalog = providerCatalog().find((entry) => entry.id === 'era')
+  assert.ok(eraCatalog, 'Era must stay in the provider catalog')
+  assert.equal(eraCatalog.dynamicSeasons, false, 'Era must not discover season routes at runtime')
+  assert.deepEqual(eraCatalog.supportedSeasons, [], 'Era must not claim any season')
   assert.ok(providerRuntimeMetadata('era'), 'Era must keep its launcher metadata')
+  for (const value of Object.values(builds.seasons)) {
+    assert.equal(routeIds(value).includes('era'), false, `${value.id} still routes through Era`)
+  }
 
   // Stellar/EZFN keep 12.41 and their sign-in modes.
   const ch2s2 = season('ch2-s2')
@@ -748,7 +784,7 @@ try {
   testProviderIsolation()
   testCardStates()
   console.log(
-    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, 6.21 Era, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, and per-provider isolation, plus the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging)',
+    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, and per-provider isolation, plus the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging)',
   )
 } catch (error) {
   console.error(error)
