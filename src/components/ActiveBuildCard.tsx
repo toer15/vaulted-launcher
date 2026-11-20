@@ -77,7 +77,7 @@ interface ActiveBuildCardProps {
     /** this launcher installs the season builds it hosts, so no VAULTED download */
     ownsBuild?: boolean
     installed: boolean
-    phase?: 'downloading' | 'installing' | 'error'
+    phase?: 'downloading' | 'dlls' | 'installing' | 'error'
     percent?: number | null
     error?: string | null
   } | null
@@ -421,7 +421,9 @@ export function ActiveBuildCard({
   const runtimeReady = !runtimeRequired || runtime?.installed === true
   const runtimeBusy =
     runtimeRequired &&
-    (runtime?.phase === 'downloading' || runtime?.phase === 'installing')
+    (runtime?.phase === 'downloading' ||
+      runtime?.phase === 'dlls' ||
+      runtime?.phase === 'installing')
   const discordProjectLabel = discordGate?.label?.replace(/ Discord$/i, '') || 'Project'
   const discordSetupEligible = Boolean(
     discordGate && discordGate.statusOnly !== true && !runtimeRequired,
@@ -1272,9 +1274,15 @@ export function ActiveBuildCard({
                             )}
                             <span>
                               {runtimeBusy
-                                ? `${runtime?.phase === 'installing' ? 'Installing' : 'Downloading'} ${
-                                    runtimeLabel
-                                  }${runtime?.percent != null ? ` · ${runtime.percent}%` : '…'}`
+                                ? `${
+                                    runtime?.phase === 'installing'
+                                      ? 'Installing'
+                                      : runtime?.phase === 'dlls'
+                                        ? 'Staging DLLs for'
+                                        : 'Downloading'
+                                  } ${runtimeLabel}${
+                                    runtime?.percent != null ? ` · ${runtime.percent}%` : '…'
+                                  }`
                                 : runtime?.phase === 'error'
                                   ? `Retry ${runtimeLabel}`
                                   : `Install ${runtimeLabel}`}
@@ -1370,13 +1378,17 @@ export function ActiveBuildCard({
 
                       {runtimeRequired &&
                         !runtimeReady &&
-                        (runtime?.phase === 'downloading' || runtime?.phase === 'installing') && (
+                        (runtime?.phase === 'downloading' ||
+                          runtime?.phase === 'dlls' ||
+                          runtime?.phase === 'installing') && (
                           <div className="w-full max-w-md">
                             <div className="flex items-center justify-between text-[10px] text-fog">
                               <span>
                                 {runtime.phase === 'installing'
                                   ? 'Running the official installer…'
-                                  : 'Downloading the official installer…'}
+                                  : runtime.phase === 'dlls'
+                                    ? 'Staging required DLLs (Tellurium, Cobalt, Memory)…'
+                                    : 'Downloading the official installer…'}
                               </span>
                               <span className="font-mono">
                                 {runtime.percent != null ? `${runtime.percent}%` : 'starting…'}

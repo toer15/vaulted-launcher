@@ -87,6 +87,9 @@ export interface ProviderPrepareResult {
   providerId: string
   label?: string
   cached?: boolean
+  external?: boolean
+  /** DLLs staged and verified by this prepare/download step. */
+  dlls?: string[]
   error?: string
 }
 
@@ -121,7 +124,8 @@ export interface ProviderLauncherDetection {
 export interface ProviderRuntimeProgress {
   providerId: string
   label?: string
-  phase: 'downloading' | 'installing' | 'done' | 'error'
+  /** `dlls` stages the redirect/runtime DLLs during the launcher download. */
+  phase: 'downloading' | 'dlls' | 'installing' | 'done' | 'error'
   percent: number | null
   received: number
   total: number
@@ -389,6 +393,8 @@ export interface LauncherBridge {
     label: string
     version: string
     installed: boolean
+    /** DLLs staged and verified during the launcher download step. */
+    dlls?: string[]
   }>
   onRuntimeProgress?(callback: (progress: ProviderRuntimeProgress) => void): () => void
   /** launch a downloaded season through its bundled provider profile */

@@ -1745,7 +1745,13 @@ export default function App() {
     // two IPC installs before the runtimeBusy prop renders.
     if (runtimeInstallRef.current) return
     const current = runtimeProgress[providerId]
-    if (current?.phase === 'downloading' || current?.phase === 'installing') return
+    if (
+      current?.phase === 'downloading' ||
+      current?.phase === 'dlls' ||
+      current?.phase === 'installing'
+    ) {
+      return
+    }
     runtimeInstallRef.current = providerId
     setRuntimeProgress((prev) => ({
       ...prev,
@@ -1778,7 +1784,10 @@ export default function App() {
       pushToast({
         tone: 'success',
         title: `${result.label} ${result.version} installed`,
-        description: 'The official launcher is ready — Install Season is now unlocked.',
+        description:
+          result.dlls && result.dlls.length > 0
+            ? `Required DLLs (${result.dlls.join(', ')}) are staged — Install Season is now unlocked.`
+            : 'The official launcher is ready — Install Season is now unlocked.',
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'The runtime install failed.'

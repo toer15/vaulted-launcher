@@ -1081,6 +1081,77 @@ function ensureProviderRedirects() {
   return providerRepairPromise
 }
 
+/** Every DLL VAULTED stages before any season launcher is called ready. */
+const STAGED_RUNTIME_DLLS = ['Tellurium.dll', 'Cobalt.dll', 'Memory.dll']
+
+/**
+ * Stage and verify every DLL a launcher and its supported seasons need.
+ *
+ * The DLLs ship inside the VAULTED installer, so staging is a verified local
+ * copy into VAULTED's own caches — never a network download. Running it as part
+ * of a launcher's own download step is what keeps Play from having to prepare
+ * files at launch time, and what makes a missing DLL show up before the
+ * launcher is reported ready instead of on the first match.
+ */
+async function stageProviderDlls(options = {}) {
+  const id = String(options.providerId || '').trim().toLowerCase()
+  const runtimeDirectory = typeof options.runtimeRoot === 'string' ? options.runtimeRoot : ''
+  const report = await ensureProviderRedirects()
+  const staged = []
+  const missing = []
+  const seen = new Set()
+  const addStaged = (name, file) => {
+    const resolved = path.resolve(file)
+    if (seen.has(resolved)) return
+    seen.add(resolved)
+    staged.push({ name, path: resolved })
+  }
+  const names = [
+    ...new Set([
+      ...STAGED_RUNTIME_DLLS,
+      ...(Array.isArray(options.extraDlls) ? options.extraDlls : []),
+    ]),
+  ].filter((name) => typeof name === 'string' && name.trim())
+  for (const name of names) {
+    const file = runtimeDirectory ? path.join(runtimeDirectory, name) : ''
+    let ok = false
+    try {
+      ok = Boolean(file) && fs.statSync(file).isFile() && fs.statSync(file).size > 0
+    } catch {
+      ok = false
+    }
+    if (ok) addStaged(name, file)
+    else missing.push({ name, error: `${name} is missing from VAULTED's staged runtime. Reinstall VAULTED.` })
+  }
+
+  if (id) {
+    let profile = null
+    try {
+      profile = providerProfile(id)
+    } catch (error) {
+      missing.push({ name: id, error: error instanceof Error ? error.message : String(error) })
+    }
+    // External projects use their own signed launcher without a VAULTED
+    // redirect DLL; the shared runtime above is already staged for a later
+    // season that does need it.
+    if (profile && profile.mode !== 'external') {
+      for (const selected of [providerRuntime(profile), providerRuntime(profile, { legacy: true })]) {
+        const name = path.basename(selected.dll)
+        if (fs.existsSync(selected.dll) && redirectDllMatchesProfile(selected.dll, selected.profile)) {
+          addStaged(name, selected.dll)
+        } else {
+          missing.push({
+            name,
+            error: `VAULTED could not stage the ${profile.label} redirect DLL (${name}). Reinstall VAULTED.`,
+          })
+        }
+      }
+    }
+  }
+
+  return { providerId: id, staged, missing, repaired: report.repaired, errors: report.errors }
+}
+
 /** Cobalt replaces Tellurium for Chapter 1 builds that predate its signatures. */
 function legacyRedirectProfile(profile) {
   const defaults = catalogData().defaults
@@ -1129,6 +1200,8 @@ function providerRuntime(profile, options = {}) {
 module.exports = {
   providerRuntimeMetadata,
   ensureProviderRedirects,
+  stageProviderDlls,
+  STAGED_RUNTIME_DLLS,
   legacyRedirectDllPath,
   providerCatalog,
   providerDllPath,

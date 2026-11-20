@@ -332,6 +332,53 @@ function testOnlineRoutes() {
     'a failed launcher handoff must surface on the card',
   )
 
+  // Every DLL a launcher needs is staged inside that launcher's own download
+  // step, so Play never prepares files at launch time.
+  const providers = read('electron/onlineProviders.cjs')
+  assert.match(providers, /async function stageProviderDlls\(options = \{\}\)/)
+  assert.match(providers, /const STAGED_RUNTIME_DLLS = \['Tellurium\.dll', 'Cobalt\.dll', 'Memory\.dll'\]/)
+  assert.match(providers, /\n  stageProviderDlls,\n/)
+  const prepareHandler = MAIN.slice(
+    MAIN.indexOf("ipcMain.handle('arc:provider-prepare'"),
+    MAIN.indexOf("ipcMain.handle('arc:provider-builds'"),
+  )
+  assert.match(prepareHandler, /const staged = await stageSeasonLauncherDlls\(id\)/)
+  assert.match(
+    prepareHandler,
+    /cached: true, dlls \}/,
+    'prepare must report the DLLs it staged',
+  )
+  const installHandler = MAIN.slice(
+    MAIN.indexOf("ipcMain.handle('arc:install-provider-runtime'"),
+    MAIN.indexOf("ipcMain.handle('arc:provider-catalog'"),
+  )
+  assert.ok(
+    installHandler.indexOf("phase: 'dlls'") < installHandler.indexOf('await ensureProviderRuntime('),
+    'the launcher download must stage DLLs before the installer runs',
+  )
+  assert.match(
+    installHandler,
+    /const stagedAfter = await stageSeasonLauncherDlls\(id\)/,
+    'a launcher may only be ready after its DLLs are verified',
+  )
+  assert.ok(
+    installHandler.indexOf('stagedAfter') < installHandler.indexOf("phase: 'done'"),
+    'the done event must follow the DLL verification',
+  )
+  assert.match(MAIN, /async function stageSeasonLauncherDlls\(providerId = ''\)/)
+  assert.match(
+    MAIN,
+    /async function stageCoreRuntimeDlls\(\)/,
+    'Cobalt lives in the shared providers runtime and must be staged too',
+  )
+  assert.match(MAIN, /await stageCoreRuntimeDlls\(\)/)
+  assert.match(MAIN, /if \(report\.missing\.length > 0\) \{/)
+  assert.match(
+    read('src/components/ActiveBuildCard.tsx'),
+    /Staging required DLLs \(Tellurium, Cobalt, Memory\)…/,
+    'the launcher download card must show the DLL staging step',
+  )
+
   // EZFN Hybrid is a lobby-only cosmetic tool, not a match server. Seasons that
   // only have that profile must keep saying online is unavailable instead of
   // pretending a local profile is multiplayer.

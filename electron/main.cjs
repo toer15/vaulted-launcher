@@ -10,6 +10,10 @@ const { spawn, execFile } = require('node:child_process')
 const { autoUpdater } = require('electron-updater')
 const {
   ensureProviderRedirects,
+  stageProviderDlls,
+  STAGED_RUNTIME_DLLS,
+  runtimeConfig,
+  sharedRuntimeRoot,
   providerCatalog,
   providerDllPath,
   legacyRedirectDllPath,
@@ -751,6 +755,69 @@ function ensureRuntimeInstalled() {
     throw error
   })
   return runtimeInstallPromise
+}
+
+/**
+ * Stage every DLL a launcher and its seasons need inside the launcher's own
+ * download/verify step. A season is only called ready once this passes, and a
+ * failure is reported there instead of surfacing as a broken first match.
+ */
+/**
+ * Copy any DLL that only ships in the providers' shared runtime folder into
+ * VAULTED's staged runtime. Cobalt (Chapter 1) is packaged there rather than in
+ * the base runtime folder, so without this the launch-time check would report a
+ * missing DLL long after the launcher said it was ready.
+ */
+async function stageCoreRuntimeDlls() {
+  const target = runtimeRoot()
+  const sources = [bundledRuntimeRoot()]
+  try {
+    sources.push(sharedRuntimeRoot())
+  } catch {
+    /* the base runtime folder is still a valid source */
+  }
+  await fs.promises.mkdir(target, { recursive: true })
+  for (const name of STAGED_RUNTIME_DLLS) {
+    const destination = path.join(target, name)
+    try {
+      const current = fs.statSync(destination)
+      if (current.isFile() && current.size > 0) continue
+    } catch {
+      /* not staged yet */
+    }
+    for (const source of sources) {
+      const candidate = path.join(source, name)
+      try {
+        const stat = fs.statSync(candidate)
+        if (!stat.isFile() || stat.size === 0) continue
+        await fs.promises.copyFile(candidate, destination)
+        break
+      } catch {
+        /* try the next documented runtime folder */
+      }
+    }
+  }
+}
+
+async function stageSeasonLauncherDlls(providerId = '') {
+  await ensureRuntimeInstalled()
+  await stageCoreRuntimeDlls()
+  let extraDlls = []
+  try {
+    const config = runtimeConfig()
+    if (Array.isArray(config?.dlls)) extraDlls = config.dlls.map((name) => String(name))
+  } catch {
+    /* older installs still get the core DLL list from stageProviderDlls */
+  }
+  const report = await stageProviderDlls({
+    providerId,
+    runtimeRoot: runtimeRoot(),
+    extraDlls,
+  })
+  if (report.missing.length > 0) {
+    throw new Error(report.missing.map((item) => item.error).join('\n'))
+  }
+  return report
 }
 
 /** Files without which every launch is guaranteed to fail. */
@@ -5682,6 +5749,19 @@ function registerIpc() {
     const metadata = providerRuntimeMetadata(id)
     if (!metadata) throw new Error('That provider has no companion runtime.')
     try {
+      // Stage the DLLs this launcher and its seasons need while the download
+      // step is still on screen, so Play never prepares files itself.
+      send('arc:runtime-progress', {
+        providerId: id,
+        label: metadata.label,
+        phase: 'dlls',
+        percent: null,
+        received: 0,
+        total: 0,
+        etaSeconds: null,
+        bytesPerSecond: null,
+      })
+      const stagedBefore = await stageSeasonLauncherDlls(id)
       const result = await ensureProviderRuntime(id, metadata, {
         root: path.join(app.getPath('userData'), 'provider-runtimes'),
         report: (progress) =>
@@ -5692,6 +5772,9 @@ function registerIpc() {
             phase: progress.phase === 'installing' ? 'installing' : 'downloading',
           }),
       })
+      // Verify again after the installer ran: the launcher is only announced
+      // as ready once every DLL is staged and hash-checked.
+      const stagedAfter = await stageSeasonLauncherDlls(id)
       send('arc:runtime-progress', {
         providerId: id,
         label: metadata.label,
@@ -5708,6 +5791,7 @@ function registerIpc() {
         label: metadata.label,
         version: result.version,
         installed: result.installed,
+        dlls: [...new Set([...stagedBefore.staged, ...stagedAfter.staged].map((item) => item.name))],
       }
     } catch (error) {
       send('arc:runtime-progress', {
@@ -5757,11 +5841,13 @@ function registerIpc() {
     const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
     if (!id) throw new Error('Invalid provider preparation request.')
     const profile = providerProfile(id)
+    // Verifying an already-installed launcher stages the same DLLs its install
+    // step would, so an existing install is never left unprepared.
+    const staged = await stageSeasonLauncherDlls(id)
+    const dlls = [...new Set(staged.staged.map((item) => item.name))]
     if (profile.mode === 'external') {
-      return { ok: false, providerId: id, label: profile.label, error: 'External launcher.' }
+      return { ok: true, providerId: id, label: profile.label, cached: true, external: true, dlls }
     }
-    await ensureRuntimeInstalled()
-    await ensureProviderRedirects()
     const runtime = providerRuntime(profile)
     if (!fs.existsSync(runtime.injector)) {
       throw new Error(`The bundled runtime injector for ${profile.label} is missing. Reinstall VAULTED.`)
@@ -5769,7 +5855,7 @@ function registerIpc() {
     if (!fs.existsSync(runtime.dll) || !redirectDllMatchesProfile(runtime.dll, runtime.profile)) {
       throw new Error(`VAULTED could not verify the bundled ${profile.label} redirect DLL.`)
     }
-    return { ok: true, providerId: id, label: profile.label, cached: true }
+    return { ok: true, providerId: id, label: profile.label, cached: true, dlls }
   })
 
   // Live build discovery is authenticated in main. The renderer supplies only

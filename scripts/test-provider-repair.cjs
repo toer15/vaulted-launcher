@@ -192,6 +192,16 @@ function preparePackagedTree() {
     path.join(projectRoot, 'resources', 'providers', 'runtime', 'Tellurium.dll'),
     path.join(packagedRuntime, 'Tellurium.dll'),
   )
+  // Chapter 1 seasons use Cobalt, so the packaged runtime ships it too and a
+  // launcher's download step must stage it like every other DLL.
+  fs.copyFileSync(
+    path.join(projectRoot, 'resources', 'providers', 'runtime', 'Cobalt.dll'),
+    path.join(packagedRuntime, 'Cobalt.dll'),
+  )
+  fs.copyFileSync(
+    path.join(projectRoot, 'resources', 'providers', 'runtime', 'Memory.dll'),
+    path.join(packagedRuntime, 'Memory.dll'),
+  )
   fs.copyFileSync(
     path.join(projectRoot, 'resources', 'providers', 'runtime', 'VaultedInjector.exe'),
     path.join(packagedRuntime, 'VaultedInjector.exe'),
@@ -222,6 +232,7 @@ async function main() {
 
   const {
     ensureProviderRedirects,
+    stageProviderDlls,
     providerDllPath,
     providerProfile,
     providerRuntime,
@@ -260,6 +271,47 @@ async function main() {
   const second = await ensureProviderRedirects()
   assert.deepEqual(second.errors, [])
   assert.deepEqual(second.repaired.sort(), [...dllProviderIds].sort())
+
+  // A launcher's download step stages every DLL it needs up front: the shared
+  // runtime copies plus the provider's own (repaired) redirect DLL. Nothing is
+  // allowed to be left for Play to prepare later.
+  const stagedRuntime = path.join(temporaryRoot, 'staged-runtime')
+  fs.mkdirSync(stagedRuntime, { recursive: true })
+  for (const name of ['Tellurium.dll', 'Cobalt.dll', 'Memory.dll']) {
+    fs.copyFileSync(
+      path.join(projectRoot, 'resources', 'providers', 'runtime', name),
+      path.join(stagedRuntime, name),
+    )
+  }
+  const staging = await stageProviderDlls({
+    providerId: 'era',
+    runtimeRoot: stagedRuntime,
+    extraDlls: ['Tellurium.dll', 'Cobalt.dll', 'Memory.dll'],
+  })
+  assert.deepEqual(staging.missing, [])
+  const stagedNames = staging.staged.map((item) => item.name)
+  for (const name of ['Tellurium.dll', 'Cobalt.dll', 'Memory.dll']) {
+    assert.ok(stagedNames.includes(name), `staging did not include ${name}`)
+  }
+  assert.equal(
+    staging.staged.some((item) => item.path === path.resolve(targetPath('era'))),
+    true,
+    'staging did not include the provider redirect DLL',
+  )
+  const externalStaging = await stageProviderDlls({ providerId: 'eon', runtimeRoot: stagedRuntime })
+  assert.deepEqual(
+    externalStaging.missing,
+    [],
+    'an external launcher must still stage the shared runtime DLLs',
+  )
+  // A launcher whose runtime copies are missing must be reported, never called
+  // ready with a silent first-match failure.
+  const incomplete = await stageProviderDlls({
+    providerId: 'era',
+    runtimeRoot: path.join(temporaryRoot, 'missing-runtime'),
+  })
+  assert.ok(incomplete.missing.length >= 3, 'missing runtime DLLs were not reported')
+  fs.rmSync(stagedRuntime, { recursive: true, force: true })
 
   // Prove checksum validation is part of repair. Corrupt the only bundled
   // source while keeping a PE header and -backend= marker; repair must refuse
