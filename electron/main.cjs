@@ -41,7 +41,11 @@ const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
 const { startHiddenWindowWatcher } = require('./hiddenWindows.cjs')
-const { shouldCloseCompanionLauncher } = require('./companionLifecycle.cjs')
+const {
+  GAME_POLL_MS,
+  createCompanionSessionState,
+  observeCompanionSession,
+} = require('./companionLifecycle.cjs')
 const rangeDownload = require('./rangeDownloader.cjs')
 const {
   ensureProviderRuntime,
@@ -2509,16 +2513,22 @@ function closeProcessTreeGracefully(pid) {
  * Only VAULTED launches contain -AUTH_LOGIN; an official Epic client is left
  * alone.
  */
-function fortniteProcessRunning() {
-  if (process.platform !== 'win32') return Promise.resolve(false)
+/**
+ * One poll of the game process. `ok: false` means the probe itself failed
+ * (tasklist timed out or was refused under load); an unknown answer is never
+ * treated as "the game exited", because that would close the companion
+ * launcher mid-session.
+ */
+function fortniteClientProbe() {
+  if (process.platform !== 'win32') return Promise.resolve({ ok: true, running: false })
   return new Promise((resolve) => {
     execFile(
       'tasklist',
       ['/FI', 'IMAGENAME eq FortniteClient-Win64-Shipping.exe', '/NH', '/FO', 'CSV'],
-      { windowsHide: true, timeout: 8000 },
+      { windowsHide: true, timeout: 8_000 },
       (error, stdout) => {
-        if (error || !stdout) return resolve(false)
-        resolve(/FortniteClient-Win64-Shipping\.exe/i.test(String(stdout)))
+        if (error || typeof stdout !== 'string') return resolve({ ok: false, running: false })
+        resolve({ ok: true, running: /FortniteClient-Win64-Shipping\.exe/i.test(stdout) })
       },
     )
   })
@@ -2537,40 +2547,54 @@ function registerProviderLauncher(providerId, child) {
 /**
  * Keep a season's companion launcher alive for the whole game session.
  *
- * The monitor watches FortniteClient-Win64-Shipping.exe, not the spawned
- * launcher child, so a launcher that forwards to an existing instance and
- * exits is still owned by VAULTED. The shared rule decides the close:
- *   - game running, or still booting: keep the launcher, for as long as needed;
- *   - game gone after having run: close that provider's launcher tree;
+ * The monitor watches FortniteClient-Win64-Shipping.exe, and the exact client
+ * PID this launch reported — never the spawned launcher process, whose
+ * bootstrapper PID exits as soon as it forwards to an existing instance or
+ * spawns the real launcher. The shared rule (electron/companionLifecycle.cjs)
+ * decides the close:
+ *   - no client seen yet, or a client running: keep the launcher, always;
+ *   - the client stayed gone for the grace window after having run: close that
+ *     provider's launcher tree (by executable path and process name);
  *   - Stop: closeCompanionLauncherForProvider() closes it directly.
+ * No exit listener, idle timer or startup health check may close it earlier.
  */
 function startCompanionSessionMonitor(providerId, executable) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return null
   const existing = companionMonitors.get(id)
   if (existing) return existing
-  const state = { providerId: id, executable: executable || '', sawGame: false, checking: false }
+  const state = {
+    providerId: id,
+    executable: executable || '',
+    gamePid: null,
+    checking: false,
+    session: createCompanionSessionState(),
+    timer: null,
+  }
   companionMonitors.set(id, state)
-  const timer = setInterval(async () => {
+  state.timer = setInterval(async () => {
     if (state.checking || companionMonitors.get(id) !== state) return
     state.checking = true
     try {
-      const gameRunning = await fortniteProcessRunning()
-      if (gameRunning) state.sawGame = true
-      // One shared rule for every provider (electron/companionLifecycle.cjs):
-      // the launcher survives the whole game session and is closed only after
-      // the game has run and every client process is gone. No idle timer, no
-      // early close on game startup.
-      if (!shouldCloseCompanionLauncher({ gameRunning, sawGame: state.sawGame })) return
-      clearInterval(timer)
+      const probe = await fortniteClientProbe()
+      const trackedAlive = state.gamePid ? processAlive(state.gamePid) : false
+      const decision = observeCompanionSession(state.session, {
+        running: trackedAlive || probe.running === true,
+        probeOk: probe.ok === true || trackedAlive,
+        now: Date.now(),
+      })
+      state.session = decision.state
+      if (!decision.close) return
+      // Only the game exiting (after the grace window) reaches this point.
+      clearInterval(state.timer)
       companionMonitors.delete(id)
       await closeCompanionLauncherForProvider(id)
-      send('arc:provider-launcher-exited', { providerId: id, pid: null, reason: 'game-exited' })
+      send('arc:provider-launcher-exited', { providerId: id, pid: null, reason: decision.reason })
     } finally {
       state.checking = false
     }
-  }, 5000)
-  timer.unref?.()
+  }, GAME_POLL_MS)
+  state.timer.unref?.()
   return state
 }
 
@@ -2648,10 +2672,20 @@ async function startCompanionLauncher(providerId) {
   return { pid: child.pid ?? null, executable }
 }
 
-/** The client is up: from now on the launcher closes only after it exits. */
-function markProviderLauncherGameStarted(providerId) {
+/**
+ * Bind the exact game PID the injector reported to this season's monitor.
+ *
+ * It is a local, cheap liveness signal next to the process-name poll, so the
+ * launcher survives the whole boot sequence (window creation, sign-in, shader
+ * warm-up) even when a tasklist poll is slow or misses the process. It never
+ * claims the game "started": only an observed process does that.
+ */
+function attachCompanionGameProcess(providerId, pid) {
   const monitor = companionMonitors.get(String(providerId || '').trim().toLowerCase())
-  if (monitor) monitor.sawGame = true
+  if (!monitor) return false
+  const gamePid = Number(pid)
+  if (Number.isInteger(gamePid) && gamePid > 0) monitor.gamePid = gamePid
+  return true
 }
 
 /**
@@ -2662,7 +2696,12 @@ async function closeCompanionLauncherForProvider(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return false
   let closed = false
-  if (companionMonitors.delete(id)) closed = true
+  const monitor = companionMonitors.get(id)
+  if (monitor) {
+    if (monitor.timer) clearInterval(monitor.timer)
+    companionMonitors.delete(id)
+    closed = true
+  }
   const entry = providerLaunchers.get(id)
   const targets = new Set()
   if (entry) {
@@ -2672,15 +2711,33 @@ async function closeCompanionLauncherForProvider(providerId) {
   }
   const metadata = companionLauncherMetadata(id)
   const executable = metadata ? installedExecutable(metadata) : ''
+  // A launcher's bootstrapper PID exits as soon as it hands off, so the close
+  // follows the launcher's documented process names too — never the game or
+  // its anti-cheat bootstrappers.
+  const names = providerWindowNames(metadata).filter((name) => !/fortnite/i.test(name))
   for (const pid of await executablePids(executable)) {
+    targets.add(pid)
+    closed = true
+  }
+  for (const pid of await processPidsByImage(names)) {
     targets.add(pid)
     closed = true
   }
   // A launcher has no unsaved game state, so it is force-closed: a graceful
   // WM_CLOSE it ignores would delay the close by 12s per process, and the
   // lifecycle must be immediate on game exit and on Stop.
-  for (const pid of targets) await killProcessTree(pid)
-  for (const pid of await executablePids(executable)) await killProcessTree(pid)
+  const killable = (pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid
+  for (const pid of targets) {
+    if (killable(pid)) await killProcessTree(pid)
+  }
+  // A single-instance launcher can leave a second process behind; re-resolve
+  // both selectors once so the whole tree is really gone.
+  for (const pid of await executablePids(executable)) {
+    if (killable(pid)) await killProcessTree(pid)
+  }
+  for (const pid of await processPidsByImage(names)) {
+    if (killable(pid)) await killProcessTree(pid)
+  }
   return closed
 }
 
@@ -5521,9 +5578,11 @@ async function launchOnlineProvider(payload) {
     throw error
   }
   restoreEnvironmentWhenClientExits(launched.pid, restoreEnvironment)
-  // (c) The client is running, so the launcher monitor must now close it only
-  // after every FortniteClient-Win64-Shipping.exe process has exited.
-  markProviderLauncherGameStarted(providerId)
+  // (c) Bind the exact client PID the injector reported: the launcher monitor
+  // keeps the launcher while that PID lives or any client process is found, and
+  // closes it only after every FortniteClient-Win64-Shipping.exe process has
+  // really exited.
+  attachCompanionGameProcess(providerId, launched.pid)
 
   // Keep the provider session alive for the entire client lifetime: a token
   // that expires mid-game is exactly what makes locker saves and matchmaking

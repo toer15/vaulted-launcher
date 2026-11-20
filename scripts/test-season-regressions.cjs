@@ -22,7 +22,14 @@ const path = require('node:path')
 const root = path.join(__dirname, '..')
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8')
 const builds = require('../src/assets/builds.json')
-const { shouldCloseCompanionLauncher } = require('../electron/companionLifecycle.cjs')
+const {
+  EXIT_GRACE_MS,
+  GAME_POLL_MS,
+  GAME_PROCESS_NAME,
+  createCompanionSessionState,
+  observeCompanionSession,
+  shouldCloseCompanionLauncher,
+} = require('../electron/companionLifecycle.cjs')
 const {
   providerCatalog,
   providerProfile,
@@ -85,14 +92,16 @@ function testLifecycleRule() {
 function testLaunchWiring() {
   assert.match(
     MAIN,
-    /const \{ shouldCloseCompanionLauncher \} = require\('\.\/companionLifecycle\.cjs'\)/,
+    /\} = require\('\.\/companionLifecycle\.cjs'\)/,
     'main must use the shared lifecycle rule',
   )
-  assert.match(
-    MAIN,
-    /shouldCloseCompanionLauncher\(\{ gameRunning, sawGame: state\.sawGame \}\)/,
-    'the launcher monitor must ask the shared rule',
-  )
+  for (const symbol of [
+    'GAME_POLL_MS,',
+    'createCompanionSessionState,',
+    'observeCompanionSession,',
+  ]) {
+    assert.ok(MAIN.includes(symbol), `main must import ${symbol.replace(',', '')}`)
+  }
 
   const startAt = MAIN.indexOf('await startCompanionLauncher(providerId)')
   const launchAt = MAIN.indexOf('await launchInjectedGame(launchPayload')
@@ -102,8 +111,13 @@ function testLaunchWiring() {
 
   assert.match(
     MAIN,
-    /markProviderLauncherGameStarted\(providerId\)/,
-    'the client start must arm the after-exit close',
+    /attachCompanionGameProcess\(providerId, launched\.pid\)/,
+    'the client start must bind the real client PID to the launcher monitor',
+  )
+  assert.equal(
+    /markProviderLauncherGameStarted/.test(MAIN),
+    false,
+    'nothing may claim the game started before its process exists',
   )
 
   const closeAt = MAIN.indexOf("ipcMain.handle('arc:close-build'")
@@ -126,20 +140,137 @@ function testLaunchWiring() {
   const monitorBody = MAIN.slice(monitorAt, MAIN.indexOf('/** Resolve every process started', monitorAt))
   assert.match(
     monitorBody,
-    /shouldCloseCompanionLauncher\(\{ gameRunning, sawGame: state\.sawGame \}\)/,
+    /observeCompanionSession\(state\.session, \{/,
     'the session monitor must ask the shared rule',
   )
-  assert.match(monitorBody, /\}, 5000\)/, 'the session monitor must keep polling the game')
+  assert.match(
+    monitorBody,
+    /\}, GAME_POLL_MS\)/,
+    'the session monitor must poll the game every GAME_POLL_MS (3s)',
+  )
   assert.match(
     monitorBody,
     /closeCompanionLauncherForProvider\(id\)/,
     'the session monitor must close the whole launcher tree',
   )
-  assert.equal(
-    /\bchild\b/.test(monitorBody),
-    false,
-    'the session monitor must not depend on the spawned child (single-instance launchers exit early)',
+  assert.match(
+    monitorBody,
+    /state\.gamePid \? processAlive\(state\.gamePid\) : false/,
+    'the monitor must keep the exact client PID as a liveness signal',
   )
+  assert.equal(
+    /\bchild\.(?:pid|on|once|exit|kill)\b/.test(monitorBody),
+    false,
+    'the session monitor must never depend on the spawned launcher child (its bootstrapper PID exits early)',
+  )
+  assert.equal(
+    /setTimeout\(|killProcessTree\(|taskkill/.test(monitorBody),
+    false,
+    'the session monitor must close through the shared close helper only',
+  )
+
+  // The close has to follow the launcher's process names, because the PID a
+  // bootstrapper spawned from is gone long before the session ends.
+  const launcherCloseAt = MAIN.indexOf('async function closeCompanionLauncherForProvider(')
+  assert.ok(launcherCloseAt > 0, 'the companion launcher close helper is missing')
+  const launcherCloseBody = MAIN.slice(
+    launcherCloseAt,
+    MAIN.indexOf('function providerWindowNames(', launcherCloseAt),
+  )
+  assert.match(
+    launcherCloseBody,
+    /processPidsByImage\(names\)/,
+    'the close must target the launcher process names, not only the spawn PID',
+  )
+  assert.match(
+    launcherCloseBody,
+    /pid !== process\.pid/,
+    'the close must never target VAULTED itself',
+  )
+}
+
+/**
+ * The exact failure this suite exists for: a companion launcher whose
+ * bootstrapper PID exits (single-instance handoff, or a loader that spawns the
+ * real process and quits) must NOT be cleaned up while
+ * FortniteClient-Win64-Shipping.exe is alive — and it must never be closed one
+ * second before the client has actually been seen running and really exited.
+ */
+function testLauncherOutlivesBootstrapper() {
+  assert.equal(GAME_PROCESS_NAME, 'FortniteClient-Win64-Shipping.exe')
+  assert.equal(GAME_POLL_MS, 3_000, 'the lifecycle must poll the game every three seconds')
+  assert.ok(EXIT_GRACE_MS >= 12_000, 'closing must be delayed, never advanced')
+
+  const t0 = 1_000_000
+  const poll = (state, running, extra = {}) =>
+    observeCompanionSession(state, { running, probeOk: true, now: t0 + extra.ticks * GAME_POLL_MS, ...extra })
+
+  // 1. The bootstrapper PID exits before the client appears: nothing closes.
+  let state = createCompanionSessionState()
+  let decision = poll(state, false, { ticks: 0 })
+  assert.equal(decision.close, false, 'a launcher must survive its bootstrapper exiting before the game appears')
+  state = decision.state
+
+  // 2. The client appears: the launcher stays.
+  decision = poll(state, true, { ticks: 1 })
+  assert.equal(decision.close, false)
+  state = decision.state
+  assert.equal(state.sawGame, true, 'seeing the client must arm the after-exit close')
+
+  // 3. A failed probe is unknown, never an exit.
+  decision = observeCompanionSession(state, {
+    running: false,
+    probeOk: false,
+    now: t0 + 2 * GAME_POLL_MS,
+  })
+  assert.equal(decision.close, false, 'a failed tasklist probe must never close the launcher')
+  state = decision.state
+
+  // 4. One missed poll inside the grace window is not an exit either.
+  decision = poll(state, false, { ticks: 3 })
+  assert.equal(decision.close, false, 'the launcher must survive a single missed poll')
+  state = decision.state
+
+  // 5. The client comes back (EAC/launcher restart): still open, grace reset.
+  decision = poll(state, true, { ticks: 4 })
+  assert.equal(decision.close, false)
+  state = decision.state
+
+  // 6. The client exits and stays gone: the launcher closes exactly once, and
+  //    only after the whole grace window has passed.
+  decision = poll(state, false, { ticks: 5 })
+  assert.equal(decision.close, false, 'closing must wait for the grace window')
+  state = decision.state
+  const justBefore = observeCompanionSession(state, {
+    running: false,
+    probeOk: true,
+    now: t0 + 5 * GAME_POLL_MS + EXIT_GRACE_MS - 1,
+  })
+  assert.equal(justBefore.close, false, 'the launcher must not close one millisecond early')
+  const afterGrace = observeCompanionSession(justBefore.state, {
+    running: false,
+    probeOk: true,
+    now: t0 + 5 * GAME_POLL_MS + EXIT_GRACE_MS,
+  })
+  assert.equal(afterGrace.close, true, 'the launcher must close once the game has really exited')
+  assert.equal(afterGrace.reason, 'game-exited')
+
+  // 7. Stop is the only immediate close.
+  const stop = observeCompanionSession(createCompanionSessionState(), {
+    running: true,
+    probeOk: true,
+    requestedStop: true,
+  })
+  assert.equal(stop.close, true, 'Stop must close the launcher immediately')
+
+  // 8. A launcher whose game never appears is never closed by the poll, however
+  //    long it waits.
+  state = createCompanionSessionState()
+  for (let tick = 0; tick < 200; tick += 1) {
+    decision = poll(state, false, { ticks: tick })
+    assert.equal(decision.close, false, 'a launcher must never be closed before the game has run')
+    state = decision.state
+  }
 }
 
 function testWorkingSeasons() {
@@ -540,6 +671,11 @@ function testSessionStability() {
   )
   assert.match(
     providerLaunch,
+    /attachCompanionGameProcess\(providerId, launched\.pid\)/,
+    'the managed launch must bind the real client PID to the launcher monitor',
+  )
+  assert.match(
+    providerLaunch,
     /await cleanupStaleSessionHelpers\(providerId\)/,
     'the managed launch must clear stale helpers first',
   )
@@ -576,7 +712,7 @@ function testSessionStability() {
   assert.match(providerLaunch, /startProviderSessionHeartbeat\(providerId, launched\.pid, profile\.label\)/)
   assert.match(
     providerLaunch,
-    /markProviderLauncherGameStarted\(providerId\)(?:\r?\n){2}  \/\/ Keep the provider session alive[\s\S]{0,600}startProviderSessionHeartbeat/,
+    /attachCompanionGameProcess\(providerId, launched\.pid\)[\s\S]{0,700}startProviderSessionHeartbeat\(providerId, launched\.pid/,
   )
   assert.match(providerLaunch, /stopProviderSessionHeartbeat\(providerId, 'game process exited'\)/)
 
@@ -603,6 +739,7 @@ function testCardStates() {
 
 try {
   testLifecycleRule()
+  testLauncherOutlivesBootstrapper()
   testLaunchWiring()
   testWorkingSeasons()
   testOnlineRoutes()
@@ -611,7 +748,7 @@ try {
   testProviderIsolation()
   testCardStates()
   console.log(
-    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, close on game exit/Stop), visible external launchers, Project Reboot online routing, 6.21 Era, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, and per-provider isolation, plus the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging)',
+    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, 6.21 Era, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, and per-provider isolation, plus the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging)',
   )
 } catch (error) {
   console.error(error)
