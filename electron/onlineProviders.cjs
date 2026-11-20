@@ -655,6 +655,14 @@ for (const entry of catalogData().providers) {
   })
 }
 
+// A bundled local profile (Reboot, EZFN Hybrid) stays resolvable even when no
+// season routes through it any more: it is still the repair source for its
+// redirect DLL and its own game-server DLL. Play never invents a route for it.
+for (const entry of localProviderCatalog()) {
+  if (PROVIDERS.has(entry.id)) continue
+  PROVIDERS.set(entry.id, { id: entry.id, name: entry.name, label: entry.label })
+}
+
 /** Sanitised catalog consumed by the renderer and the provider launch path. */
 function providerCatalog() {
   return [...catalogData().providers.map((entry) => ({
@@ -669,7 +677,20 @@ function providerCatalog() {
     discordGate: entry.discordGate,
     mode: entry.mode,
     external: entry.external === true,
-    runtime: entry.runtime ? { required: true, label: entry.runtime.label } : undefined,
+    runtime: entry.runtime
+      ? {
+          required: true,
+          label: entry.runtime.label,
+          // An external project's launcher installs and updates the season
+          // builds it hosts itself (Project Reboot, Eon, Hydro, …). Only a
+          // launcher that is driven by a VAULTED build flag (Retrac's manifest
+          // id) still needs the archive downloaded first.
+          ownsBuild:
+            entry.mode === 'external' &&
+            entry.runtime.kind === 'exe' &&
+            Object.keys(entry.runtime.manifestIds || {}).length === 0,
+        }
+      : undefined,
     launcher: entry.launcher,
     launchKind: entry.launchKind,
     launchUrl: entry.launchUrl,
@@ -760,6 +781,7 @@ function userProviderRoot() {
 function providerForId(id) {
   return PROVIDERS.get(String(id || '')) || null
 }
+
 
 /** Documented release/runtime metadata for a catalog provider, if any. */
 function providerRuntimeMetadata(id) {

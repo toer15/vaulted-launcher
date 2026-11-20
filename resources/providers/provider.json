@@ -101,7 +101,6 @@
         "label": "Discord"
       },
       "global": true,
-      "launchHandshakePending": true,
       "seasons": [
         "ch2-s2"
       ]
@@ -130,7 +129,6 @@
         "label": "Discord"
       },
       "global": true,
-      "launchHandshakePending": true,
       "seasons": [
         "ch2-s2"
       ]

@@ -107,7 +107,12 @@ export interface GlobalBackend extends OnlineProviderConfig {
   /** external launchers are opened through their official launcher/site */
   external?: boolean
   /** signed companion launcher that must be installed before the season download */
-  runtime?: { required: boolean; label: string }
+  runtime?: {
+    required: boolean
+    label: string
+    /** the launcher owns its season builds, so a VAULTED archive download is not a prerequisite */
+    ownsBuild?: boolean
+  }
   /** installed companion launcher detection for Discord-only communities */
   launcher?: ProviderLauncherConfig
   /** official launcher, or a Discord community for projects without a site */

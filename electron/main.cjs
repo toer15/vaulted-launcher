@@ -4783,12 +4783,11 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       const args = launchArguments(runtimeMetadata, version)
       if (args) {
         try {
-          // Companion launchers stay invisible: only VAULTED and the game may
-          // appear on screen.
-          startHiddenWindowWatcher(providerWindowNames(runtimeMetadata), {
-            seconds: 21_600,
-            exitWhenGone: true,
-          })
+          // An external project's launcher is the player's game entry: it owns
+          // sign-in, build selection and the online handoff, so its window must
+          // stay visible. Only a managed provider's background companion (see
+          // startCompanionLauncher) is hidden. The launcher is still tracked by
+          // the session monitor and closed after Fortnite exits or on Stop.
           const child = spawn(executable, args, {
             detached: true,
             stdio: 'ignore',
@@ -4821,10 +4820,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         }
       }
       try {
-        startHiddenWindowWatcher(providerWindowNames(runtimeMetadata), {
-          seconds: 21_600,
-          exitWhenGone: true,
-        })
+        // Visible on purpose: this launcher is how the player starts the game.
         const child = spawn(executable, [], {
           detached: true,
           stdio: 'ignore',
@@ -4850,10 +4846,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       const executable = installedExecutable(launcherMetadata)
       if (executable) {
         try {
-          startHiddenWindowWatcher(providerWindowNames(launcherMetadata), {
-            seconds: 21_600,
-            exitWhenGone: true,
-          })
+          // Visible on purpose: this launcher is how the player starts the game.
           const child = spawn(executable, [], {
             detached: true,
             stdio: 'ignore',

@@ -74,6 +74,8 @@ interface ActiveBuildCardProps {
     providerId: string
     required: boolean
     label: string
+    /** this launcher installs the season builds it hosts, so no VAULTED download */
+    ownsBuild?: boolean
     installed: boolean
     phase?: 'downloading' | 'installing' | 'error'
     percent?: number | null
@@ -449,7 +451,10 @@ export function ActiveBuildCard({
     !archived &&
     !discordSetupLocked &&
     onlineIsLive(playMode)
-  const setupSequence = !archived && state === 'missing'
+  // A launcher that installs its own season builds has no Step 1/2/3 download
+  // sequence: its Start button opens the online launcher directly.
+  const setupSequence =
+    !archived && state === 'missing' && !(externalHero && runtime?.ownsBuild === true)
   const etaLabel = download?.phase === 'downloading' ? formatEta(download.etaSeconds) : null
   const speedLabel = download?.phase === 'downloading' ? formatSpeed(download.speedBytesPerSecond) : null
   const rateLabel = [speedLabel, etaLabel].filter(Boolean).join(' · ') || null
@@ -529,6 +534,15 @@ export function ActiveBuildCard({
           icon: Globe2,
           background: 'linear-gradient(120deg, #7c8cff, #4752c4)',
           glow: 'rgba(124,140,255,0.55)',
+        }
+      // A season hosted by an external project is started by that project's
+      // launcher, so the first press must not promise a local VAULTED download.
+      : externalHero
+      ? {
+          label: `Start ${season.label}`,
+          icon: Play,
+          background: 'linear-gradient(120deg, #34d399, #059669)',
+          glow: 'rgba(16,185,129,0.55)',
         }
       : hasDownloadSource
       ? {
@@ -675,7 +689,9 @@ export function ActiveBuildCard({
       : externalHero
       ? requiresSignIn
         ? 'Step 2 — sign in to unlock the season install.'
-        : `Step 2 — Install Season downloads ${season.label}, then Start opens it.`
+        : runtime?.ownsBuild === true
+          ? `Ready — Start opens ${runtimeLabel}, which installs and runs ${season.label} online.`
+          : `Step 2 — Install Season downloads ${season.label}, then Start opens it.`
       : officialExternal
       ? runtimeRequired && !runtime?.installed
         ? `Step 1 — install ${runtimeLabel} to unlock the season download.`

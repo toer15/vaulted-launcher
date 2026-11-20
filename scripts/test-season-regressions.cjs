@@ -199,6 +199,104 @@ function testWorkingSeasons() {
   assert.match(providerRuntime(providerProfile('reboot'), { legacy: true }).dll, /Cobalt\.dll$/)
 }
 
+function testOnlineRoutes() {
+  // Every season that has a Project Reboot build must also be routable to
+  // Project Reboot's real online launcher. A local-only `reboot` profile can
+  // never put a player in a match, so it must not be the primary route.
+  const rebootSeasons = Object.values(builds.seasons).filter((value) =>
+    routeIds(value).includes('reboot-official'),
+  )
+  assert.ok(rebootSeasons.length >= 20, 'the Project Reboot seasons disappeared')
+  const rebootOfficial = providerCatalog().find((entry) => entry.id === 'reboot-official')
+  assert.equal(rebootOfficial?.mode, 'external', 'reboot-official must stay an online launcher route')
+  assert.equal(rebootOfficial?.external, true)
+  assert.match(
+    providerRuntimeMetadata('reboot-official')?.label || '',
+    /Reboot Launcher/,
+    'the Project Reboot launcher runtime must stay installable',
+  )
+  for (const value of rebootSeasons) {
+    assert.equal(
+      value.onlineProvider?.id,
+      'reboot-official',
+      `${value.id} must route Play to Project Reboot's online launcher`,
+    )
+    assert.ok(
+      rebootOfficial.supportedSeasons.includes(value.id),
+      `reboot-official no longer advertises ${value.id}`,
+    )
+    // The local profile stays bundled as the repair source for its DLLs, but it
+    // must never be offered as the Play route for a season.
+    assert.equal(
+      routeIds(value).includes('reboot'),
+      false,
+      `${value.id} must not offer the local-only reboot profile as a route`,
+    )
+    assert.equal(providerProfile('reboot').mode, 'download')
+  }
+
+  // EZFN and Stellar both exchange a real one-time game code, so a stale
+  // pre-auth handshake gate must never block their online launch again.
+  for (const id of ['ezfn', 'stellar']) {
+    const provider = providerCatalog().find((entry) => entry.id === id)
+    assert.ok(provider, `${id} is missing from the catalog`)
+    assert.notEqual(
+      provider.launchHandshakePending,
+      true,
+      `${id} must not be gated before its exchange-code launch`,
+    )
+    assert.ok(['deeplink', 'embedded_web', 'oauth'].includes(provider.auth))
+  }
+  // A launcher that installs its own season builds must not be gated behind a
+  // VAULTED archive download; Retrac's manifest-driven launcher still is.
+  assert.equal(rebootOfficial.runtime?.ownsBuild, true)
+  const retracCatalog = providerCatalog().find((entry) => entry.id === 'retrac-official')
+  assert.equal(retracCatalog?.runtime?.ownsBuild, false)
+  const app = read('src/App.tsx')
+  assert.match(
+    app,
+    /activeRuntime\.ownsBuild !== true/,
+    'Start must skip the local download gate for a launcher that owns its builds',
+  )
+
+  const auth = read('electron/providerAuth.cjs')
+  assert.match(auth, /config\.id === 'ezfn'/, 'EZFN lost its exchange-code handshake')
+  assert.match(auth, /config\.id === 'stellar'/, 'Stellar lost its exchange-code handshake')
+
+  // An external project's launcher is the player's game entry, so VAULTED must
+  // open it visibly. Only a managed background companion is hidden.
+  const openAt = MAIN.indexOf('async function openProviderLauncherEntry(')
+  const launchAt = MAIN.indexOf('async function launchOnlineProvider(', openAt)
+  assert.ok(openAt > 0 && launchAt > openAt, 'the external launcher handoff is missing')
+  const externalHandoff = MAIN.slice(openAt, launchAt)
+  assert.equal(
+    /startHiddenWindowWatcher/.test(externalHandoff),
+    false,
+    'an external launcher must not be hidden; the player needs its window to start the game',
+  )
+  assert.match(
+    externalHandoff,
+    /registerProviderLauncher\(id, child\); startCompanionSessionMonitor\(id, executable\)/,
+    'an external launcher must still be tracked and closed after the game exits',
+  )
+  const companionAt = MAIN.indexOf('async function startCompanionLauncher(')
+  assert.ok(companionAt > 0, 'the managed companion launcher start is missing')
+  assert.match(
+    MAIN.slice(companionAt, companionAt + 2200),
+    /startHiddenWindowWatcher/,
+    'a managed companion launcher must stay hidden',
+  )
+
+  // EZFN Hybrid is a lobby-only cosmetic tool, not a match server. Seasons that
+  // only have that profile must keep saying online is unavailable instead of
+  // pretending a local profile is multiplayer.
+  const hybrid = season('ch5-s1')
+  assert.equal(hybrid.onlineProvider?.id, 'ezfn-hybrid')
+  const hybridCatalog = providerCatalog().find((entry) => entry.id === 'ezfn-hybrid')
+  assert.equal(hybridCatalog?.mode, 'download', 'ezfn-hybrid must stay a local profile')
+  assert.equal(hybridCatalog?.auth, 'none')
+}
+
 function testProviderIsolation() {
   const catalog = providerCatalog()
   const ids = catalog.map((provider) => provider.id)
@@ -233,10 +331,11 @@ try {
   testLifecycleRule()
   testLaunchWiring()
   testWorkingSeasons()
+  testOnlineRoutes()
   testProviderIsolation()
   testCardStates()
   console.log(
-    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, close on game exit/Stop), 6.21 Era, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, and per-provider isolation',
+    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, close on game exit/Stop), visible external launchers, Project Reboot online routing, 6.21 Era, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, and per-provider isolation',
   )
 } catch (error) {
   console.error(error)

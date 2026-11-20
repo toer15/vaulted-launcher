@@ -937,10 +937,11 @@ export default function App() {
       ? (() => {
           const remote = healthyAutoProviders.filter((provider) => !isLocalEngine(provider))
           const mappedId = activeBuild.onlineProvider?.id
-          // Ch1 seasons map to the bundled Reboot launcher. A same-project
-          // external catalog entry must not steal Auto from that local mapping:
-          // otherwise Play opens the project website instead of the installed
-          // game. An explicit server choice still bypasses this branch.
+          // A season keeps its own mapped route first: a local profile when the
+          // card is explicitly mapped to one (EZFN Hybrid), otherwise the real
+          // online project that hosts the season (Project Reboot, Echo, ARC,
+          // …). Only then does Auto fall back to any healthy remote backend.
+          // An explicit server choice still bypasses this branch.
           const mappedLocal = healthyAutoProviders.find(
             (provider) => provider.id === mappedId && isLocalEngine(provider),
           )
@@ -980,6 +981,7 @@ export default function App() {
       providerId,
       required: true,
       label: status?.label || declared?.label || 'Companion Launcher',
+      ownsBuild: declared?.ownsBuild === true,
       installed: status?.installed === true,
       phase:
         progress && progress.phase !== 'done' ? progress.phase : undefined,
@@ -3746,8 +3748,10 @@ export default function App() {
     // once it is ready, Download Season becomes the next card action.
     if (autoGlobalBackend && (autoGlobalBackend.mode === 'external' || autoGlobalBackend.external)) {
       // An installed build is launched directly, so its companion launcher is
-      // background plumbing: never block Start on installing it.
-      if (activeRuntime?.required && !installed[build.id]) {
+      // background plumbing: never block Start on installing it. A launcher
+      // that owns its season builds (Project Reboot) needs no VAULTED archive
+      // at all: Start installs the launcher, then opens it online.
+      if (activeRuntime?.required && !installed[build.id] && activeRuntime.ownsBuild !== true) {
         if (!activeRuntime.installed) {
           await handleInstallRuntime()
           return

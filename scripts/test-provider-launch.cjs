@@ -179,7 +179,13 @@ function testLiveProviderMappings() {
     '-action_after=launch_build:++Fortnite+Release-14.60-CL-14786821-Windows',
   ])
   assert.equal(providerRuntimeMetadata('slurp'), null)
-  assert.deepEqual(official?.runtime, { required: true, label: 'Retrac Launcher' })
+  // Retrac is driven by its own build manifest flag, so the 14.60 archive must
+  // still be downloaded before its launcher can be handed the folder.
+  assert.deepEqual(official?.runtime, {
+    required: true,
+    label: 'Retrac Launcher',
+    ownsBuild: false,
+  })
   // v1.x-v3.x predate the Curl signatures Tellurium waits for. They must
   // select Cobalt while every modern build keeps Tellurium.
   assert.equal(providerUsesLegacyRedirect('3.0', 'ch1-s3'), true)
