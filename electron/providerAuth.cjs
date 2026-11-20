@@ -2200,7 +2200,11 @@ function createProviderAuth({
           clearVerificationTimer()
           clearDeadTimer()
           socketVerified = false
-          const detail = `${code || 'unknown'}${reason ? ` ${reason}` : ''}`
+          const closeReason = reason ? String(reason) : ''
+          const detail = `${code || 'unknown'}${closeReason ? ` ${closeReason}` : ''}`
+          // Always log the exact close code and reason. A backend that drops the
+          // session mid-game must be diagnosable from the launcher log alone.
+          log(`gateway socket closed: code=${code ?? 'none'} reason=${closeReason || 'none'}`)
           if (closed) return
           if (!settled) {
             fail(new Error(`${config.label} closed the game-file check connection (${detail}).`))

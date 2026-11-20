@@ -59,6 +59,7 @@ import {
   subscribeJoinFailed,
   subscribeProviderLauncherExit,
   subscribeProviderRuntimeProgress,
+  subscribeProviderSessionExpired,
   verifyBuildFiles,
   type ProviderLauncherDetection,
   type ProviderRuntimeProgress,
@@ -1811,6 +1812,28 @@ export default function App() {
       runtimeInstallRef.current = null
     }
   }, [activeCompanionProviderId, pushToast, runtimeProgress])
+
+  // The in-session heartbeat could not keep the account session alive. Tell the
+  // player right away instead of letting locker saves and matchmaking tickets
+  // fail silently later in the match.
+  useEffect(() => {
+    if (!native) return
+    return subscribeProviderSessionExpired((payload) => {
+      if (!payload?.providerId) return
+      setProviderAuthStatus((prev) => {
+        const current = prev[payload.providerId]
+        if (!current) return prev
+        return { ...prev, [payload.providerId]: { ...current, signedIn: false } }
+      })
+      pushToast({
+        tone: 'error',
+        title: `${payload.label || 'Online account'} session expired`,
+        description:
+          payload.message ||
+          'Reconnect the account so locker saves and matchmaking keep working.',
+      })
+    })
+  }, [native, pushToast])
 
   const dismissToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((item) => item.id !== id))

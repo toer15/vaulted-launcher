@@ -95,6 +95,10 @@ const extractions = new Map()
 const providerLaunchers = new Map()
 /** providerId -> live game-session monitor for that merged companion launcher */
 const companionMonitors = new Map()
+/** providerId -> auth heartbeat that keeps the launched session alive */
+const sessionHeartbeats = new Map()
+/** How often a running game's provider session is rotated and re-proved. */
+const SESSION_HEARTBEAT_MS = 4 * 60_000
 
 /**
  * Every old Fortnite client needs a private server and a redirected login.
@@ -2714,6 +2718,147 @@ function providerRuntimeStatus(providerId) {
   }
 }
 
+/** PIDs of every process with one of these image names. */
+function processPidsByImage(names) {
+  const clean = [
+    ...new Set((names || []).map((name) => String(name || '').replace(/\.exe$/i, '').trim())),
+  ].filter((name) => /^[A-Za-z0-9 ._-]{1,80}$/.test(name))
+  if (clean.length === 0 || process.platform !== 'win32') return Promise.resolve([])
+  return new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Get-Process -Name ${clean.map((name) => `'${name}'`).join(',')} -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }`,
+      ],
+      { windowsHide: true, timeout: 8_000 },
+      (error, stdout) => {
+        if (error || !stdout) return resolve([])
+        resolve(
+          String(stdout)
+            .split(/\r?\n/)
+            .map((value) => Number(value.trim()))
+            .filter((value) => Number.isInteger(value) && value > 0),
+        )
+      },
+    )
+  })
+}
+
+/** True while any Fortnite client process is open. */
+function anyFortniteClientRunning() {
+  return new Promise((resolve) => {
+    execFile(
+      'tasklist',
+      ['/FI', 'IMAGENAME eq FortniteClient-Win64-Shipping.exe', '/NH', '/FO', 'CSV'],
+      { windowsHide: true, timeout: 8_000 },
+      (error, stdout) => {
+        if (error || !stdout) return resolve(false)
+        resolve(/FortniteClient-Win64-Shipping\.exe/i.test(String(stdout)))
+      },
+    )
+  })
+}
+
+/**
+ * Remove helpers a crashed or closed session left behind before a new launch.
+ *
+ * A leftover injector keeps a dead session's ports and pipes claimed, which is
+ * how a fresh launch starts fine and then loses its login mid-session. Nothing
+ * is touched while a Fortnite client is still open.
+ */
+async function cleanupStaleSessionHelpers(providerId = '') {
+  const cleaned = []
+  clearJoinTarget()
+  if (!(await anyFortniteClientRunning())) {
+    for (const pid of await processPidsByImage(['VaultedInjector.exe'])) {
+      await killProcessTree(pid)
+      cleaned.push(`injector ${pid}`)
+    }
+  }
+  // A heartbeat for an earlier launch must not keep polling a dead process.
+  if (stopProviderSessionHeartbeat(providerId, 'pre-launch cleanup')) {
+    cleaned.push(`${providerId} heartbeat`)
+  }
+  if (cleaned.length > 0) {
+    console.log(`[VAULTED] Pre-launch session cleanup: ${cleaned.join(', ')}.`)
+  }
+  return cleaned
+}
+
+/**
+ * Keep a launched provider session alive for as long as its client runs.
+ *
+ * The launcher rotates the stored token every few minutes so locker saves and
+ * matchmaking tickets never hit an expired session mid-game, and logs the exact
+ * failure when a backend drops instead of letting Play fail silently later.
+ */
+function startProviderSessionHeartbeat(providerId, pid, label = '') {
+  const id = String(providerId || '').trim().toLowerCase()
+  const gamePid = Number(pid)
+  if (!id || !Number.isInteger(gamePid) || gamePid <= 0) return null
+  stopProviderSessionHeartbeat(id, 'replaced by a new launch')
+  const name = label || id
+  const state = { providerId: id, pid: gamePid, timer: null, refreshes: 0, failures: 0 }
+  const tick = async () => {
+    if (!processAlive(state.pid)) {
+      stopProviderSessionHeartbeat(id, `game process ${state.pid} exited`)
+      return
+    }
+    try {
+      const status = await providerAuth.refreshSession(id)
+      if (status?.refreshed) {
+        state.refreshes += 1
+        state.failures = 0
+        console.log(
+          `[VAULTED] ${name} session token refreshed during the game session (${state.refreshes}).`,
+        )
+      }
+    } catch (error) {
+      state.failures += 1
+      const message = error instanceof Error ? error.message : String(error)
+      const expiry = sessionExpiryCode(error)
+      console.warn(
+        `[VAULTED] ${name} session heartbeat failed (${state.failures})${
+          expiry ? ` [${expiry}]` : ''
+        }: ${message}`,
+      )
+      // Two consecutive expired answers mean the account really needs a fresh
+      // sign-in; tell the player now instead of at the next match.
+      if (expiry && state.failures >= 2) {
+        send('arc:provider-session-expired', { providerId: id, label: name, message })
+        stopProviderSessionHeartbeat(id, 'session expired')
+      }
+    }
+  }
+  state.timer = setInterval(() => void tick(), SESSION_HEARTBEAT_MS)
+  state.timer.unref?.()
+  sessionHeartbeats.set(id, state)
+  void tick()
+  return state
+}
+
+function stopProviderSessionHeartbeat(providerId, reason = '') {
+  const id = String(providerId || '').trim().toLowerCase()
+  const state = id ? sessionHeartbeats.get(id) : null
+  if (!state) return false
+  if (state.timer) clearInterval(state.timer)
+  sessionHeartbeats.delete(id)
+  if (reason) console.log(`[VAULTED] ${id} session heartbeat stopped (${reason}).`)
+  return true
+}
+
+/** A provider error that means "rotate the token and try again". */
+function sessionExpiryCode(error) {
+  if (!error) return ''
+  if (error.sessionExpired === true) return 'session_expired'
+  if (error.code === 'provider_session_expired') return 'provider_session_expired'
+  if (error.status === 401) return 'http_401'
+  return ''
+}
+
 async function stopStaleVaultedClients() {
   if (process.platform !== 'win32') return
   // The PowerShell query below costs a second or more. Almost every launch has
@@ -4858,32 +5003,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
     }
 
     /** PIDs of a launcher that is already running under any of its names. */
-    const runningLauncherPids = (names) => {
-      const clean = [...new Set((names || []).map((name) => String(name || '').replace(/\.exe$/i, '').trim()))]
-        .filter((name) => /^[A-Za-z0-9 ._-]{1,80}$/.test(name))
-      if (clean.length === 0 || process.platform !== 'win32') return Promise.resolve([])
-      return new Promise((resolve) => {
-        execFile(
-          'powershell.exe',
-          [
-            '-NoProfile',
-            '-NonInteractive',
-            '-Command',
-            `Get-Process -Name ${clean.map((name) => `'${name}'`).join(',')} -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }`,
-          ],
-          { windowsHide: true, timeout: 8_000 },
-          (error, stdout) => {
-            if (error || !stdout) return resolve([])
-            resolve(
-              String(stdout)
-                .split(/\r?\n/)
-                .map((value) => Number(value.trim()))
-                .filter((value) => Number.isInteger(value) && value > 0),
-            )
-          },
-        )
-      })
-    }
+    const runningLauncherPids = (names) => processPidsByImage(names)
 
     /**
      * Start a launcher from every documented install location, repair the
@@ -5159,6 +5279,9 @@ async function launchOnlineProvider(payload) {
     }
   }
 
+  // Clear helpers and pipes a crashed or closed earlier session left behind so
+  // this launch never inherits a stale injector or join target.
+  await cleanupStaleSessionHelpers(providerId)
   await ensureRuntimeInstalled()
   // Repair an old or partially installed provider tree before the launch check
   // below can turn it into a missing-DLL dialog.
@@ -5233,8 +5356,23 @@ async function launchOnlineProvider(payload) {
   // renderer or close it after build.verify.
   let realtimeSession = null
   {
+    // Rotate the stored session token before the exchange. A token that expired
+    // between pressing Start and the login is the usual start of a session that
+    // stops accepting locker saves and matchmaking tickets later on.
     try {
-      const exchange = await providerAuth.exchangeCode(providerId, {
+      const refreshed = await providerAuth.refreshSession(providerId)
+      if (refreshed?.refreshed) {
+        console.log(`[VAULTED] ${profile.label} session token refreshed before launch.`)
+      }
+    } catch (error) {
+      console.warn(
+        `[VAULTED] ${profile.label} pre-launch token refresh failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
+    const requestExchange = () =>
+      providerAuth.exchangeCode(providerId, {
         seasonId,
         version,
         // Era gates exchange-code on its realtime build.verify operation. Pass
@@ -5242,6 +5380,21 @@ async function launchOnlineProvider(payload) {
         // executable/PAK files the official launcher verifies.
         buildPath: folder,
       })
+    try {
+      let exchange
+      try {
+        exchange = await requestExchange()
+      } catch (error) {
+        // A 401/expired session must not end the launch: rotate the token once
+        // and retry, then report the real reason if it still fails.
+        const expiry = sessionExpiryCode(error)
+        if (!expiry) throw error
+        console.warn(
+          `[VAULTED] ${profile.label} login rejected the session (${expiry}); refreshing and retrying once.`,
+        )
+        await providerAuth.refreshSession(providerId)
+        exchange = await requestExchange()
+      }
       realtimeSession = exchange.realtimeSession || null
       authToken = typeof exchange.authToken === 'string' ? exchange.authToken : ''
       authCode = normalizeProviderAuthCode(exchange.code)
@@ -5372,6 +5525,11 @@ async function launchOnlineProvider(payload) {
   // after every FortniteClient-Win64-Shipping.exe process has exited.
   markProviderLauncherGameStarted(providerId)
 
+  // Keep the provider session alive for the entire client lifetime: a token
+  // that expires mid-game is exactly what makes locker saves and matchmaking
+  // tickets stop working long after the launch itself succeeded.
+  startProviderSessionHeartbeat(providerId, launched.pid, profile.label)
+
   // Attach only after the real client PID exists. The session polls that PID
   // and closes exactly once it disappears, so a launcher-side exchange failure
   // or a crashed launch cannot leave an orphaned gateway socket behind.
@@ -5393,6 +5551,7 @@ async function launchOnlineProvider(payload) {
   launched.child.once('exit', (code, signal) => {
     if (running.get(id) !== entry) return
     void entry.eraBridge?.close()
+    stopProviderSessionHeartbeat(providerId, 'game process exited')
     realtimeSession?.close('game process exited')
     running.delete(id)
     clearJoinTarget()
@@ -5607,6 +5766,9 @@ function registerIpc() {
 
   ipcMain.handle('arc:launch-build', async (_event, payload) => {
     assertBuild(payload)
+    // The same pre-launch cleanup applies to VAULTED's own direct path: a
+    // leftover injector from an earlier session must not shadow this launch.
+    await cleanupStaleSessionHelpers()
     await ensureRuntimeInstalled()
 
     const id = typeof payload.id === 'string' ? payload.id : null

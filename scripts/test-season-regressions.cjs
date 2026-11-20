@@ -492,6 +492,81 @@ function testDiscordOnlyDirectLaunch() {
   )
 }
 
+/**
+ * The session stability layer: stale helpers are cleared before a launch, the
+ * account token is rotated at launch and during the whole game session, and a
+ * backend drop is logged with its exact close code.
+ */
+function testSessionStability() {
+  assert.match(MAIN, /async function cleanupStaleSessionHelpers\(providerId = ''\)/)
+  assert.match(
+    MAIN,
+    /if \(!\(await anyFortniteClientRunning\(\)\)\) \{\r?\n\s*for \(const pid of await processPidsByImage\(\['VaultedInjector\.exe'\]\)\)/,
+    'a stale injector must only be cleaned while no client is running',
+  )
+  assert.match(
+    MAIN,
+    /if \(cleaned\.length > 0\) \{\r?\n\s*console\.log\(`\[VAULTED\] Pre-launch session cleanup/,
+  )
+  const providerLaunch = MAIN.slice(
+    MAIN.indexOf('async function launchOnlineProvider('),
+    MAIN.indexOf('function privateIpAddress('),
+  )
+  assert.match(
+    providerLaunch,
+    /await cleanupStaleSessionHelpers\(providerId\)/,
+    'the managed launch must clear stale helpers first',
+  )
+  const directLaunchStart = MAIN.indexOf("ipcMain.handle('arc:launch-build'")
+  const directLaunch = MAIN.slice(directLaunchStart, directLaunchStart + 1500)
+  assert.match(
+    directLaunch,
+    /await cleanupStaleSessionHelpers\(\)/,
+    'the direct launch path must clear stale helpers too',
+  )
+
+  // Token rotation at launch, plus one retry after a 401/expired exchange.
+  assert.match(providerLaunch, /const refreshed = await providerAuth\.refreshSession\(providerId\)/)
+  assert.match(providerLaunch, /const requestExchange = \(\) =>/)
+  assert.match(providerLaunch, /const expiry = sessionExpiryCode\(error\)/)
+  assert.match(
+    providerLaunch,
+    /await providerAuth\.refreshSession\(providerId\)\r?\n\s*exchange = await requestExchange\(\)/,
+  )
+  assert.match(MAIN, /function sessionExpiryCode\(error\) \{/)
+
+  // In-session heartbeat: alive for the whole client, refreshed, logged, and
+  // stopped when the client exits.
+  assert.match(MAIN, /const SESSION_HEARTBEAT_MS = 4 \* 60_000/)
+  assert.match(MAIN, /function startProviderSessionHeartbeat\(providerId, pid, label = ''\)/)
+  const heartbeat = MAIN.slice(
+    MAIN.indexOf('function startProviderSessionHeartbeat('),
+    MAIN.indexOf('function stopProviderSessionHeartbeat('),
+  )
+  assert.match(heartbeat, /await providerAuth\.refreshSession\(id\)/)
+  assert.match(heartbeat, /if \(!processAlive\(state\.pid\)\)/)
+  assert.match(heartbeat, /send\('arc:provider-session-expired'/, 'an expired session must be reported')
+  assert.match(heartbeat, /state\.timer = setInterval\(\(\) => void tick\(\), SESSION_HEARTBEAT_MS\)/)
+  assert.match(providerLaunch, /startProviderSessionHeartbeat\(providerId, launched\.pid, profile\.label\)/)
+  assert.match(
+    providerLaunch,
+    /markProviderLauncherGameStarted\(providerId\)(?:\r?\n){2}  \/\/ Keep the provider session alive[\s\S]{0,600}startProviderSessionHeartbeat/,
+  )
+  assert.match(providerLaunch, /stopProviderSessionHeartbeat\(providerId, 'game process exited'\)/)
+
+  // Exact WebSocket close codes are always logged.
+  assert.match(
+    read('electron/providerAuth.cjs'),
+    /gateway socket closed: code=\$\{code \?\? 'none'\} reason=\$\{closeReason \|\| 'none'\}/,
+  )
+
+  // The renderer hears about an expired session instead of silently failing.
+  assert.match(read('electron/preload.cjs'), /onProviderSessionExpired: \(callback\) =>/)
+  assert.match(read('src/lib/launch.ts'), /export function subscribeProviderSessionExpired\(/)
+  assert.match(read('src/App.tsx'), /subscribeProviderSessionExpired\(\(payload\) => \{/)
+  assert.match(read('src/App.tsx'), /session expired`/)
+}
+
 function testCardStates() {
   const playMode = read('src/lib/playMode.ts')
   assert.match(playMode, /ONLINE_UNAVAILABLE_LABEL = 'ONLINE UNAVAILABLE'/)
@@ -506,10 +581,11 @@ try {
   testWorkingSeasons()
   testOnlineRoutes()
   testDiscordOnlyDirectLaunch()
+  testSessionStability()
   testProviderIsolation()
   testCardStates()
   console.log(
-    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, close on game exit/Stop), visible external launchers, Project Reboot online routing, 6.21 Era, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, and per-provider isolation',
+    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, close on game exit/Stop), visible external launchers, Project Reboot online routing, 6.21 Era, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, and per-provider isolation, plus the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging)',
   )
 } catch (error) {
   console.error(error)

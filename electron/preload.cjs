@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('arc', {
   onDownloadProgress: (callback) => subscribe('arc:download-progress', callback),
   onBuildExited: (callback) => subscribe('arc:build-exited', callback),
   onProviderLauncherExited: (callback) => subscribe('arc:provider-launcher-exited', callback),
+  onProviderSessionExpired: (callback) => subscribe('arc:provider-session-expired', callback),
   onJoinFailed: (callback) => subscribe('arc:join-failed', callback),
   onLaunchStatus: (callback) => subscribe('arc:launch-status', callback),
   pickFolder: () => ipcRenderer.invoke('arc:pick-folder'),

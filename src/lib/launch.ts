@@ -244,6 +244,12 @@ export interface LauncherBridge {
   onDownloadProgress?(callback: (progress: DownloadProgress) => void): () => void
   onBuildExited?(callback: (payload: BuildExitInfo) => void): () => void
   onProviderLauncherExited?(callback: (payload: ProviderLauncherExit) => void): () => void
+  /** main's in-session heartbeat could not keep the account session alive */
+  onProviderSessionExpired?(callback: (payload: {
+    providerId: string
+    label: string
+    message: string
+  }) => void): () => void
   onJoinFailed?(callback: (payload: { id?: string; host: string; port: number; reason: string }) => void): () => void
   onLaunchStatus?(callback: (payload: { id?: string; message: string }) => void): () => void
   pickFolder?(): Promise<string | null>
@@ -695,6 +701,12 @@ export function subscribeProviderRuntimeProgress(
 
 export function subscribeBuildExit(callback: (payload: BuildExitInfo) => void): () => void {
   return window.arc?.onBuildExited?.(callback) ?? (() => {})
+}
+
+export function subscribeProviderSessionExpired(
+  callback: (payload: { providerId: string; label: string; message: string }) => void,
+): () => void {
+  return window.arc?.onProviderSessionExpired?.(callback) ?? (() => {})
 }
 
 export function subscribeProviderLauncherExit(
