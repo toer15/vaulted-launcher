@@ -411,6 +411,87 @@ function testProviderIsolation() {
   }
 }
 
+/**
+ * Discord-only communities ship no launcher application. Their seasons must
+ * launch through VAULTED's own direct path (redirect DLL + live public server)
+ * instead of stopping on "has no launcher installed on this PC".
+ */
+function testDiscordOnlyDirectLaunch() {
+  const catalog = providerCatalog()
+  const directIds = [
+    'arc',
+    'crystal',
+    'slurp',
+    'ambient',
+    'reef',
+    'legacy-mp',
+    'horizon',
+    'sunset',
+    'blue-og',
+    'glow',
+  ]
+  for (const id of directIds) {
+    const entry = catalog.find((provider) => provider.id === id)
+    assert.ok(entry, `${id} is missing from the provider catalog`)
+    assert.equal(entry.directLaunch, true, `${id} must launch directly instead of opening a launcher`)
+    assert.equal(entry.mode, 'external', `${id} mode changed`)
+    assert.ok(!entry.runtime, `${id} must not require a companion runtime`)
+    assert.ok(entry.discordGate, `${id} lost its Discord gate`)
+    const profile = providerProfile(id)
+    assert.equal(profile.directLaunch, true, `${id} profile lost its direct-launch flag`)
+  }
+  // Launcher-backed and managed communities keep their existing route.
+  for (const id of [
+    'eon',
+    'hydro',
+    'interloop',
+    'echo',
+    'retrac-official',
+    'reboot-official',
+    'era',
+    'ezfn',
+    'stellar',
+  ]) {
+    const entry = catalog.find((provider) => provider.id === id)
+    assert.ok(entry, `${id} is missing from the provider catalog`)
+    assert.notEqual(entry.directLaunch, true, `${id} must keep its existing launch route`)
+  }
+
+  const APP = read('src/App.tsx')
+  assert.match(APP, /provider\.directLaunch !== true/, 'Auto must not hand a launcherless season to a launcher')
+  assert.match(
+    APP,
+    /if \(provider\.directLaunch === true\) \{/,
+    'the external branch must join a live server for these communities',
+  )
+  assert.match(APP, /globalTarget && globalTarget\.directLaunch !== true \? globalTarget : null/)
+  assert.match(
+    APP,
+    /No live \$\{build\.season\.label\} server is online right now\./,
+    'the failure for these seasons must be about live servers, not a launcher',
+  )
+  const guardAt = MAIN.indexOf('if (profile.directLaunch === true) {')
+  assert.ok(guardAt > 0, 'main has no direct-launch guard')
+  assert.doesNotMatch(
+    MAIN.slice(guardAt, guardAt + 500),
+    /install its launcher/,
+    'the direct-launch guard must not ask the player to install a launcher',
+  )
+
+  // A verified, installed Discord-only season runs the ordinary VAULTED direct
+  // path: the injector plus the redirect DLL selected for the build (Cobalt for
+  // 4.10) and the live public server as its join target.
+  assert.equal(season('ch1-s4').onlineProvider.id, 'arc')
+  assert.match(MAIN, /ipcMain\.handle\('arc:launch-build'/, 'the direct launch IPC is missing')
+  assert.match(MAIN, /legacy \? legacyRedirectDllPath\(\) : path\.join\(runtimeRoot\(\), 'Tellurium\.dll'\)/)
+  assert.match(APP, /await launchBuild\(/, 'the direct launch is not reachable from Play')
+  assert.match(
+    read('src/components/ActiveBuildCard.tsx'),
+    /Ready — Start joins a live \$\{season\.label\} server\./,
+    'the card still promises a launcher for these seasons',
+  )
+}
+
 function testCardStates() {
   const playMode = read('src/lib/playMode.ts')
   assert.match(playMode, /ONLINE_UNAVAILABLE_LABEL = 'ONLINE UNAVAILABLE'/)
@@ -424,6 +505,7 @@ try {
   testLaunchWiring()
   testWorkingSeasons()
   testOnlineRoutes()
+  testDiscordOnlyDirectLaunch()
   testProviderIsolation()
   testCardStates()
   console.log(

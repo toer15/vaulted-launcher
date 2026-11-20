@@ -724,7 +724,11 @@ export function ActiveBuildCard({
             ? 'Verifying the archive checksum…'
             : 'Downloading the build…',
     ready:
-      companionSeason
+      // Discord-only communities have no launcher app: Start joins one of
+      // their live public servers with VAULTED's own direct launch.
+      discordSetupEligible
+        ? `Ready — Start joins a live ${season.label} server.`
+        : companionSeason
         ? `Ready — Start launches ${season.label} in ${autoGlobalBackend?.label || 'the community launcher'}.`
         : discordLocked
         ? `Ready — join ${discordGate?.label || 'the community Discord'} to unlock online play.`

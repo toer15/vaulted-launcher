@@ -4967,6 +4967,17 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       return { opened: true, path: current, pid: launch.child.pid ?? null, tracked: true }
     }
 
+    // A Discord-only community has no launcher application at all. VAULTED
+    // joins its live public servers with its own direct launch, so never ask
+    // the player to install a launcher that does not exist.
+    if (profile.directLaunch === true) {
+      return {
+        opened: false,
+        directLaunch: true,
+        error: `${profile.label} is a Discord-only community without a launcher app. VAULTED joins its live servers directly, and none is online right now.`,
+      }
+    }
+
     // A provider with documented runtime metadata starts its official launcher
     // with the exact build flag it publishes when it has one. Single-season
     // launchers are opened directly; Retrac additionally receives its 14.60

@@ -2759,6 +2759,21 @@ export default function App() {
       // Open their documented entry point instead of pretending VAULTED can
       // inject into a backend that does not ship a compatible runtime.
       if (provider.mode === 'external' || provider.external) {
+        // A Discord-only community publishes no launcher app. Its seasons are
+        // played on the community's live public servers, which VAULTED joins
+        // with its own direct launch — there is no launcher to hand off to.
+        if (provider.directLaunch === true) {
+          const message = `No live ${build.season.label} server is online right now. Try again shortly.`
+          setLaunchFailure({ id: build.id, message })
+          setPhase('error')
+          setLaunchStage(null)
+          pushToast({
+            tone: 'error',
+            title: 'No live server available',
+            description: message,
+          })
+          return false
+        }
         // External communities own their backend and their sign-in. VAULTED
         // never substitutes a local game server for them: it opens the
         // project's own launcher, which is the only client that can join their
@@ -3181,6 +3196,10 @@ export default function App() {
         const candidates = seasonProviders.filter(
           (provider) =>
             provider.mode === 'external' &&
+            // A Discord-only community has no launcher app to open: its
+            // seasons are joined on live public servers through VAULTED's own
+            // direct launch (see the live-server path below).
+            provider.directLaunch !== true &&
             provider.id !== 'retrac-official' &&
             provider.supportedSeasons.includes(seasonKey) &&
             provider.live?.online !== false,
@@ -3451,10 +3470,15 @@ export default function App() {
       // provider launch keeps its join address while still running the
       // exchange/socket handshake for the season.
       const preferredGlobal = selectedGlobal ?? (selectedIp || join ? null : autoGlobal)
-      const globalTarget =
-        selectedGlobal?.mode === 'external' ? selectedGlobal : preferredGlobal
-
-      const providerTarget = globalTarget
+      // A Discord-only community without a launcher app is never a launcher
+      // target: its seasons launch directly into a live public server.
+      const globalTarget = (
+        selectedGlobal?.mode === 'external' && selectedGlobal.directLaunch !== true
+          ? selectedGlobal
+          : preferredGlobal
+      )
+      const providerTarget =
+        globalTarget && globalTarget.directLaunch !== true ? globalTarget : null
 
       if (providerTarget) {
         // Do not run a full file scan before asking an unsigned player to

@@ -126,6 +126,11 @@ export interface GlobalBackend extends OnlineProviderConfig {
   /** public fallback population source when the health endpoint omits players */
   population?: ProviderPopulationConfig
   /** Discord community that must be joined before online play unlocks */
+  /**
+   * Discord-only community with no vendor launcher application: Start joins a
+   * live public server with VAULTED's own direct launch.
+   */
+  directLaunch?: boolean
   discordGate?: DiscordGate
   global: boolean
   /** discover additional live seasons from the provider account at runtime */

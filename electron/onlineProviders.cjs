@@ -593,11 +593,18 @@ function catalogData() {
     const discordAuth = entry.discordAuth === true || discordAuthorize
     const parsedDiscordGate = parseDiscordGate(entry.discordGate)
     const runtimeMetadata = parseRuntimeMetadata(entry.runtime)
+    const declaredLauncher = parseLauncherMetadata(entry.launcher)
     const launcherMetadata =
-      parseLauncherMetadata(entry.launcher) ||
+      declaredLauncher ||
       (mode === 'external' && launchKind === 'discord'
         ? defaultLauncherMetadata(name, label)
         : null)
+    // A Discord-only community ships no launcher application for VAULTED to
+    // open; its seasons are played on live public servers. Play for these is a
+    // VAULTED direct launch that joins one of those servers, never a handoff to
+    // a launcher that does not exist.
+    const directLaunch =
+      mode === 'external' && launchKind === 'discord' && !runtimeMetadata && !declaredLauncher
 
     providers.push({
       id,
@@ -613,6 +620,7 @@ function catalogData() {
         : undefined,
       runtime: runtimeMetadata,
       launcher: launcherMetadata,
+      directLaunch,
       mode,
       external: mode === 'external' || entry.external === true,
       launchKind,
@@ -692,6 +700,7 @@ function providerCatalog() {
         }
       : undefined,
     launcher: entry.launcher,
+    directLaunch: entry.directLaunch === true,
     launchKind: entry.launchKind,
     launchUrl: entry.launchUrl,
     launchHandshakePending: entry.launchHandshakePending,
@@ -906,6 +915,7 @@ function providerProfile(id) {
         return gate ? { providerId: provider.id, ...gate } : undefined
       })(),
     launchHandshakePending: catalogEntry?.launchHandshakePending === true,
+    directLaunch: catalogEntry?.directLaunch === true,
     statusUrl: catalogEntry?.statusUrl || '',
     mode:
       catalogEntry?.mode ||
