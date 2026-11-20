@@ -247,16 +247,42 @@ function testOnlineRoutes() {
     )
     assert.ok(['deeplink', 'embedded_web', 'oauth'].includes(provider.auth))
   }
-  // A launcher that installs its own season builds must not be gated behind a
-  // VAULTED archive download; Retrac's manifest-driven launcher still is.
-  assert.equal(rebootOfficial.runtime?.ownsBuild, true)
+  // Every online season downloads its real Fortnite season build inside
+  // VAULTED. No launcher "owns" its builds and skips that archive any more.
+  assert.equal('ownsBuild' in (rebootOfficial.runtime || {}), false)
   const retracCatalog = providerCatalog().find((entry) => entry.id === 'retrac-official')
-  assert.equal(retracCatalog?.runtime?.ownsBuild, false)
+  assert.equal('ownsBuild' in (retracCatalog?.runtime || {}), false)
+  assert.ok(
+    !read('electron/onlineProviders.cjs').includes('ownsBuild'),
+    'the catalog must not expose an ownsBuild shortcut',
+  )
   const app = read('src/App.tsx')
+  assert.ok(!app.includes('ownsBuild'), 'Start must not consult an ownsBuild shortcut')
   assert.match(
     app,
-    /activeRuntime\.ownsBuild !== true/,
-    'Start must skip the local download gate for a launcher that owns its builds',
+    /if \(!installed\[build\.id\]\) \{\r?\n\s*if \(activeRuntime\?\.required && !activeRuntime\.installed\)/,
+    'every online season must install its runtime and download its build first',
+  )
+  assert.match(
+    app,
+    /if \(automaticExternal && !installed\[build\.id\]\)/,
+    'an auto-selected external launcher must wait for the season build',
+  )
+  // Data lock: every online card has a real archive or provider build to fetch,
+  // so requiring that download can never strand an online season.
+  const onlineSeasons = Object.values(
+    JSON.parse(read('src/assets/builds.json')).seasons || {},
+  ).filter((season) => season.onlineProvider || season.onlineProviders)
+  assert.ok(onlineSeasons.length > 0, 'no online seasons were found')
+  for (const season of onlineSeasons) {
+    assert.ok(
+      season.downloadUrl || season.providerBuild,
+      `${season.id} is online but has no real build source to download`,
+    )
+  }
+  assert.ok(
+    !read('src/components/ActiveBuildCard.tsx').includes('ownsBuild'),
+    'the card must always show the download step for a missing build',
   )
 
   const auth = read('electron/providerAuth.cjs')

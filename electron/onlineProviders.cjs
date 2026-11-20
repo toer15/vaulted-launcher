@@ -689,14 +689,6 @@ function providerCatalog() {
       ? {
           required: true,
           label: entry.runtime.label,
-          // An external project's launcher installs and updates the season
-          // builds it hosts itself (Project Reboot, Eon, Hydro, …). Only a
-          // launcher that is driven by a VAULTED build flag (Retrac's manifest
-          // id) still needs the archive downloaded first.
-          ownsBuild:
-            entry.mode === 'external' &&
-            entry.runtime.kind === 'exe' &&
-            Object.keys(entry.runtime.manifestIds || {}).length === 0,
         }
       : undefined,
     launcher: entry.launcher,

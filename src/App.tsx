@@ -982,7 +982,6 @@ export default function App() {
       providerId,
       required: true,
       label: status?.label || declared?.label || 'Companion Launcher',
-      ownsBuild: declared?.ownsBuild === true,
       installed: status?.installed === true,
       phase:
         progress && progress.phase !== 'done' ? progress.phase : undefined,
@@ -3238,6 +3237,16 @@ export default function App() {
         if (hostedLive) return null
         return candidates.find((provider) => provider.id === build.onlineProvider?.id) ?? candidates[0] ?? null
       })()
+      // The season build is a prerequisite for every online route, including a
+      // launcher handoff: download it before Auto can open an external project.
+      if (automaticExternal && !installed[build.id]) {
+        const seasonKey = artKeyFor(build.season)
+        const source = seasonKey ? seasonManifest[seasonKey] : undefined
+        if (source?.downloadUrl || source?.providerBuild) {
+          requestDownload(build, { launchAfter: true })
+          return
+        }
+      }
       if (automaticExternal) {
         await startOnlineProvider(build, automaticExternal)
         return
@@ -3809,18 +3818,17 @@ export default function App() {
     // that declares a runtime must be installed before the season download;
     // once it is ready, Download Season becomes the next card action.
     if (autoGlobalBackend && (autoGlobalBackend.mode === 'external' || autoGlobalBackend.external)) {
-      // An installed build is launched directly, so its companion launcher is
-      // background plumbing: never block Start on installing it. A launcher
-      // that owns its season builds (Project Reboot) needs no VAULTED archive
-      // at all: Start installs the launcher, then opens it online.
-      if (activeRuntime?.required && !installed[build.id] && activeRuntime.ownsBuild !== true) {
-        if (!activeRuntime.installed) {
+      // Every online season needs its real Fortnite build on this PC before any
+      // launcher opens. The provider runtime, its DLLs and the launcher are
+      // staged alongside that archive, never instead of it.
+      if (!installed[build.id]) {
+        if (activeRuntime?.required && !activeRuntime.installed) {
           await handleInstallRuntime()
           return
         }
         const seasonKey = artKeyFor(build.season)
         const source = seasonKey ? seasonManifest[seasonKey] : undefined
-        if (!installed[build.id] && (source?.downloadUrl || source?.providerBuild)) {
+        if (source?.downloadUrl || source?.providerBuild) {
           requestDownload(build, { launchAfter: true })
           return
         }

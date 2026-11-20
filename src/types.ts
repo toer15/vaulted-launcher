@@ -110,8 +110,6 @@ export interface GlobalBackend extends OnlineProviderConfig {
   runtime?: {
     required: boolean
     label: string
-    /** the launcher owns its season builds, so a VAULTED archive download is not a prerequisite */
-    ownsBuild?: boolean
   }
   /** installed companion launcher detection for Discord-only communities */
   launcher?: ProviderLauncherConfig

@@ -180,11 +180,11 @@ function testLiveProviderMappings() {
   ])
   assert.equal(providerRuntimeMetadata('slurp'), null)
   // Retrac is driven by its own build manifest flag, so the 14.60 archive must
-  // still be downloaded before its launcher can be handed the folder.
+  // still be downloaded before its launcher can be handed the folder. Every
+  // runtime is metadata only now: no launcher owns its season build.
   assert.deepEqual(official?.runtime, {
     required: true,
     label: 'Retrac Launcher',
-    ownsBuild: false,
   })
   // v1.x-v3.x predate the Curl signatures Tellurium waits for. They must
   // select Cobalt while every modern build keeps Tellurium.
