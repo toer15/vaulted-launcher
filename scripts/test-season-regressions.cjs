@@ -390,7 +390,29 @@ function testLawinServerBan() {
   assert.equal(echoCatalog?.banned, true)
   assert.deepEqual(echoCatalog?.seasons, [])
   assert.match(echoCatalog?.bannedReason || '', /WinRAR SFX|malicious|SYSTEM scheduled task/i)
-  assert.equal(routeIds(season('ch1-s3')).includes('echo'), false, 'ch1-s3 still routes through Echo')
+  assert.deepEqual(
+    [...new Set(routeIds(season('ch1-s3')))],
+    ['sunset'],
+    'ch1-s3 must route only to the hosted SunSet service',
+  )
+  const sunset = providerCatalog().find((entry) => entry.id === 'sunset')
+  assert.ok(sunset, 'the SunSet replacement is missing from the provider catalog')
+  assert.equal(sunset.launchKind, 'discord')
+  assert.equal(sunset.runtime, undefined, 'SunSet must not install a companion launcher')
+  assert.equal(
+    /(?:^|[/:@])(?:127\.0\.0\.1|localhost|\[::1\])(?:[/:]|$)/i.test(sunset.backendUrl || ''),
+    false,
+    'SunSet must be hosted online, never loopback/local',
+  )
+  const community = JSON.parse(read('resources/providers/community.json'))
+  const communityProviders = community.endpoints.flatMap((endpoint) =>
+    Object.values(endpoint.providerMap || {}),
+  )
+  assert.equal(
+    communityProviders.some((entry) => entry.id === 'echo'),
+    false,
+    'the community directory must not advertise Echo',
+  )
   const safety = read('electron/installerSafety.cjs')
   assert.match(safety, /Setup\\s\*=\\s\*/, 'the SFX scanner must read the WinRAR Setup command')
   assert.match(safety, /assertInstallerSafe/)

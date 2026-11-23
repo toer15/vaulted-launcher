@@ -168,7 +168,7 @@ function lobbyTarget(address: string): { host: string; port: number } | null {
   return host ? { host, port } : null
 }
 
-const PROVIDER_BRAND_PATTERN = /\b(?:Project Era|EZFN Hybrid|EZFN|Stellar|Retrac|Reboot|Eon|Hydro|Interloop|Crystal|Echo|ARC|Era)\b/gi
+const PROVIDER_BRAND_PATTERN = /\b(?:Project Era|EZFN Hybrid|EZFN|Stellar|Retrac|Reboot|Eon|Hydro|Interloop|Crystal|SunSet Studios|SunSet|ARC|Era)\b/gi
 
 function nativeMessage(message: string): string {
   return message.replace(PROVIDER_BRAND_PATTERN, 'online service')
