@@ -673,7 +673,9 @@ export function ActiveBuildCard({
   const PrimaryIcon = primary.icon
 
   const statusText: Record<BuildState, string> = {
-    missing: setupBanner
+    missing: onlineUnavailableForPlay
+      ? 'No live online server for this season right now.'
+      : setupBanner
       ? 'Complete Step 1 to unlock the season install.'
       : discordSetupEligible
         ? requiresSignIn

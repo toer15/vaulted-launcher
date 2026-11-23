@@ -540,7 +540,12 @@ export function playModesForBuilds(
       // not expose joinable server APIs. Track them separately so the card can
       // say LAUNCHER without inventing a server count.
       if (backend.live?.online === true) {
+        // A project that hosts one season at a time publishes which season is
+        // live. Only that card may follow it; the rest stay unavailable instead
+        // of claiming a season the project already rotated past.
+        const liveSeasonId = backend.live.liveSeasonId
         for (const seasonId of backend.supportedSeasons) {
+          if (liveSeasonId && liveSeasonId !== seasonId) continue
           const current = externalBySeason.get(seasonId) ?? []
           current.push(backend)
           externalBySeason.set(seasonId, current)

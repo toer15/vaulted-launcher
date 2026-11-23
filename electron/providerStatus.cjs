@@ -55,17 +55,28 @@ function readPayloadPath(root, dotted) {
 
 /**
  * Some projects host one season at a time and rotate. Their public API reports
- * which season is live right now, so a card must go offline instead of claiming
- * a season the backend has already moved past.
+ * which season is live right now, so VAULTED maps that number onto the bundled
+ * season id and follows it instead of pinning one season forever.
  */
-function rotationReason(provider, payload) {
+function liveSeasonInfo(provider, payload) {
   const live = provider?.liveSeason
   if (!live || typeof live !== 'object' || typeof live.path !== 'string') return null
-  const actual = readPayloadPath(payload, live.path)
-  if (actual === undefined || actual === null || actual === '') return null
-  if (String(actual) === String(live.equals)) return null
+  const raw = readPayloadPath(payload, live.path)
+  if (raw === undefined || raw === null || raw === '') return null
+  const number = Number(raw)
+  const seasonId =
+    typeof live.seasonPrefix === 'string' && Number.isInteger(number) && number > 0 && number < 100
+      ? `${live.seasonPrefix}${number}`
+      : undefined
+  return { actual: String(raw), seasonId, expected: live.equals }
+}
+
+/** Only an explicit `equals` pin can fail; following mode accepts any season. */
+function rotationReason(provider, season) {
+  if (!season || season.expected === undefined || season.expected === null) return null
+  if (String(season.actual) === String(season.expected)) return null
   const label = provider.label || provider.name || 'This server'
-  return `${label} is currently running season ${actual}, not ${live.label || `season ${live.equals}`}. It was not counted as live for this season.`
+  return `${label} is currently running season ${season.actual}, not ${provider.liveSeason.label || `season ${season.expected}`}. It was not counted as live for this season.`
 }
 
 function hasCompanionLauncher(provider) {
@@ -270,7 +281,8 @@ async function probeProviderStatus(provider, options = {}) {
       }
     }
     const payload = await readPayload(response)
-    const offlineReason = offlineReasonFromPayload(payload) || rotationReason(provider, payload)
+    const liveSeason = liveSeasonInfo(provider, payload)
+    const offlineReason = offlineReasonFromPayload(payload) || rotationReason(provider, liveSeason)
     if (offlineReason) {
       return {
         providerId,
@@ -310,6 +322,7 @@ async function probeProviderStatus(provider, options = {}) {
       servers: Math.max(1, reportedServers ?? 0),
       serverData,
       pingMs,
+      ...(liveSeason?.seasonId ? { liveSeasonId: liveSeason.seasonId } : {}),
       checkedAt,
     }
   } catch (error) {

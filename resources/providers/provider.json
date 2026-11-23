@@ -783,12 +783,20 @@
       "external": true,
       "global": true,
       "seasons": [
-        "ch1-s6"
+        "ch1-s1",
+        "ch1-s2",
+        "ch1-s3",
+        "ch1-s4",
+        "ch1-s5",
+        "ch1-s6",
+        "ch1-s7",
+        "ch1-s8",
+        "ch1-s9"
       ],
       "statusUrl": "https://api.erafn.dev/api/v1/public/website",
       "liveSeason": {
         "path": "data.season.number",
-        "equals": 6,
+        "seasonPrefix": "ch1-s",
         "label": "Season 6"
       },
       "runtime": {

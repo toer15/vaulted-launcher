@@ -80,6 +80,12 @@ export interface ProviderLiveStatus {
   /** True only when the response reported a positive player or server count. */
   serverData?: boolean
   pingMs?: number
+  /**
+   * Season the backend itself reports as live right now (for projects that host
+   * one season at a time and rotate). Cards follow this id, so only the season
+   * the project actually hosts today can stay playable.
+   */
+  liveSeasonId?: string
   /** why a down probe failed, or the reachable HTTP status */
   reason?: string
   checkedAt: string

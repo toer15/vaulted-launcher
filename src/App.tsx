@@ -504,10 +504,15 @@ export default function App() {
   }, [directoryProviderPopulations, providerLiveStatus])
   const seasonProviders = useMemo(
     () =>
-      providerCatalog.map((provider) => ({
-        ...provider,
-        live: providerLiveStatusWithDirectories[provider.id],
-      })),
+      providerCatalog.map((provider) => {
+        const live = providerLiveStatusWithDirectories[provider.id]
+        // A project that hosts one season at a time publishes the season it is
+        // hosting right now. Narrow that provider to the reported season so the
+        // cards it no longer hosts stay locked instead of advertising it.
+        const supportedSeasons =
+          live?.online === true && live.liveSeasonId ? [live.liveSeasonId] : provider.supportedSeasons
+        return { ...provider, supportedSeasons, live }
+      }),
     [providerCatalog, providerLiveStatusWithDirectories],
   )
   const nativeProviders = useMemo(

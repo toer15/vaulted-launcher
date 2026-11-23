@@ -24,7 +24,19 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 6591289197
+      "sizeBytes": 6591289197,
+      "onlineProvider": {
+        "id": "era-official",
+        "name": "Project Era",
+        "label": "Era"
+      },
+      "onlineProviders": [
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
+        }
+      ]
     },
     "ch1-s2": {
       "id": "ch1-s2",
@@ -50,11 +62,16 @@
       ],
       "sizeBytes": 6976364737,
       "onlineProvider": {
-        "id": "sunset",
-        "name": "SunSet Studios",
-        "label": "SunSet"
+        "id": "era-official",
+        "name": "Project Era",
+        "label": "Era"
       },
       "onlineProviders": [
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
+        },
         {
           "id": "sunset",
           "name": "SunSet Studios",
@@ -86,11 +103,16 @@
       ],
       "sizeBytes": 7384406276,
       "onlineProvider": {
-        "id": "sunset",
-        "name": "SunSet Studios",
-        "label": "SunSet"
+        "id": "era-official",
+        "name": "Project Era",
+        "label": "Era"
       },
       "onlineProviders": [
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
+        },
         {
           "id": "sunset",
           "name": "SunSet Studios",
@@ -122,11 +144,16 @@
       ],
       "sizeBytes": 11427640644,
       "onlineProvider": {
-        "id": "arc",
-        "name": "ARC",
-        "label": "ARC"
+        "id": "era-official",
+        "name": "Project Era",
+        "label": "Era"
       },
       "onlineProviders": [
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
+        },
         {
           "id": "arc",
           "name": "ARC",
@@ -163,11 +190,16 @@
       ],
       "sizeBytes": 13283153744,
       "onlineProvider": {
-        "id": "sunset",
-        "name": "SunSet Studios",
-        "label": "SunSet"
+        "id": "era-official",
+        "name": "Project Era",
+        "label": "Era"
       },
       "onlineProviders": [
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
+        },
         {
           "id": "sunset",
           "name": "SunSet Studios",
@@ -234,7 +266,19 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 15211195887
+      "sizeBytes": 15211195887,
+      "onlineProvider": {
+        "id": "era-official",
+        "name": "Project Era",
+        "label": "Era"
+      },
+      "onlineProviders": [
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
+        }
+      ]
     },
     "ch1-s8": {
       "id": "ch1-s8",
@@ -258,7 +302,19 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 23087753024
+      "sizeBytes": 23087753024,
+      "onlineProvider": {
+        "id": "era-official",
+        "name": "Project Era",
+        "label": "Era"
+      },
+      "onlineProviders": [
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
+        }
+      ]
     },
     "ch1-s9": {
       "id": "ch1-s9",
@@ -282,7 +338,19 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 18553831172
+      "sizeBytes": 18553831172,
+      "onlineProvider": {
+        "id": "era-official",
+        "name": "Project Era",
+        "label": "Era"
+      },
+      "onlineProviders": [
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
+        }
+      ]
     },
     "ch1-s10": {
       "id": "ch1-s10",

@@ -582,11 +582,17 @@ function catalogData() {
       typeof entry.liveSeason === 'object' &&
       typeof entry.liveSeason.path === 'string' &&
       /^[A-Za-z0-9_.]{1,80}$/.test(entry.liveSeason.path) &&
-      ['string', 'number'].includes(typeof entry.liveSeason.equals) &&
-      String(entry.liveSeason.equals).length <= 32
+      (entry.liveSeason.equals === undefined ||
+        (['string', 'number'].includes(typeof entry.liveSeason.equals) &&
+          String(entry.liveSeason.equals).length <= 32))
         ? {
             path: entry.liveSeason.path,
             equals: entry.liveSeason.equals,
+            seasonPrefix:
+              typeof entry.liveSeason.seasonPrefix === 'string' &&
+              /^ch\d{1,2}-s$/.test(entry.liveSeason.seasonPrefix)
+                ? entry.liveSeason.seasonPrefix
+                : undefined,
             label:
               typeof entry.liveSeason.label === 'string'
                 ? entry.liveSeason.label.trim().slice(0, 32)

@@ -298,9 +298,35 @@ function testWorkingSeasons() {
   )
   const eraOfficial = providerCatalog().find((entry) => entry.id === 'era-official')
   assert.ok(eraOfficial?.runtime, 'Era must ship its launcher runtime')
-  assert.deepEqual(eraOfficial.supportedSeasons, ['ch1-s6'])
+  assert.deepEqual(eraOfficial.supportedSeasons, [
+    'ch1-s1',
+    'ch1-s2',
+    'ch1-s3',
+    'ch1-s4',
+    'ch1-s5',
+    'ch1-s6',
+    'ch1-s7',
+    'ch1-s8',
+    'ch1-s9',
+  ])
   assert.equal(eraOfficial.mode, 'external')
-  assert.deepEqual(eraOfficial.liveSeason, { path: 'data.season.number', equals: 6, label: 'Season 6' })
+  // Era hosts one Chapter 1 season at a time and reports it, so it follows that
+  // season instead of pinning ch1-s6 forever.
+  assert.equal(eraOfficial.liveSeason?.path, 'data.season.number')
+  assert.equal(eraOfficial.liveSeason?.seasonPrefix, 'ch1-s')
+  assert.equal(eraOfficial.liveSeason?.equals, undefined, 'Era must follow, not pin a season')
+  for (let number = 1; number <= 9; number += 1) {
+    assert.equal(
+      season(`ch1-s${number}`).onlineProvider?.id,
+      'era-official',
+      `ch1-s${number} must carry Era so a rotation can follow it`,
+    )
+  }
+  assert.equal(
+    routeIds(season('ch1-s10')).includes('era-official'),
+    false,
+    'Season X belongs to Neo, so Era must not claim it',
+  )
   const eraRuntime = providerRuntimeMetadata('era-official')
   assert.equal(eraRuntime?.processName, 'Era.exe')
   assert.equal(eraRuntime?.silentArgs?.[0], '/S')
@@ -361,10 +387,6 @@ function testWorkingSeasons() {
 
   // Reboot-only seasons and seasons without any public backend stay unavailable.
   for (const id of [
-    'ch1-s1',
-    'ch1-s7',
-    'ch1-s8',
-    'ch1-s9',
     'ch2-s3',
     'ch2-s6',
     'ch2-s8',
@@ -460,8 +482,12 @@ function testResearchedLaunchersStayUnwired() {
 
   // Prototypes that only ship a Discord invite, a dead host, or an installer we
   // could not verify stay locked instead of gaining a launcher by accident.
-  for (const id of ['ch1-s3', 'ch1-s4', 'ch3-s1', 'ch4-s4', 'ch2-s1']) {
+  for (const id of ['ch1-s1', 'ch1-s3', 'ch1-s4', 'ch1-s7', 'ch1-s8', 'ch1-s9', 'ch3-s1', 'ch4-s4', 'ch2-s1']) {
     for (const routeId of routeIds(season(id))) {
+      // Era is the one verified, scanned, season-gated launcher allowed to sit
+      // behind a locked Chapter 1 card: it only unlocks the season its API says
+      // is live today.
+      if (routeId === 'era-official') continue
       const entry = providerCatalog().find((provider) => provider.id === routeId)
       assert.ok(!entry?.runtime, `${id} must not gain an unverified installer through ${routeId}`)
     }
@@ -476,7 +502,22 @@ function testResearchedLaunchersStayUnwired() {
   }
   assert.deepEqual(
     [...runtimeSeasons].sort(),
-    ['ch1-s10', 'ch1-s6', 'ch2-s2', 'ch2-s4', 'ch2-s5', 'ch2-s7'],
+    [
+      'ch1-s1',
+      'ch1-s10',
+      'ch1-s2',
+      'ch1-s3',
+      'ch1-s4',
+      'ch1-s5',
+      'ch1-s6',
+      'ch1-s7',
+      'ch1-s8',
+      'ch1-s9',
+      'ch2-s2',
+      'ch2-s4',
+      'ch2-s5',
+      'ch2-s7',
+    ],
     'only verified online seasons may ship a companion launcher',
   )
 }
@@ -499,8 +540,8 @@ function testLawinServerBan() {
   assert.match(echoCatalog?.bannedReason || '', /WinRAR SFX|malicious|SYSTEM scheduled task/i)
   assert.deepEqual(
     [...new Set(routeIds(season('ch1-s3')))],
-    ['sunset'],
-    'ch1-s3 must route only to the hosted SunSet service',
+    ['era-official', 'sunset'],
+    'ch1-s3 keeps its SunSet gate and follows Era while Era hosts Season 3',
   )
   const sunset = providerCatalog().find((entry) => entry.id === 'sunset')
   assert.ok(sunset, 'the SunSet replacement is missing from the provider catalog')
@@ -982,7 +1023,13 @@ function testDiscordOnlyDirectLaunch() {
   // A verified, installed Discord-only season runs the ordinary VAULTED direct
   // path: the injector plus the redirect DLL selected for the build (Cobalt for
   // 4.10) and the live public server as its join target.
-  assert.equal(season('ch1-s4').onlineProvider.id, 'arc')
+  // ARC stays the Discord direct-launch route for 4.10 while Era (verified
+  // launcher, season-gated) leads the card so a rotation can follow it.
+  assert.equal(season('ch1-s4').onlineProvider.id, 'era-official')
+  assert.ok(
+    routeIds(season('ch1-s4')).includes('arc'),
+    'the ARC direct-launch route must stay registered for ch1-s4',
+  )
   assert.match(MAIN, /ipcMain\.handle\('arc:launch-build'/, 'the direct launch IPC is missing')
   assert.match(MAIN, /legacy \? legacyRedirectDllPath\(\) : path\.join\(runtimeRoot\(\), 'Tellurium\.dll'\)/)
   assert.match(APP, /await launchBuild\(/, 'the direct launch is not reachable from Play')
@@ -1133,10 +1180,11 @@ async function testSeasonRotationGuard() {
       headers: { 'content-type': 'application/json' },
     })
   const live = await probeProviderStatus(era, { fetchImpl: reply(6) })
-  assert.equal(live.online, true, 'Era on Season 6 must count as live for ch1-s6')
+  assert.equal(live.online, true, 'Era on Season 6 must count as live')
+  assert.equal(live.liveSeasonId, 'ch1-s6', 'Era must report the season it is hosting')
   const rotated = await probeProviderStatus(era, { fetchImpl: reply(7) })
-  assert.equal(rotated.online, false, 'Era on another season must not count as ch1-s6')
-  assert.match(rotated.reason || '', /running season 7/i)
+  assert.equal(rotated.online, true, 'Era stays reachable after a rotation')
+  assert.equal(rotated.liveSeasonId, 'ch1-s7', 'Era must follow the newly live season')
   const silent = await probeProviderStatus(era, {
     fetchImpl: async () =>
       new Response(JSON.stringify({ data: {} }), {
@@ -1145,6 +1193,24 @@ async function testSeasonRotationGuard() {
       }),
   })
   assert.equal(silent.online, true, 'a backend that hides its season stays reachable')
+  assert.equal(silent.liveSeasonId, undefined, 'an unknown season unlocks no card')
+
+  // Only the reported season may follow the launcher; every other card keeps
+  // its locked state even though the backend answered.
+  const playMode = read('src/lib/playMode.ts')
+  assert.match(playMode, /const liveSeasonId = backend\.live\.liveSeasonId/)
+  assert.match(playMode, /if \(liveSeasonId && liveSeasonId !== seasonId\) continue/)
+  assert.match(read('electron/providerStatus.cjs'), /liveSeasonId: liveSeason\.seasonId/)
+  assert.match(
+    read('src/App.tsx'),
+    /live\?\.online === true && live\.liveSeasonId \? \[live\.liveSeasonId\]/,
+    'the renderer must narrow a rotating project to the season it reports',
+  )
+  assert.match(
+    read('src/components/ActiveBuildCard.tsx'),
+    /missing: onlineUnavailableForPlay\s*\?/,
+    'a locked season must not advertise an install step',
+  )
 }
 
 async function testDiscordOnlyNeverCountsOnline() {

@@ -542,6 +542,10 @@ export async function fetchProviderLiveStatuses(): Promise<Record<string, Provid
           : 1
         : 0,
       pingMs: Number.isFinite(pingMs) && pingMs >= 0 ? Math.round(pingMs) : undefined,
+      liveSeasonId:
+        typeof raw.liveSeasonId === 'string' && /^ch\d{1,2}-s\d{1,2}$/.test(raw.liveSeasonId)
+          ? raw.liveSeasonId
+          : undefined,
       reason:
         typeof raw.reason === 'string' && raw.reason.trim() ? raw.reason.trim().slice(0, 240) : undefined,
       checkedAt: typeof raw.checkedAt === 'string' ? raw.checkedAt : new Date().toISOString(),

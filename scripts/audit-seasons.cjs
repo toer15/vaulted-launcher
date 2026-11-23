@@ -65,6 +65,18 @@ function entryFor(id) {
   return catalog.providers.find((provider) => provider.id === id)
 }
 
+/**
+ * A live sample only counts for the season the project actually hosts. Projects
+ * that rotate publish their current season, so the card for any other season
+ * stays unavailable instead of inheriting the badge.
+ */
+function routeLiveForSeason(season, provider, status) {
+  if (!status || status.online !== true) return false
+  const liveSeasonId = status.liveSeasonId
+  if (provider?.liveSeason && liveSeasonId && liveSeasonId !== season.id) return false
+  return true
+}
+
 function hasCompanionLauncher(provider) {
   // directLaunch means VAULTED joins a live public server itself; it is not a
   // launcher whose website/Discord can prove the server is up. A `launcher`
@@ -147,14 +159,16 @@ function routeDetail(season, routes, statuses, problems) {
     const provider = entryFor(route.id)
     return provider?.mode === 'external' && hasCompanionLauncher(provider)
   })
-  const reachableExternal = external.filter((route) => statuses[route.id]?.online === true)
+  const reachableExternal = external.filter((route) =>
+    routeLiveForSeason(season, entryFor(route.id), statuses[route.id]),
+  )
 
   const unavailableRoutes = routes.filter((route) => {
     const provider = entryFor(route.id)
     if (!provider || REMOVED_PROVIDERS.has(route.id) || BANNED_PROVIDERS.has(route.id)) return false
     if (MANAGED_MODES.has(provider.mode)) return statuses[route.id]?.online !== true
     if (provider.mode === 'external') {
-      return !hasCompanionLauncher(provider) || statuses[route.id]?.online !== true
+      return !hasCompanionLauncher(provider) || !routeLiveForSeason(season, provider, statuses[route.id])
     }
     return true
   })
