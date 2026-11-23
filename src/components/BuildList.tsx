@@ -100,10 +100,13 @@ export function BuildList({
                     ? 'Verifying…'
                     : null
           : null
-        // ONLINE and ONLINE · DISCORD are green. A plain launcher-only card
-        // stays red, even when its external project is reachable.
+        // ONLINE, ONLINE · DISCORD and LAUNCHER are green routes. Only a
+        // season with no online route at all (ONLINE UNAVAILABLE) stays red.
         const isLive =
-          playMode.online || playMode.globalOnline === true || playMode.discordOnline === true
+          playMode.online === true ||
+          playMode.globalOnline === true ||
+          playMode.discordOnline === true ||
+          playMode.externalAvailable === true
         const isChecking =
           !isLive && playMode.availability === 'global' && playMode.globalOffline !== true
         const isUnavailable = onlineIsUnavailable(playMode)

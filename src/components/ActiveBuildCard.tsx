@@ -156,20 +156,25 @@ function formatEta(seconds: number | null | undefined): string | null {
 function statusToneFor(
   health: ServerHealth | null,
   playMode: SeasonPlayMode | undefined,
+  label = '',
 ): 'up' | 'down' | 'checking' | 'muted' {
+  // The badge text is authoritative: a LAUNCHER pill is a real online route
+  // (the season's own project hosts it), so it is green. ONLINE UNAVAILABLE
+  // stays red.
+  if (label === 'LAUNCHER') return 'up'
+  if (label.startsWith('ONLINE UNAVAILABLE')) return 'down'
   // An ONLINE · DISCORD community is an online route, even when a relay or
   // directory probe for the same season is down.
   if (playMode?.discordOnline === true) return 'up'
   if (health?.state === 'down') return 'down'
   if (health?.state === 'checking') return 'checking'
-  // ONLINE and ONLINE · DISCORD cards get the green treatment. A plain
-  // launcher-only card (no ONLINE status) stays red.
+  // ONLINE and ONLINE · DISCORD cards get the green treatment.
   if (health?.state === 'link') {
     if (String(health.linkLabel || '').startsWith('ONLINE')) return 'up'
     return onlineIsLive(playMode) ? 'up' : 'down'
   }
   if (health?.state === 'up' || onlineIsLive(playMode)) return 'up'
-  if (playMode?.externalAvailable === true) return onlineIsLive(playMode) ? 'up' : 'down'
+  if (playMode?.externalAvailable === true) return onlineIsPlayable(playMode) ? 'up' : 'down'
   return 'down'
 }
 
@@ -480,7 +485,9 @@ export function ActiveBuildCard({
       : externalHero || playMode?.externalAvailable || playMode?.discordOnline
         ? 'LAUNCHER'
         : 'ONLINE UNAVAILABLE'
-  const serverBadgeLive = liveServers > 0 || onlineIsLive(playMode)
+  // A LAUNCHER pill is a playable online route; ONLINE UNAVAILABLE is not.
+  const serverBadgeLive =
+    liveServers > 0 || serverBadge === 'LAUNCHER' || onlineIsLive(playMode)
   const activeBackendHealth = healthForBackend(activeGlobalBackend)
   const activeBackendOffline = activeBackendHealth.state === 'down'
   const heroHealth: ServerHealth | null = autoServer
@@ -511,7 +518,7 @@ export function ActiveBuildCard({
   const onlineUnavailable = onlineIsUnavailable(playMode)
   const onlineUnavailableForPlay =
     onlineUnavailable && isInstalled && !busy && state !== 'running'
-  const statusTone = statusToneFor(heroHealth, playMode)
+  const statusTone = statusToneFor(heroHealth, playMode, onlineStatus)
   const heroStatusTitle = onlineUnavailable ? ONLINE_UNAVAILABLE_MESSAGE : heroHealth ? healthTitle(heroHealth) : onlineStatus
   const lobbyCount = playMode?.lobbyCount ?? (hostedLobby?.public ? 1 : 0)
 

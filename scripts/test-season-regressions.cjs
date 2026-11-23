@@ -865,6 +865,40 @@ function testCardStates() {
   assert.match(card, /onlineIsUnavailable/)
 }
 
+function testOnlineBadgeColors() {
+  const card = read('src/components/ActiveBuildCard.tsx')
+  const list = read('src/components/BuildList.tsx')
+  const playMode = read('src/lib/playMode.ts')
+
+  // An available LAUNCHER is a real online route, so its pill is green. The
+  // hero pill colors from the label itself so it cannot drift from the text.
+  assert.match(card, /if \(label === 'LAUNCHER'\) return 'up'/, 'hero LAUNCHER pill must be green')
+  assert.match(
+    card,
+    /label\.startsWith\('ONLINE UNAVAILABLE'\)\) return 'down'/,
+    'ONLINE UNAVAILABLE must stay red',
+  )
+  assert.match(
+    card,
+    /statusToneFor\(heroHealth, playMode, onlineStatus\)/,
+    'the hero pill must derive its color from its label',
+  )
+  // The server dropdown pill follows the same rule.
+  assert.match(card, /serverBadge === 'LAUNCHER'/, 'the dropdown LAUNCHER pill must be green')
+  assert.match(card, /border-rose-400\/25 bg-rose-500\/\[0\.08\] text-rose-200\/80/)
+
+  // The small sidebar card treats an available launcher as a live route and
+  // keeps ONLINE UNAVAILABLE on the red class.
+  assert.match(
+    list,
+    /const isLive =[\s\S]{0,260}playMode\.externalAvailable === true/,
+    'sidebar LAUNCHER pill must be green',
+  )
+  assert.match(list, /onlineIsUnavailable\(playMode\)/)
+  assert.match(list, /seasonStatusLabel\(playMode\)/)
+  assert.match(playMode, /ONLINE_UNAVAILABLE_LABEL = 'ONLINE UNAVAILABLE'/)
+}
+
 try {
   testLifecycleRule()
   testLauncherOutlivesBootstrapper()
@@ -875,9 +909,10 @@ try {
   testSessionStability()
   testProviderIsolation()
   testCardStates()
+  testOnlineBadgeColors()
   testAutoFixWiring()
   console.log(
-    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), and the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route)',
+    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route), and online badge colors (LAUNCHER green on the hero, sidebar and dropdown pills; ONLINE UNAVAILABLE red)',
   )
 } catch (error) {
   console.error(error)
