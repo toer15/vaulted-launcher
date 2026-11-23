@@ -110,7 +110,7 @@ function testLaunchWiring() {
     assert.ok(MAIN.includes(symbol), `main must import ${symbol.replace(',', '')}`)
   }
 
-  const startAt = MAIN.indexOf('await startCompanionLauncher(providerId)')
+  const startAt = MAIN.indexOf('await startCompanionLauncher(providerId, { folder })')
   const launchAt = MAIN.indexOf('await launchInjectedGame(launchPayload')
   assert.ok(startAt > 0, 'the managed launch must start the companion launcher')
   assert.ok(launchAt > 0, 'the managed launch must inject the client')
@@ -1630,6 +1630,31 @@ function testCommunityLauncherUnlock() {
   )
   assert.match(MAIN, /startImportedCommunityLauncher/, 'the imported launcher must have a start path')
   assert.match(MAIN, /hidden: true/, 'an imported community launcher runs hidden')
+  assert.match(
+    launcher,
+    /stagePortableLauncher/,
+    'a portable .exe is copied into the provider folder, never run as a setup',
+  )
+  assert.match(
+    launcher,
+    /inspectExecutableForLocalBackend/,
+    'a portable .exe image is checked for a bundled local backend',
+  )
+  assert.match(
+    MAIN,
+    /path\.join\(base, 'VAULTED', 'community-launchers'\)/,
+    'imports live under %LOCALAPPDATA%\\VAULTED\\community-launchers',
+  )
+  assert.match(
+    MAIN,
+    /startCompanionLauncher\(providerId, \{ folder \}\)/,
+    'Start hands the imported launcher the installed season folder',
+  )
+  assert.match(
+    MAIN,
+    /startImportedCommunityLauncher\(id, launchOptions\)/,
+    'Play opens the imported launcher for a community season',
+  )
   assert.doesNotMatch(
     MAIN,
     /community-launcher-import[\s\S]{0,400}shell:\s*true/,

@@ -483,6 +483,32 @@ const SILENT_ARGUMENTS = {
   archive: [],
 }
 
+/**
+ * Copy a verified portable launcher into VAULTED's own provider folder and
+ * re-hash the copy, so the recorded sha256 describes the file that will run
+ * and the season keeps working after the player empties Downloads.
+ */
+async function stagePortableLauncher(scan, root, providerId) {
+  const directory = path.join(rootFor(root), providerId)
+  fs.mkdirSync(directory, { recursive: true })
+  const target = path.join(directory, path.basename(scan.path))
+  if (path.normalize(target) !== path.normalize(scan.path)) {
+    fs.copyFileSync(scan.path, target)
+  }
+  const sha256 = await sha256File(target)
+  if (scan.sha256 && sha256 !== scan.sha256) {
+    try {
+      fs.rmSync(target, { force: true })
+    } catch {
+      /* the mismatch is reported either way */
+    }
+    throw new Error(
+      'The portable launcher did not copy cleanly (its checksum changed), so VAULTED removed the copy.',
+    )
+  }
+  return target
+}
+
 async function installLauncherFile(file, kind, options = {}) {
   const env = options.env || process.env
   const label = options.label || 'community launcher'
@@ -569,10 +595,10 @@ async function importCommunityLauncher(payload = {}) {
   const kind = await detectInstallerKind(scan.path)
   let executable = ''
   if (kind === 'portable') {
-    // A portable launcher is the program, not a setup wrapper: record the file
-    // the player picked instead of running it with installer switches. Leaving
-    // it in place also keeps any files that sit beside it next to it.
-    executable = scan.path
+    // A portable launcher is the program, not a setup wrapper: never run it
+    // with installer switches. The verified copy is staged in this provider's
+    // folder and that exact path is recorded for Start / Play.
+    executable = await stagePortableLauncher(scan, root, providerId)
   } else {
     const before = executableSnapshot(env)
     const extractedRoot = await installLauncherFile(scan.path, kind, {
@@ -683,6 +709,7 @@ module.exports = {
   communityLauncherRecord,
   communityLauncherStatus,
   detectInstallerKind,
+  stagePortableLauncher,
   downloadsDirectory,
   findNewExecutable,
   forgetCommunityLauncher,

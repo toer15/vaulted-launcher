@@ -125,6 +125,24 @@ assert.equal(launcher.communityLauncherStatus('glow', storeRoot).installed, fals
 const main = read('electron/main.cjs')
 assert.match(main, /arc:community-launcher-import/)
 assert.match(main, /arc:pick-community-launcher/)
+assert.match(
+  main,
+  /path\.join\(base, 'VAULTED', 'community-launchers'\)/,
+  'imported launchers live under %LOCALAPPDATA%\\VAULTED\\community-launchers',
+)
+assert.match(main, /migrateCommunityLauncherStore/, 'an earlier userData store is carried over once')
+assert.match(main, /VAULTED_COMMUNITY_LAUNCHER/, 'the hidden launcher is told it runs for VAULTED')
+assert.match(main, /VAULTED_GAME_DIR/, 'Start hands the launcher the installed build folder')
+assert.match(
+  main,
+  /startCompanionLauncher\(providerId, \{ folder \}\)/,
+  'Start passes the installed build folder into the hidden launcher',
+)
+assert.match(
+  main,
+  /const imported = await startImportedCommunityLauncher\(id, launchOptions\)/,
+  'Play routes a community season straight to the imported launcher',
+)
 assert.match(main, /startImportedCommunityLauncher/)
 assert.match(main, /communityLauncherExecutable\(id, communityLauncherRoot\(\)\)/)
 assert.match(main, /community: true/, 'a Discord season without its launcher opens Steps 1-2')
@@ -227,12 +245,20 @@ async function checkPortableLauncher() {
     false,
     'nothing is unpacked or installed for a portable launcher',
   )
+  const staged = path.join(store, 'origins', 'OriginsLauncher.exe')
+  assert.equal(
+    fs.existsSync(staged),
+    true,
+    'the verified portable launcher is copied into that provider folder',
+  )
   assert.equal(
     launcher.communityLauncherExecutable('origins', store),
-    path.normalize(portable),
-    'the recorded launcher is the exact file the player picked',
+    path.normalize(staged),
+    'Start runs the staged copy inside the provider folder, not the Downloads file',
   )
+  assert.equal(result.sha256, await (require('node:crypto').createHash('sha256').update(fs.readFileSync(staged)).digest('hex')), 'the recorded sha256 is the staged copy')
   assert.equal(launcher.communityLauncherStatus('origins', store).portable, true)
+  assert.equal(launcher.communityLauncherStatus('origins', store).executableName, 'OriginsLauncher.exe')
 
   await assert.rejects(
     launcher.importCommunityLauncher({
@@ -251,7 +277,7 @@ async function checkPortableLauncher() {
 checkPortableLauncher()
   .then(() => {
     console.log(
-      'community launcher checks passed: LawinServer/127.0.0.1 refusal, Downloads detection, silent switches, portable .exe linked in place without reinstalling, provider-scoped executable record, hidden launch wiring, two-step Discord UI, and an unchanged installer/local-server ban',
+      'community launcher checks passed: LawinServer/127.0.0.1 refusal, Downloads detection, silent switches, portable .exe copied into its provider folder without reinstalling, Start handing the season folder to the hidden launcher, provider-scoped executable record, two-step Discord UI, and an unchanged installer/local-server ban',
     )
   })
   .catch((error) => {

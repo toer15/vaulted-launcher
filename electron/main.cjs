@@ -48,6 +48,7 @@ const {
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const {
   communityLauncherExecutable,
+  communityLauncherRecord,
   communityLauncherStatus,
   forgetCommunityLauncher,
   importCommunityLauncher,
@@ -2790,7 +2791,7 @@ function companionLauncherMetadata(providerId) {
  * matchmaking bridge are what let the client enter matches, so nothing here
  * arms a timeout that could close it after the game starts.
  */
-async function startCompanionLauncher(providerId) {
+async function startCompanionLauncher(providerId, launchOptions = {}) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return null
   // Reboot always starts an embedded private local backend, so it must never
@@ -2805,25 +2806,11 @@ async function startCompanionLauncher(providerId) {
   }
   // A community launcher imported from Discord is a hidden companion too: it
   // authenticates the season while Fortnite stays the only visible window.
+  // Both entry points share one spawn path, so hidden launch, window hiding,
+  // PID registration and the session monitor cannot drift apart.
   if (!executable) {
-    const imported = communityLauncherExecutable(id, communityLauncherRoot())
-    if (imported) {
-      startHiddenWindowWatcher([path.basename(imported, path.extname(imported))], {
-        seconds: 21_600,
-        exitWhenGone: true,
-      })
-      const child = spawn(imported, [], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true,
-        cwd: path.dirname(imported),
-      })
-      child.unref()
-      registerProviderLauncher(id, child)
-      startCompanionWindowHider(id, child.pid)
-      startCompanionSessionMonitor(id, imported)
-      return { pid: child.pid ?? null, executable: imported }
-    }
+    const imported = await startImportedCommunityLauncher(id, launchOptions)
+    if (imported?.executable) return imported
   }
   if (!metadata) return null
   if (!executable) {
@@ -2924,11 +2911,37 @@ function providerWindowNames(metadata) {
 }
 
 /**
- * Launchers the player brought back from a community Discord live under the
- * app's own userData folder, one record per provider.
+ * Launchers the player brought back from a community Discord live under
+ * %LOCALAPPDATA%\VAULTED\community-launchers, one folder and one record per
+ * provider, so a portable .exe VAULTED verified keeps running from a path
+ * VAULTED owns instead of the player's Downloads folder.
  */
 function communityLauncherRoot() {
-  return path.join(app.getPath('userData'), 'community-launchers')
+  const base =
+    typeof process.env.LOCALAPPDATA === 'string' && process.env.LOCALAPPDATA.trim()
+      ? process.env.LOCALAPPDATA
+      : app.getPath('userData')
+  const root = path.join(base, 'VAULTED', 'community-launchers')
+  migrateCommunityLauncherStore(root)
+  return root
+}
+
+/** Carry an earlier userData store over once; the recorded .exe paths still exist. */
+function migrateCommunityLauncherStore(root) {
+  try {
+    const target = path.join(root, 'community-launchers.json')
+    if (fs.existsSync(target)) return
+    const legacy = path.join(
+      app.getPath('userData'),
+      'community-launchers',
+      'community-launchers.json',
+    )
+    if (!fs.existsSync(legacy)) return
+    fs.mkdirSync(root, { recursive: true })
+    fs.copyFileSync(legacy, target)
+  } catch {
+    /* a failed migration only means the player imports the launcher again */
+  }
 }
 
 /** Only a verified Discord community may import a launcher. */
@@ -2947,20 +2960,39 @@ function communityLauncherProviderId(providerId) {
  * Start the imported community launcher 100% hidden. It provides the hosted
  * backend session for the season; VAULTED keeps the only visible window.
  */
-async function startImportedCommunityLauncher(providerId) {
+async function startImportedCommunityLauncher(providerId, launchOptions = {}) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id || isBannedProvider(id)) return null
+  const record = communityLauncherRecord(id, communityLauncherRoot())
   const executable = communityLauncherExecutable(id, communityLauncherRoot())
-  if (!executable) return null
+  if (!executable) {
+    if (record) {
+      console.warn(
+        `[VAULTED] the imported ${id} launcher is missing from ${path.dirname(record.executable || '')}; the player has to import it again.`,
+      )
+    }
+    return null
+  }
   const existing = providerLaunchers.get(id)
   if (existing) return { pid: existing.pid, executable, alreadyRunning: true }
+  const folder =
+    typeof launchOptions?.folder === 'string' ? launchOptions.folder.trim() : ''
   const names = [path.basename(executable, path.extname(executable))]
   startHiddenWindowWatcher(names, { seconds: 21_600, exitWhenGone: true })
   const child = spawn(executable, [], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,
+    // cwd stays beside the launcher: a portable build may load files that sit
+    // next to its own .exe. The season folder is offered through the same
+    // VAULTED_BUILD_FOLDER convention the injected client receives.
     cwd: path.dirname(executable),
+    env: {
+      ...process.env,
+      VAULTED_PROVIDER_ID: id,
+      VAULTED_COMMUNITY_LAUNCHER: '1',
+      ...(folder ? { VAULTED_BUILD_FOLDER: folder, VAULTED_GAME_DIR: folder } : {}),
+    },
   })
   child.unref()
   registerProviderLauncher(id, child)
@@ -5733,6 +5765,12 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       return { opened: true, path: current, pid: launch.child.pid ?? null, tracked: true }
     }
 
+    const launchOptions =
+      options && typeof options === 'object' && !Array.isArray(options) ? options : {}
+    const buildFolder = typeof launchOptions.folder === 'string' ? launchOptions.folder : ''
+    const buildExecutable =
+      typeof launchOptions.executable === 'string' ? launchOptions.executable : ''
+
     // A Discord-only community has no launcher application at all. VAULTED
     // joins its live public servers with its own direct launch, so never ask
     // the player to install a launcher that does not exist.
@@ -5740,7 +5778,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       // The player can hand VAULTED the launcher they downloaded from the
       // community Discord. It runs hidden: it only provides the hosted
       // backend session, while VAULTED keeps the only visible window.
-      const imported = await startImportedCommunityLauncher(id)
+      const imported = await startImportedCommunityLauncher(id, launchOptions)
       if (imported?.executable) {
         return {
           opened: true,
@@ -5764,11 +5802,6 @@ async function openProviderLauncherEntry(providerId, options = {}) {
     // manifest flag. VAULTED never edits a provider's private library.
     const runtimeMetadata = providerRuntimeMetadata(id)
     const runtimeRoot = path.join(app.getPath('userData'), 'provider-runtimes')
-    const launchOptions =
-      options && typeof options === 'object' && !Array.isArray(options) ? options : {}
-    const buildFolder = typeof launchOptions.folder === 'string' ? launchOptions.folder : ''
-    const buildExecutable =
-      typeof launchOptions.executable === 'string' ? launchOptions.executable : ''
     if (runtimeMetadata) {
       const requestedVersion =
         typeof launchOptions.version === 'string' ? launchOptions.version.trim() : ''
@@ -6174,7 +6207,7 @@ async function launchOnlineProvider(payload) {
   // (a) The companion launcher starts first: its auth, session heartbeat and
   // matchmaking bridge must be live before the client. It stays up for the
   // whole game session and is only closed by Stop or by the game exiting.
-  const companionLauncher = await startCompanionLauncher(providerId)
+  const companionLauncher = await startCompanionLauncher(providerId, { folder })
 
   const restoreEnvironment = applyProviderEnvironmentBypass()
   let launched
