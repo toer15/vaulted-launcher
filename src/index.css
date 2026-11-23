@@ -1,6 +1,9 @@
 @import "tailwindcss";
 
 @theme {
+  /* full-size desktop window: the shell stops huddling in a fixed column */
+  --breakpoint-3xl: 1800px;
+
   --color-void: #05060a;
   --color-ink: #0a0c12;
   --color-panel: #0f1219;

@@ -5071,7 +5071,7 @@ export default function App() {
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,transparent_15%,#05060a_75%)]" />
       </div>
 
-      <div className="relative mx-auto flex h-full w-full max-w-[1720px] flex-col px-4 pb-5 pt-11 sm:px-6 sm:pb-7 sm:pt-12">
+      <div className="relative flex h-full w-full flex-col px-4 pb-5 pt-11 sm:px-6 sm:pb-7 sm:pt-12 2xl:px-8 3xl:px-10">
         <TopBar
           account={account}
           onLogout={() => void handleLogout()}
@@ -5195,7 +5195,7 @@ export default function App() {
               pushToast={pushToast}
             />
           ) : (
-          <div className="grid min-h-0 flex-1 items-stretch gap-4 overflow-hidden lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-1 xl:gap-6 2xl:grid-cols-[minmax(0,1fr)_420px]">
+          <div className="grid min-h-0 flex-1 items-stretch gap-4 overflow-hidden lg:grid-cols-[minmax(0,1fr)_360px] lg:grid-rows-1 xl:grid-cols-[minmax(0,1fr)_400px] xl:gap-6 2xl:grid-cols-[minmax(0,1fr)_460px] 3xl:grid-cols-[minmax(0,1fr)_600px] 3xl:gap-8">
             <div className="animate-fade-up h-full">
               <ActiveBuildCard
                 key={`${activeBuild?.id ?? 'no-active-build'}:${drawerOpen ? 'library' : 'card'}`}

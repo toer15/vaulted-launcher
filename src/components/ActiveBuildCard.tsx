@@ -768,7 +768,7 @@ export function ActiveBuildCard({
     <section className="relative isolate flex h-full flex-col overflow-hidden rounded-3xl border border-line bg-panel shadow-[0_30px_80px_-40px_rgba(0,0,0,0.9)]">
       <BuildArt season={season} />
 
-      <div className="relative flex min-h-0 flex-1 flex-col p-6 sm:p-8 xl:p-10">
+      <div className="relative flex min-h-0 flex-1 flex-col p-6 sm:p-8 xl:p-10 2xl:p-12 3xl:p-14">
         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
           <div className="flex min-h-full flex-col">
         {/* top row */}
@@ -863,17 +863,17 @@ export function ActiveBuildCard({
         {/* headline */}
         <div className="mt-8 sm:mt-10">
           <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-fog">Fortnite</p>
-          <h1 className="mt-2 font-display text-[2.6rem] font-bold leading-[1.02] tracking-[-0.03em] text-white sm:text-6xl xl:text-7xl">
+          <h1 className="mt-2 font-display text-[2.6rem] font-bold leading-[1.02] tracking-[-0.03em] text-white sm:text-6xl xl:text-7xl 2xl:text-[5.5rem] 3xl:text-[6.5rem]">
             {season.label}
           </h1>
-          <p className="mt-3 max-w-md text-sm leading-relaxed text-mist/70">
+          <p className="mt-3 max-w-md text-sm leading-relaxed text-mist/70 2xl:max-w-lg 2xl:text-[15px] 3xl:max-w-xl 3xl:text-[16px]">
             {season.era}
           </p>
 
           {onlineUnavailable && (
             <div
               role="status"
-              className="mt-4 flex max-w-xl items-start gap-2 rounded-xl border border-amber-400/35 bg-amber-400/[0.08] px-3 py-2.5 text-[11.5px] font-medium leading-relaxed text-amber-100 backdrop-blur"
+              className="mt-4 flex max-w-xl items-start gap-2 rounded-xl border border-amber-400/35 bg-amber-400/[0.08] px-3 py-2.5 text-[11.5px] font-medium leading-relaxed text-amber-100 backdrop-blur 2xl:max-w-2xl 2xl:px-4 2xl:py-3 2xl:text-[12.5px]"
             >
               <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
               <span>{ONLINE_UNAVAILABLE_MESSAGE}</span>
@@ -881,7 +881,7 @@ export function ActiveBuildCard({
           )}
 
           {isInstalled && (
-            <div className="mt-4 flex max-w-xl items-center gap-2 rounded-xl border border-emerald-400/20 bg-black/25 px-3 py-2 text-[10.5px] text-fog backdrop-blur">
+            <div className="mt-4 flex max-w-xl items-center gap-2 rounded-xl border border-emerald-400/20 bg-black/25 px-3 py-2 text-[10.5px] text-fog backdrop-blur 2xl:max-w-2xl 2xl:px-4 2xl:py-2.5 2xl:text-[11.5px]">
               <HardDrive className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
               <span className="shrink-0 font-mono font-semibold text-emerald-100">
                 {diskSize != null ? formatDownloadSize(diskSize) : 'Detecting size…'}
@@ -894,7 +894,7 @@ export function ActiveBuildCard({
           )}
 
           {onSelectServer && (
-            <details className="group relative mt-4 max-w-xl">
+            <details className="group relative mt-4 max-w-xl 2xl:max-w-2xl">
               <summary className="flex cursor-pointer list-none items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-[10.5px] text-fog backdrop-blur transition-colors duration-200 hover:border-emerald-400/35 [&::-webkit-details-marker]:hidden">
                 <Server className="h-3.5 w-3.5 shrink-0 text-emerald-300" />
                 <span className="min-w-0 flex-1 truncate font-semibold text-mist">
@@ -1449,7 +1449,7 @@ export function ActiveBuildCard({
                               : undefined
                       }
                       className={cx(
-                        'group relative inline-flex items-center gap-2.5 overflow-hidden px-5 py-3 text-[13.5px] font-semibold text-white',
+                        'group relative inline-flex items-center gap-2.5 overflow-hidden px-5 py-3 text-[13.5px] font-semibold text-white 2xl:px-6 2xl:py-3.5 2xl:text-[14.5px] 3xl:px-8 3xl:py-4 3xl:text-[15.5px]',
                         requiresSignIn || accountConnectRequired
                           ? 'cursor-pointer'
                           : primaryBusy
@@ -1506,7 +1506,7 @@ export function ActiveBuildCard({
                       }}
                       aria-label={`Pause ${season.label} download`}
                       title="Pause and keep the downloaded part"
-                      className="inline-flex items-center gap-2 rounded-xl border border-amber-400/35 bg-amber-400/10 px-3.5 py-3 text-[12.5px] font-semibold text-amber-200 transition-all duration-200 hover:border-amber-400/70 hover:bg-amber-400/20 hover:text-white active:scale-[0.99]"
+                      className="inline-flex items-center gap-2 rounded-xl border border-amber-400/35 bg-amber-400/10 px-3.5 py-3 text-[12.5px] font-semibold 2xl:px-4 2xl:py-3.5 2xl:text-[13.5px] 3xl:px-5 3xl:py-4 3xl:text-[14.5px] text-amber-200 transition-all duration-200 hover:border-amber-400/70 hover:bg-amber-400/20 hover:text-white active:scale-[0.99]"
                     >
                       <Pause className="h-3.5 w-3.5" />
                       Pause
@@ -1520,7 +1520,7 @@ export function ActiveBuildCard({
                         event.stopPropagation()
                         onCancelDownload()
                       }}
-                      className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 px-3.5 py-3 text-[12.5px] font-semibold text-white shadow-[0_12px_28px_-14px_rgba(244,63,94,0.85)] transition-all duration-200 hover:from-rose-500 hover:to-red-500 hover:brightness-110 active:scale-[0.99]"
+                      className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 px-3.5 py-3 text-[12.5px] font-semibold 2xl:px-4 2xl:py-3.5 2xl:text-[13.5px] 3xl:px-5 3xl:py-4 3xl:text-[14.5px] text-white shadow-[0_12px_28px_-14px_rgba(244,63,94,0.85)] transition-all duration-200 hover:from-rose-500 hover:to-red-500 hover:brightness-110 active:scale-[0.99]"
                     >
                       <Ban className="h-3.5 w-3.5" />
                       {download?.phase === 'extracting' ? 'Cancel unpacking' : 'Cancel'}
@@ -1537,7 +1537,7 @@ export function ActiveBuildCard({
                       disabled={verify?.phase === 'running'}
                       aria-label={`Verify and repair ${season.label} files`}
                       title={`Scan ${season.label}, then automatically repair files, online routing, DLLs and the account session`}
-                      className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.07] px-3.5 py-3 text-[12.5px] font-semibold text-emerald-200 transition-all duration-200 hover:border-emerald-400/60 hover:bg-emerald-400/15 hover:text-white disabled:cursor-wait disabled:opacity-60"
+                      className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/30 bg-emerald-400/[0.07] px-3.5 py-3 text-[12.5px] font-semibold 2xl:px-4 2xl:py-3.5 2xl:text-[13.5px] 3xl:px-5 3xl:py-4 3xl:text-[14.5px] text-emerald-200 transition-all duration-200 hover:border-emerald-400/60 hover:bg-emerald-400/15 hover:text-white disabled:cursor-wait disabled:opacity-60"
                     >
                       {verify?.phase === 'running' ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />

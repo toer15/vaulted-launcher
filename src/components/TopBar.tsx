@@ -59,16 +59,16 @@ export function TopBar({
   const friendsLocked = providerOnly || !signedIn
 
   return (
-    <header className="app-drag flex items-center justify-between gap-3">
+    <header className="app-drag flex items-center justify-between gap-3 2xl:gap-5">
       <div className="flex min-w-0 items-center gap-3">
-        <span className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-2xl bg-panel shadow-lg shadow-arc/30">
+        <span className="relative grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded-2xl bg-panel shadow-lg shadow-arc/30 2xl:h-11 2xl:w-11 3xl:h-12 3xl:w-12">
           <img src={brandIcon} alt="VAULTED" draggable={false} className="h-full w-full object-cover" />
           <span className="absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/25" />
         </span>
 
         <div className="min-w-0">
           <div className="flex items-baseline gap-2">
-            <Wordmark className="text-[18px]" accent={false} />
+            <Wordmark className="text-[18px] 2xl:text-[20px] 3xl:text-[24px]" accent={false} />
             <span className="hidden text-[11px] font-medium tracking-wide text-fog sm:inline">
               Fortnite Build Launcher
             </span>
@@ -89,7 +89,7 @@ export function TopBar({
       <div className="flex items-center gap-2">
         <span
           className={cx(
-            'hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-medium md:inline-flex',
+            'hidden items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10.5px] font-medium md:inline-flex 2xl:px-3 2xl:py-1.5 2xl:text-[11.5px] 3xl:px-3.5 3xl:py-2 3xl:text-[12.5px]',
             !signedIn
               ? 'border-amber-400/25 bg-amber-400/[0.06] text-amber-200/90'
               : providerOnly || onlineStatus === 'connected' || (communityOnline ?? 0) > 0
@@ -132,13 +132,13 @@ export function TopBar({
           aria-pressed={shopActive}
           title="Item Shop"
           className={cx(
-            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300',
+            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300 2xl:px-3.5 2xl:py-2.5 2xl:text-[13px] 3xl:px-4 3xl:py-3 3xl:text-[14px]',
             shopActive
               ? 'border-[#e2b85a]/50 bg-[#e2b85a]/15 text-[#ffe8a8]'
               : 'border-line bg-panel/70 text-fog hover:border-[#e2b85a]/45 hover:bg-panel-hi hover:text-mist',
           )}
         >
-          <Store className="h-4 w-4" />
+          <Store className="h-4 w-4 3xl:h-[18px] 3xl:w-[18px]" />
           <span className="hidden sm:inline">Item Shop</span>
         </button>
 
@@ -148,13 +148,13 @@ export function TopBar({
           aria-pressed={autoFixActive}
           title="Auto-Fix — scan and repair downloaded seasons"
           className={cx(
-            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300',
+            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300 2xl:px-3.5 2xl:py-2.5 2xl:text-[13px] 3xl:px-4 3xl:py-3 3xl:text-[14px]',
             autoFixActive
               ? 'border-emerald-400/50 bg-emerald-400/15 text-emerald-100'
               : 'border-line bg-panel/70 text-fog hover:border-emerald-400/45 hover:bg-panel-hi hover:text-mist',
           )}
         >
-          <Wrench className="h-4 w-4" />
+          <Wrench className="h-4 w-4 3xl:h-[18px] 3xl:w-[18px]" />
           <span className="hidden sm:inline">Auto-Fix</span>
         </button>
 
@@ -171,7 +171,7 @@ export function TopBar({
                 : 'Friends'
           }
           className={cx(
-            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300',
+            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300 2xl:px-3.5 2xl:py-2.5 2xl:text-[13px] 3xl:px-4 3xl:py-3 3xl:text-[14px]',
             friendsLocked
               ? 'cursor-not-allowed border-line/70 bg-panel/40 text-fog/50'
               : friendsActive
@@ -180,7 +180,7 @@ export function TopBar({
           )}
         >
           <span className="relative">
-            {friendsLocked ? <LockKeyhole className="h-4 w-4" /> : <Users className="h-4 w-4" />}
+            {friendsLocked ? <LockKeyhole className="h-4 w-4 3xl:h-[18px] 3xl:w-[18px]" /> : <Users className="h-4 w-4 3xl:h-[18px] 3xl:w-[18px]" />}
             {!friendsLocked && friendRequests > 0 && (
               <span className="absolute -right-2 -top-2 grid h-4 min-w-4 place-items-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">
                 {friendRequests}
@@ -196,23 +196,23 @@ export function TopBar({
           aria-pressed={settingsActive}
           title="Settings"
           className={cx(
-            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300',
+            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300 2xl:px-3.5 2xl:py-2.5 2xl:text-[13px] 3xl:px-4 3xl:py-3 3xl:text-[14px]',
             settingsActive
               ? 'border-arc/50 bg-arc/15 text-white'
               : 'border-line bg-panel/70 text-fog hover:border-arc/45 hover:bg-panel-hi hover:text-mist',
           )}
         >
-          <Settings2 className="h-4 w-4" />
+          <Settings2 className="h-4 w-4 3xl:h-[18px] 3xl:w-[18px]" />
           <span className="hidden sm:inline">Settings</span>
         </button>
 
         <button
           type="button"
           onClick={onOpenLibrary}
-          className="app-no-drag group inline-flex items-center gap-2 rounded-xl border border-line bg-panel/70 px-2.5 py-2 text-[12px] font-medium text-fog transition-all duration-300 hover:border-arc/45 hover:bg-panel-hi hover:text-mist"
+          className="app-no-drag group inline-flex items-center gap-2 rounded-xl border border-line bg-panel/70 px-2.5 py-2 text-[12px] font-medium text-fog transition-all duration-300 hover:border-arc/45 hover:bg-panel-hi hover:text-mist 2xl:px-3.5 2xl:py-2.5 2xl:text-[13px] 3xl:px-4 3xl:py-3 3xl:text-[14px]"
           aria-label={`Open build library, ${buildCount} builds`}
         >
-          <LayoutGrid className="h-4 w-4" />
+          <LayoutGrid className="h-4 w-4 3xl:h-[18px] 3xl:w-[18px]" />
           <span className="hidden sm:inline">Library</span>
           <span className="rounded-md bg-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-mist">
             {buildCount}
@@ -226,9 +226,9 @@ export function TopBar({
             <button
               type="button"
               onClick={onSignIn}
-              className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/35 bg-emerald-400/[0.1] px-3.5 py-2 text-[12px] font-semibold text-emerald-100 transition-colors duration-200 hover:border-emerald-400/65 hover:bg-emerald-400/15 hover:text-white"
+              className="inline-flex items-center gap-2 rounded-2xl border border-emerald-400/35 bg-emerald-400/[0.1] px-3.5 py-2 text-[12px] font-semibold text-emerald-100 transition-colors duration-200 hover:border-emerald-400/65 hover:bg-emerald-400/15 hover:text-white 2xl:px-4 2xl:py-2.5 2xl:text-[13px] 3xl:px-5 3xl:py-3 3xl:text-[14px]"
             >
-              <LogIn className="h-4 w-4" /> Sign in
+              <LogIn className="h-4 w-4 3xl:h-[18px] 3xl:w-[18px]" /> Sign in
             </button>
           )}
         </div>

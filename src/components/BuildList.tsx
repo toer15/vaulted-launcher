@@ -70,7 +70,7 @@ export function BuildList({
   }
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1.5 2xl:space-y-2 3xl:space-y-2.5">
       {builds.map((build, index) => {
         const active = build.id === activeId
         const art = seasonImageFor(build.season)
@@ -142,10 +142,10 @@ export function BuildList({
                 type="button"
                 onClick={() => onSelect(build.id)}
                 aria-current={active ? 'true' : undefined}
-                className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl p-2 text-left"
+                className="flex min-w-0 flex-1 items-center gap-3 rounded-2xl p-2 text-left 2xl:gap-3.5 2xl:p-2.5 3xl:gap-4 3xl:p-3"
               >
                 <span
-                  className="relative grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/10"
+                  className="relative grid h-12 w-12 shrink-0 place-items-center overflow-hidden rounded-xl border border-white/10 2xl:h-14 2xl:w-14 3xl:h-16 3xl:w-16"
                   style={{
                     background: `linear-gradient(135deg, ${build.season.accent.from}40, ${build.season.accent.to}26)`,
                   }}
@@ -165,7 +165,7 @@ export function BuildList({
 
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5">
-                    <span className="truncate text-[13px] font-semibold text-mist">{build.season.label}</span>
+                    <span className="truncate text-[13px] font-semibold text-mist 2xl:text-[14px] 3xl:text-[15.5px]">{build.season.label}</span>
                     {active && <Check className="h-3.5 w-3.5 shrink-0 text-arc" />}
                     {installedNow && (
                       <span
@@ -257,7 +257,7 @@ export function BuildList({
                     )}
                     <span
                       className={cx(
-                        'min-w-0 truncate font-mono text-[11px]',
+                        'min-w-0 truncate font-mono text-[11px] 2xl:text-[12px] 3xl:text-[13px]',
                         downloadLabel ? 'font-semibold text-amber-200' : 'text-fog',
                       )}
                       title={downloadLabel || build.path || 'Not downloaded'}

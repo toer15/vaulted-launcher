@@ -76,7 +76,7 @@ export function LibraryRail({
 
   const tabClass = (selected: boolean, activeTone = false) =>
     cx(
-      'flex min-h-[42px] flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-[9px] font-semibold uppercase leading-[1.15] tracking-[0.035em] transition-colors duration-200',
+      'flex min-h-[42px] flex-col items-center justify-center gap-0.5 rounded-lg px-1 py-1.5 text-[9px] font-semibold uppercase leading-[1.15] tracking-[0.035em] transition-colors duration-200 2xl:min-h-[54px] 2xl:gap-1 2xl:px-2 2xl:py-2 2xl:text-[10px] 3xl:min-h-[62px] 3xl:text-[11.5px]',
       selected
         ? activeTone
           ? 'bg-emerald-400/15 text-emerald-200'
@@ -85,10 +85,10 @@ export function LibraryRail({
     )
 
   return (
-    <aside className="flex h-full flex-col rounded-3xl border border-line bg-panel/60 p-4 backdrop-blur-sm">
+    <aside className="flex h-full flex-col rounded-3xl border border-line bg-panel/60 p-4 backdrop-blur-sm 2xl:p-5 3xl:p-6">
       <header className="flex items-center justify-between gap-2 px-1">
         <div className="flex items-center gap-2">
-          <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.16em] text-mist">Library</h2>
+          <h2 className="font-display text-[13px] font-semibold uppercase tracking-[0.16em] text-mist 2xl:text-[14px] 3xl:text-[15px]">Library</h2>
           <span className="rounded-md border border-line bg-white/[0.03] px-1.5 py-0.5 font-mono text-[10px] text-fog">
             {builds.length}
           </span>
@@ -97,7 +97,7 @@ export function LibraryRail({
           type="button"
           onClick={onAdd}
           aria-label="Add build"
-          className="grid h-8 w-8 place-items-center rounded-xl border border-line bg-white/[0.03] text-fog transition-all duration-300 hover:border-arc/50 hover:bg-arc/10 hover:text-white"
+          className="grid h-8 w-8 place-items-center rounded-xl border border-line bg-white/[0.03] text-fog transition-all duration-300 hover:border-arc/50 hover:bg-arc/10 hover:text-white 2xl:h-9 2xl:w-9 3xl:h-10 3xl:w-10"
         >
           <Plus className="h-4 w-4" />
         </button>
@@ -106,7 +106,7 @@ export function LibraryRail({
       <div
         role="group"
         aria-label="Library filter"
-        className="mt-3 grid grid-cols-2 gap-1 rounded-xl border border-line/70 bg-black/20 p-1"
+        className="mt-3 grid grid-cols-2 gap-1 rounded-xl border border-line/70 bg-black/20 p-1 2xl:mt-4 2xl:grid-cols-4 2xl:gap-1.5 2xl:p-1.5"
       >
         <button
           type="button"
