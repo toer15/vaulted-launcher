@@ -21,6 +21,26 @@ export const ONLINE_UNAVAILABLE_LABEL = 'ONLINE UNAVAILABLE'
 export const ONLINE_UNAVAILABLE_MESSAGE =
   "Online play isn't available to enter yet. The app owner is working hard to get this season online."
 
+/**
+ * Copy for a season a verified Discord community hosts on its own launchers.
+ * It replaces ONLINE_UNAVAILABLE_MESSAGE everywhere the card would otherwise
+ * claim nobody hosts the season.
+ */
+export function communityHostedMessage(label?: string | null): string {
+  const host = String(label || '').trim() || 'the Discord community'
+  return `Hosted by ${host} (Discord community) — complete Step 1 & Step 2 below to unlock & play online`
+}
+
+/**
+ * Copy for a season a real Discord community hosts on a build VAULTED does not
+ * install. The card stays locked, but it names the host instead of claiming
+ * nobody is running the season.
+ */
+export function communityLockedMessage(label?: string | null): string {
+  const host = String(label || '').trim() || 'Its Discord community'
+  return `${host} hosts this season, but its own launcher runs a different build than the one VAULTED installs — online play stays locked until a matching build ships.`
+}
+
 /** How a season can actually be played today. */
 export type SeasonAvailability = 'global' | 'launcher' | 'directory' | 'unsupported'
 
@@ -57,6 +77,10 @@ export interface SeasonPlayMode {
   externalAvailable?: boolean
   /** a verified Discord community hosts the season through its own launcher */
   communityAvailable?: boolean
+  /** a routed Discord community whose launcher build VAULTED cannot install yet */
+  communityRouteLabel?: string
+  /** the routed community is real but its build does not match this season */
+  communityRouteLocked?: boolean
   /** compact label for the reachable external project(s) */
   externalProviderLabel?: string
   /** archive-only card; never offers Play */
@@ -79,7 +103,12 @@ export const DEFAULT_PLAY_MODE: SeasonPlayMode = {
  */
 export function onlineIsAvailable(mode: SeasonPlayMode | null | undefined): boolean {
   if (!mode || mode.archived) return false
-  return Boolean(mode.online || mode.globalOnline || mode.externalAvailable)
+  // A verified Discord community hosts the season on its own servers through
+  // its imported launcher, so the season is not "no route" and must never be
+  // described with the unavailable copy.
+  return Boolean(
+    mode.online || mode.globalOnline || mode.externalAvailable || mode.communityAvailable,
+  )
 }
 
 /**
@@ -545,6 +574,9 @@ export function playModesForBuilds(
   // real hosted servers. They unlock the two-step launcher import instead of
   // pretending a health endpoint exists.
   const communityBySeason = new Map<string, GlobalBackend[]>()
+  // Real Discord communities whose launcher runs a build VAULTED cannot
+  // install yet. They stay locked, but their name is still shown on the card.
+  const lockedCommunityBySeason = new Map<string, GlobalBackend[]>()
   for (const backend of globalBackends) {
     if (
       backend.mode === 'external' &&
@@ -556,6 +588,17 @@ export function playModesForBuilds(
         const current = communityBySeason.get(seasonId) ?? []
         current.push(backend)
         communityBySeason.set(seasonId, current)
+      }
+    }
+    if (
+      backend.mode === 'external' &&
+      backend.launchKind === 'discord' &&
+      backend.communityVerified !== true
+    ) {
+      for (const seasonId of backend.supportedSeasons) {
+        const current = lockedCommunityBySeason.get(seasonId) ?? []
+        current.push(backend)
+        lockedCommunityBySeason.set(seasonId, current)
       }
     }
     // Local launchers are not global multiplayer backends. Their probe only
@@ -611,6 +654,27 @@ export function playModesForBuilds(
         Boolean(provider?.id) && !isBannedOnlineProvider(provider?.id),
     )
     const hasProvider = configuredProviders.length > 0
+    // A routed Discord community that is not catalog-verified still really
+    // hosts the season: its launcher just runs a build VAULTED cannot install
+    // yet. Name it so the card never says the season has no host at all.
+    const lockedCommunity = seasonKey ? lockedCommunityBySeason.get(seasonKey) ?? [] : []
+    // Name the community this season is actually mapped to. Other Discord
+    // projects may list the same season, but they do not host this card.
+    const primaryId = build.onlineProvider?.id ?? null
+    const primaryLocked = primaryId
+      ? lockedCommunity.filter((provider) => provider.id === primaryId)
+      : []
+    const namedLocked =
+      primaryLocked.length > 0
+        ? primaryLocked
+        : lockedCommunity.length === 1
+          ? lockedCommunity
+          : lockedCommunity.slice(0, 1)
+    const routedCommunityLabels = [
+      ...new Set(namedLocked.map((provider) => provider.label).filter(Boolean)),
+    ]
+    const communityRouteLocked =
+      routedCommunityLabels.length > 0 && !hasCommunity && !hasExternal
     // A Discord gate is an install/community step, never proof that a game
     // server is live. It may only show the Discord badge on a season that also
     // has a verified launcher-backed external route; a dead Discord-only season
@@ -654,6 +718,12 @@ export function playModesForBuilds(
         ? {
             externalAvailable: true,
             externalProviderLabel: external.map((provider) => provider.label).join(' / '),
+          }
+        : {}),
+      ...(communityRouteLocked
+        ? {
+            communityRouteLabel: routedCommunityLabels.join(' / '),
+            communityRouteLocked: true,
           }
         : {}),
       ...(archived ? { archived: true } : {}),

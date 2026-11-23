@@ -31,6 +31,8 @@ import { formatDownloadSize, formatSpeed } from '../lib/downloadSize'
 import { lobbyPlayers } from '../lib/friends'
 import {
   ONLINE_UNAVAILABLE_MESSAGE,
+  communityHostedMessage,
+  communityLockedMessage,
   onlineIsLive,
   onlineIsPlayable,
   onlineIsUnavailable,
@@ -164,6 +166,8 @@ function statusToneFor(
   // (the season's own project hosts it), so it is green. ONLINE UNAVAILABLE
   // stays red.
   if (label === 'LAUNCHER') return 'up'
+  // A verified Discord community hosts the season on its own launchers.
+  if (label === 'ONLINE · DISCORD') return 'up'
   if (label.startsWith('ONLINE UNAVAILABLE')) return 'down'
   if (health?.state === 'down') return 'down'
   if (health?.state === 'checking') return 'checking'
@@ -482,15 +486,28 @@ export function ActiveBuildCard({
   const selectedServerOption = selectedServer
     ? serverOptions.find((server) => server.address === selectedServer) ?? null
     : null
+  // A verified Discord community is a real hosted route even though its
+  // launcher exposes no joinable server list: the dropdown names the host and
+  // keeps its green pill instead of falling back to ONLINE UNAVAILABLE.
+  const communityHostLabel =
+    String(autoGlobalBackend?.label || playMode?.externalProviderLabel || '').trim() || null
+  const communityHosted = playMode?.communityAvailable === true
+  const communityHostMessage = communityHosted ? communityHostedMessage(communityHostLabel) : ''
   const serverBadge =
     liveServers > 0
       ? `ONLINE · ${liveServers} ${liveServers === 1 ? 'SERVER' : 'SERVERS'}`
-      : externalHero || playMode?.externalAvailable
-        ? 'LAUNCHER'
-        : 'ONLINE UNAVAILABLE'
-  // A LAUNCHER pill is a playable online route; ONLINE UNAVAILABLE is not.
+      : communityHosted
+        ? 'ONLINE · DISCORD'
+        : externalHero || playMode?.externalAvailable
+          ? 'LAUNCHER'
+          : 'ONLINE UNAVAILABLE'
+  // A LAUNCHER or ONLINE · DISCORD pill is a playable route; ONLINE UNAVAILABLE
+  // is not.
   const serverBadgeLive =
-    liveServers > 0 || serverBadge === 'LAUNCHER' || onlineIsLive(playMode)
+    liveServers > 0 ||
+    serverBadge === 'LAUNCHER' ||
+    serverBadge === 'ONLINE · DISCORD' ||
+    onlineIsLive(playMode)
   const activeBackendHealth = healthForBackend(activeGlobalBackend)
   const activeBackendOffline = activeBackendHealth.state === 'down'
   const heroHealth: ServerHealth | null = autoServer
@@ -514,10 +531,25 @@ export function ActiveBuildCard({
           : 'CHECKING'
     : seasonStatusLabel(playMode)
   const onlineUnavailable = onlineIsUnavailable(playMode)
+  // A real Discord community whose launcher runs another build keeps the red
+  // pill, but the copy names that host instead of claiming nobody runs it.
+  const communityLockedLabel =
+    !communityHosted && playMode?.communityRouteLocked === true
+      ? String(playMode.communityRouteLabel || '').trim() || null
+      : null
+  const unavailableMessage = communityLockedLabel
+    ? communityLockedMessage(communityLockedLabel)
+    : ONLINE_UNAVAILABLE_MESSAGE
   const onlineUnavailableForPlay =
     onlineUnavailable && isInstalled && !busy && state !== 'running'
   const statusTone = statusToneFor(heroHealth, playMode, onlineStatus)
-  const heroStatusTitle = onlineUnavailable ? ONLINE_UNAVAILABLE_MESSAGE : heroHealth ? healthTitle(heroHealth) : onlineStatus
+  const heroStatusTitle = onlineUnavailable
+    ? unavailableMessage
+    : communityHosted
+      ? communityHostMessage
+      : heroHealth
+        ? healthTitle(heroHealth)
+        : onlineStatus
   const lobbyCount = playMode?.lobbyCount ?? (hostedLobby?.public ? 1 : 0)
 
   const verifyReport = verify?.report
@@ -720,9 +752,11 @@ export function ActiveBuildCard({
             ? 'Verifying the archive checksum…'
             : 'Downloading the build…',
     ready:
-      // Discord-only communities have no launcher app: Start joins one of
-      // their live public servers with VAULTED's own direct launch.
-      discordSetupEligible
+      communityHosted
+        ? `Ready — Start runs ${season.label} (v${build.version}) through ${communityHostLabel || 'the community launcher'}, hidden while Fortnite plays.`
+        : // Discord-only communities have no launcher app: Start joins one of
+          // their live public servers with VAULTED's own direct launch.
+          discordSetupEligible
         ? `Ready — Start joins a live ${season.label} server.`
         : companionSeason
         ? `Ready — Start launches ${season.label} in ${autoGlobalBackend?.label || 'the community launcher'}.`
@@ -766,7 +800,7 @@ export function ActiveBuildCard({
   const effectiveStatusText = archived
     ? 'Archive-only build. This season is no longer available online.'
     : onlineUnavailable && !['missing', 'paused', 'downloading', 'launching', 'running'].includes(state)
-      ? ONLINE_UNAVAILABLE_MESSAGE
+      ? unavailableMessage
       : statusText[state]
 
   return (
@@ -881,7 +915,17 @@ export function ActiveBuildCard({
               className="mt-4 flex max-w-xl items-start gap-2 rounded-xl border border-amber-400/35 bg-amber-400/[0.08] px-3 py-2.5 text-[11.5px] font-medium leading-relaxed text-amber-100 backdrop-blur 2xl:max-w-2xl 2xl:px-4 2xl:py-3 2xl:text-[12.5px]"
             >
               <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
-              <span>{ONLINE_UNAVAILABLE_MESSAGE}</span>
+              <span>{unavailableMessage}</span>
+            </div>
+          )}
+
+          {!onlineUnavailable && communityHosted && (
+            <div
+              role="status"
+              className="mt-4 flex max-w-xl items-start gap-2 rounded-xl border border-emerald-400/35 bg-emerald-400/[0.08] px-3 py-2.5 text-[11.5px] font-medium leading-relaxed text-emerald-100 backdrop-blur 2xl:max-w-2xl 2xl:px-4 2xl:py-3 2xl:text-[12.5px]"
+            >
+              <MessageCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-300" />
+              <span>{communityHostMessage}</span>
             </div>
           )}
 
@@ -905,9 +949,11 @@ export function ActiveBuildCard({
                 <span className="min-w-0 flex-1 truncate font-semibold text-mist">
                   {onlineUnavailable
                     ? 'No online server available yet'
-                    : selectedServerOption
-                      ? selectedServerOption.address
-                      : 'Auto · best live server'}
+                    : communityHosted && liveServers === 0
+                      ? `${communityHostLabel || 'Discord community'} · Discord community`
+                      : selectedServerOption
+                        ? selectedServerOption.address
+                        : 'Auto · best live server'}
                 </span>
                 <span
                   className={cx(
@@ -947,11 +993,45 @@ export function ActiveBuildCard({
                     </span>
                     <span className="mt-0.5 block text-[9.5px] text-fog/80">
                       {onlineUnavailable
-                        ? ONLINE_UNAVAILABLE_MESSAGE
-                        : `${serverBadge} · Play connects automatically`}
+                        ? unavailableMessage
+                        : communityHosted && liveServers === 0
+                          ? communityHostMessage
+                          : `${serverBadge} · Play connects automatically`}
                     </span>
                   </span>
                 </button>
+                {communityHosted && (
+                  <>
+                    <p className="px-2.5 pb-1 pt-2 text-[8.5px] font-bold uppercase tracking-[0.16em] text-fog/60">
+                      Verified community · this season
+                    </p>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        onSelectServer(null)
+                        event.currentTarget.closest('details')?.removeAttribute('open')
+                      }}
+                      className={cx(
+                        'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                        !selectedServer ? 'bg-emerald-400/[0.09]' : 'hover:bg-white/[0.05]',
+                      )}
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[11.5px] font-semibold text-mist">
+                          {communityHostLabel || 'Discord community'}
+                        </span>
+                        <span className="mt-0.5 block text-[9.5px] leading-snug text-fog/80">
+                          Verified Discord community · Step 1 &amp; Step 2 import its
+                          launcher, then Start runs it hidden.
+                        </span>
+                      </span>
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-300/35 bg-emerald-400/15 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-[0.06em] text-emerald-200">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]" />
+                        ONLINE · DISCORD
+                      </span>
+                    </button>
+                  </>
+                )}
                 {serverOptions.length > 0 && (
                   <>
                     <p className="px-2.5 pb-1 pt-2 text-[8.5px] font-bold uppercase tracking-[0.16em] text-fog/60">
@@ -1455,7 +1535,7 @@ export function ActiveBuildCard({
                       aria-disabled={requiresSignIn || accountConnectRequired || primaryDisabled}
                       title={
                         onlineUnavailableForPlay
-                          ? ONLINE_UNAVAILABLE_MESSAGE
+                          ? unavailableMessage
                           : accountConnectRequired
                             ? 'Connect an online account to play this season'
                             : requiresSignIn

@@ -1253,6 +1253,33 @@ function testCardStates() {
   const card = read('src/components/ActiveBuildCard.tsx')
   assert.match(card, /onlineIsUnavailable/)
 
+  // A verified Discord community hosts its season on its own launcher, so the
+  // card may never fall back to the "working hard to get this season online"
+  // copy for it and its dropdown keeps a green ONLINE · DISCORD pill.
+  assert.match(
+    playMode,
+    /mode\.externalAvailable \|\| mode\.communityAvailable/,
+    'a verified community must not be reported as unavailable',
+  )
+  assert.match(playMode, /export function communityHostedMessage/)
+  assert.match(card, /communityHostedMessage\(communityHostLabel\)/)
+  assert.match(card, /communityHosted\s*\?\s*'ONLINE · DISCORD'/)
+  assert.match(card, /serverBadge === 'ONLINE · DISCORD'/, 'the dropdown community pill must be green')
+  assert.match(card, /Verified community · this season/)
+  assert.match(
+    card,
+    /!onlineUnavailable && communityHosted &&/,
+    'the hero must show the community host, not the unavailable banner',
+  )
+  // Omen, ARC and VYNX host real seasons on builds VAULTED cannot install yet.
+  // They keep the red pill, but the copy must name the host instead of saying
+  // the owner is still working on it.
+  assert.match(playMode, /export function communityLockedMessage/)
+  assert.match(playMode, /communityRouteLocked =\r?\n\s*routedCommunityLabels\.length > 0/)
+  assert.match(card, /playMode\?\.communityRouteLocked === true/)
+  assert.match(card, /communityLockedMessage\(communityLockedLabel\)/)
+  assert.match(read('src/components/BuildList.tsx'), /communityRouteLocked/)
+
   // The library can be reduced to only seasons a player can enter right now,
   // including launcher-backed routes without a player-count sample.
   const rail = read('src/components/LibraryRail.tsx')
@@ -1399,8 +1426,8 @@ async function testDiscordOnlyNeverCountsOnline() {
   )
   assert.match(
     playMode,
-    /return Boolean\(mode\.online \|\| mode\.globalOnline \|\| mode\.externalAvailable\)/,
-    'online availability must require a live backend or launcher-backed external route',
+    /return Boolean\([\s\S]{0,120}mode\.communityAvailable/,
+    'online availability must require a live backend, a launcher-backed project or a verified community',
   )
   // Playability is wider than availability: a community catalog-verified by
   // hand is a real hosted route through the two-step launcher import, while

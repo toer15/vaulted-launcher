@@ -6,6 +6,8 @@ import { formatDownloadSize, formatEtaMinutes } from '../lib/downloadSize'
 import {
   DEFAULT_PLAY_MODE,
   ONLINE_UNAVAILABLE_MESSAGE,
+  communityHostedMessage,
+  communityLockedMessage,
   onlineIsPlayable,
   onlineIsUnavailable,
   onlinePlayerCount,
@@ -106,7 +108,8 @@ export function BuildList({
         const isLive =
           playMode.online === true ||
           playMode.globalOnline === true ||
-          playMode.externalAvailable === true
+          playMode.externalAvailable === true ||
+          playMode.communityAvailable === true
         const isChecking =
           !isLive && playMode.availability === 'global' && playMode.globalOffline !== true
         const isUnavailable = onlineIsUnavailable(playMode)
@@ -266,12 +269,26 @@ export function BuildList({
                       {!downloadLabel && !build.onlineProvider && !installed?.[build.id] && hasSource && ` · ${sizeLabel ?? 'size unavailable'}`}
                     </span>
                   </span>
+                  {!isUnavailable && playMode.communityAvailable === true && (
+                    <span
+                      className="mt-1 block text-[9.5px] leading-snug text-emerald-200/75"
+                      title={communityHostedMessage(playMode.externalProviderLabel)}
+                    >
+                      {communityHostedMessage(playMode.externalProviderLabel)}
+                    </span>
+                  )}
                   {isUnavailable && (
                     <span
                       className="mt-1 block text-[9.5px] leading-snug text-amber-200/75"
-                      title={ONLINE_UNAVAILABLE_MESSAGE}
+                      title={
+                        playMode.communityRouteLocked && playMode.communityRouteLabel
+                          ? communityLockedMessage(playMode.communityRouteLabel)
+                          : ONLINE_UNAVAILABLE_MESSAGE
+                      }
                     >
-                      {ONLINE_UNAVAILABLE_MESSAGE}
+                      {playMode.communityRouteLocked && playMode.communityRouteLabel
+                        ? communityLockedMessage(playMode.communityRouteLabel)
+                        : ONLINE_UNAVAILABLE_MESSAGE}
                     </span>
                   )}
                   {installedNow && build.path && (
