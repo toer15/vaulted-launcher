@@ -513,13 +513,17 @@ const SHELL_FOLDER = /^(?:downloads|desktop|documents|pictures|music|videos|oned
 const MAX_PORTABLE_FILES = 400
 const MAX_PORTABLE_BYTES = 3 * 1024 * 1024 * 1024
 
-function portableTreeBudget(directory, budget = { files: 0, bytes: 0 }, depth = 0) {
+/**
+ * Measure a launcher folder without blocking the main process: a multi-GB
+ * portable build must not freeze the window while it is inspected.
+ */
+async function portableTreeBudget(directory, budget = { files: 0, bytes: 0 }, depth = 0) {
   if (depth > 6 || budget.files > MAX_PORTABLE_FILES || budget.bytes > MAX_PORTABLE_BYTES) {
     return budget
   }
   let entries
   try {
-    entries = fs.readdirSync(directory, { withFileTypes: true })
+    entries = await fs.promises.readdir(directory, { withFileTypes: true })
   } catch {
     return budget
   }
@@ -527,14 +531,14 @@ function portableTreeBudget(directory, budget = { files: 0, bytes: 0 }, depth = 
     const full = path.join(directory, entry.name)
     if (entry.isDirectory()) {
       if (/^(?:node_modules|\.git|__macosx|cache)$/i.test(entry.name)) continue
-      portableTreeBudget(full, budget, depth + 1)
+      await portableTreeBudget(full, budget, depth + 1)
       if (budget.files > MAX_PORTABLE_FILES || budget.bytes > MAX_PORTABLE_BYTES) return budget
       continue
     }
     if (!entry.isFile()) continue
     budget.files += 1
     try {
-      budget.bytes += fs.statSync(full).size
+      budget.bytes += (await fs.promises.stat(full)).size
     } catch {
       /* a vanished file cannot be copied either */
     }
@@ -543,17 +547,20 @@ function portableTreeBudget(directory, budget = { files: 0, bytes: 0 }, depth = 
   return budget
 }
 
-function copyPortableCompanions(sourceDirectory, destination) {
+async function copyPortableCompanions(sourceDirectory, destination) {
   let entries
   try {
-    entries = fs.readdirSync(sourceDirectory, { withFileTypes: true })
+    entries = await fs.promises.readdir(sourceDirectory, { withFileTypes: true })
   } catch {
     return
   }
   for (const entry of entries) {
     if (!entry.isFile() || !PORTABLE_COMPANION.test(entry.name)) continue
     try {
-      fs.copyFileSync(path.join(sourceDirectory, entry.name), path.join(destination, entry.name))
+      await fs.promises.copyFile(
+        path.join(sourceDirectory, entry.name),
+        path.join(destination, entry.name),
+      )
     } catch {
       /* a locked companion is reported by the launcher, not silently dropped from the record */
     }
@@ -562,7 +569,7 @@ function copyPortableCompanions(sourceDirectory, destination) {
 
 async function stagePortableLauncher(scan, root, providerId) {
   const destination = path.join(rootFor(root), providerId)
-  fs.mkdirSync(destination, { recursive: true })
+  await fs.promises.mkdir(destination, { recursive: true })
   const sourceDirectory = path.dirname(scan.path)
   const alreadyStaged = path
     .resolve(sourceDirectory)
@@ -572,25 +579,35 @@ async function stagePortableLauncher(scan, root, providerId) {
     // Re-importing a launcher VAULTED already staged must not copy it onto itself.
     target = scan.path
   } else {
-    const budget = portableTreeBudget(sourceDirectory)
+    const budget = await portableTreeBudget(sourceDirectory)
     const wholeFolder =
       !SHELL_FOLDER.test(path.basename(sourceDirectory)) &&
       budget.files <= MAX_PORTABLE_FILES &&
       budget.bytes <= MAX_PORTABLE_BYTES
     if (wholeFolder) {
       const folder = path.join(destination, path.basename(sourceDirectory) || 'launcher')
-      fs.cpSync(sourceDirectory, folder, { recursive: true, force: true })
+      // fs.promises.cp streams on the libuv thread pool, so a 3 GB launcher
+      // folder stages without freezing the main process.
+      try {
+        await fs.promises.cp(sourceDirectory, folder, { recursive: true, force: true })
+      } catch (error) {
+        throw new Error(
+          `VAULTED could not copy ${path.basename(sourceDirectory)} into its launcher folder: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
+      }
       target = path.join(folder, path.basename(scan.path))
     } else {
       target = path.join(destination, path.basename(scan.path))
-      fs.copyFileSync(scan.path, target)
-      copyPortableCompanions(sourceDirectory, destination)
+      await fs.promises.copyFile(scan.path, target)
+      await copyPortableCompanions(sourceDirectory, destination)
     }
   }
   const sha256 = await sha256File(target)
   if (scan.sha256 && sha256 !== scan.sha256) {
     try {
-      fs.rmSync(target, { force: true })
+      await fs.promises.rm(target, { force: true })
     } catch {
       /* the mismatch is reported either way */
     }

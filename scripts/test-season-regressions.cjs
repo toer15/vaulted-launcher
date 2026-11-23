@@ -1695,8 +1695,19 @@ function testCommunityLauncherUnlock() {
   )
   assert.match(
     launcher,
-    /fs\.cpSync\(sourceDirectory, folder/,
+    /await fs\.promises\.cp\(sourceDirectory, folder/,
     'a portable launcher keeps the folder and files it ships with',
+  )
+  const stagingStart = launcher.indexOf('const PORTABLE_COMPANION')
+  const stagingEnd = launcher.indexOf('async function installLauncherFile')
+  assert.ok(
+    stagingStart > 0 && stagingEnd > stagingStart,
+    'the portable staging block must stay identifiable',
+  )
+  assert.doesNotMatch(
+    launcher.slice(stagingStart, stagingEnd),
+    /Sync\(/,
+    'staging a multi-GB launcher folder must never block the main process',
   )
   assert.match(
     launcher,
