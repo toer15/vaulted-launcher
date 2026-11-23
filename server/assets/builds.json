@@ -55,13 +55,13 @@
       "title": "Chapter 1 Season 3",
       "chapter": 1,
       "season": 3,
-      "buildVersion": "3.00",
-      "sizeGB": 7.38,
-      "downloadUrl": "https://archive.org/download/fn-v3-archive/builds%2F3.0.0-CL-3901517.7z",
+      "buildVersion": "3.6",
+      "sizeGB": 6.03,
+      "downloadUrl": "https://archive.org/download/fn-v3-archive/builds%2F3.6-CL-4019403.7z",
       "runtimeProfile": "legacy",
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s3",
-      "url": "https://archive.org/download/fn-v3-archive/builds%2F3.0.0-CL-3901517.7z",
-      "version": "3.00",
+      "url": "https://archive.org/download/fn-v3-archive/builds%2F3.6-CL-4019403.7z",
+      "version": "3.6",
       "servers": [
         {
           "name": "Reboot",
@@ -72,7 +72,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 7384406276
+      "sizeBytes": 6028410444
     },
     "ch1-s4": {
       "id": "ch1-s4",

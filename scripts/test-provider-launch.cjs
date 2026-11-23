@@ -189,6 +189,7 @@ function testLiveProviderMappings() {
   // v1.x-v3.x predate the Curl signatures Tellurium waits for. They must
   // select Cobalt while every modern build keeps Tellurium.
   assert.equal(providerUsesLegacyRedirect('3.0', 'ch1-s3'), true)
+  assert.equal(providerUsesLegacyRedirect('3.6', 'ch1-s3'), true, 'Omen runs 3.6, still Cobalt')
   assert.equal(providerUsesLegacyRedirect('', 'ch1-s2'), true)
   assert.equal(providerUsesLegacyRedirect('4.10', 'ch1-s4'), false)
   assert.equal(providerUsesLegacyRedirect('14.60', 'ch2-s4'), false)

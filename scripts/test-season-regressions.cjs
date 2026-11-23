@@ -443,14 +443,48 @@ function testWorkingSeasons() {
   assert.equal(origins?.discordGate?.guildId, '1500960775743733942', 'Origins guild must stay pinned')
   assert.equal(origins?.runtime, undefined, 'Origins ships no installer VAULTED runs')
 
-  // Omen (Season 3: 3.5/3.6), ARC (Season 4: v4.5) and VYNX (Season 11) are
-  // real hosted communities, but each runs a build this catalog does not
-  // install: ch1-s3 ships 3.0.0-CL-3901517, ch1-s4 ships 4.10-CL-4053532 and
-  // ch2-s1 ships 11.00-CL-9562734. A launcher's backend and its redirect only
-  // accept its own build, so those cards must stay locked until the exact
-  // build ships and a launch against that launcher is verified.
+  // Project Omen hosts Chapter 1 Season 3 on 3.6 (CL-4019403). The card now
+  // installs that exact build — archive.org fn-v3-archive/builds/3.6-CL-4019403
+  // (6,028,410,444 bytes, sha1 5dfb44f5…), the same item and collection it
+  // already served 3.0 from — and a v3.x client hooks through the Cobalt legacy
+  // redirect, so the community is verified instead of route-only.
+  const ch1s3 = season('ch1-s3')
+  assert.equal(ch1s3.version, '3.6', 'ch1-s3 must install the build Omen runs')
+  assert.equal(ch1s3.buildVersion, '3.6')
+  assert.equal(
+    ch1s3.downloadUrl,
+    'https://archive.org/download/fn-v3-archive/builds%2F3.6-CL-4019403.7z',
+  )
+  assert.match(ch1s3.url, /3\.6-CL-4019403\.7z$/, 'the fallback URL must serve the same build')
+  assert.equal(ch1s3.sizeBytes, 6028410444, 'the card must state the archive size it fetches')
+  assert.equal(ch1s3.runtimeProfile, 'legacy', 'a v3.x client needs the Cobalt redirect')
+  assert.deepEqual(
+    [...new Set(routeIds(ch1s3))],
+    ['omen-official', 'era-official'],
+    'ch1-s3 must keep Omen first and Era behind it',
+  )
+  const omen = providerCatalog().find((entry) => entry.id === 'omen-official')
+  assert.equal(omen?.discordGate?.guildId, '1510765844404109332', 'Omen guild must stay pinned')
+  assert.equal(omen?.discordGate?.inviteUrl, 'https://discord.gg/omenmp')
+  assert.equal(
+    omen?.communityVerified,
+    true,
+    'Omen runs 3.6 (CL-4019403) and ch1-s3 now installs it, so the community is verified',
+  )
+  assert.equal(omen?.directLaunch, true, 'Omen keeps its community launcher route')
+  assert.equal(omen?.runtime, undefined, 'Omen ships no installer VAULTED runs')
+  // The served copy of the manifest must not disagree with the bundled one.
+  const servedCh1s3 = JSON.parse(read('server/assets/builds.json')).seasons['ch1-s3']
+  assert.equal(servedCh1s3.version, ch1s3.version, 'server/assets must serve the same build')
+  assert.equal(servedCh1s3.downloadUrl, ch1s3.downloadUrl)
+  assert.equal(servedCh1s3.sizeBytes, ch1s3.sizeBytes)
+
+  // ARC (Season 4: v4.5) and VYNX (Season 11) are real hosted communities, but
+  // each runs a build this catalog does not install: ch1-s4 ships
+  // 4.10-CL-4053532 and ch2-s1 ships 11.00-CL-9562734. A launcher's backend and
+  // its redirect only accept its own build, so those cards must stay locked
+  // until the exact build ships and a launch against that launcher is verified.
   for (const [seasonId, providerId, guildId, invite, launcherBuild] of [
-    ['ch1-s3', 'omen-official', '1510765844404109332', 'https://discord.gg/omenmp', '3.5/3.6'],
     ['ch1-s4', 'arc', '1538872114537562163', 'https://discord.gg/arcogfn', '4.5'],
     ['ch2-s1', 'vynx-official', '1366960510699831306', 'https://discord.gg/vynxzy', 'Chapter 2 Season 1'],
   ]) {
@@ -469,8 +503,8 @@ function testWorkingSeasons() {
     assert.equal(provider?.runtime, undefined, `${providerId} ships no installer VAULTED runs`)
   }
   // Locked means no ONLINE · DISCORD: the verified early return requires a
-  // community whose build matches, and these three are route-only.
-  for (const id of ['ch1-s3', 'ch1-s4', 'ch2-s1']) {
+  // community whose build matches, and these two are route-only.
+  for (const id of ['ch1-s4', 'ch2-s1']) {
     assert.equal(
       providerCatalog().some((entry) =>
         routeIds(season(id)).includes(entry.id) && entry.communityVerified === true,
@@ -1477,8 +1511,12 @@ async function testDiscordOnlyNeverCountsOnline() {
   assert.equal(report.expectedSeasons, 43)
   assert.equal(report.seasons.length, 43, 'the audit must sweep every bundled season')
   assert.equal(report.counts.LAUNCHER, 0, 'offline mode must not report a launcher as verified')
-  assert.equal(report.counts.COMMUNITY, 4, 'only the four build-matched communities are playable')
-  for (const id of ['ch4-s2', 'ch4-s4', 'ch3-s1', 'ch5-s1']) {
+  assert.equal(
+    report.counts.COMMUNITY,
+    5,
+    'only the build-matched communities are playable (Rewind ×2, Glow, Origins, Omen)',
+  )
+  for (const id of ['ch4-s2', 'ch4-s4', 'ch3-s1', 'ch5-s1', 'ch1-s3']) {
     assert.equal(
       report.seasons.find((row) => row.id === id)?.state,
       'COMMUNITY',
@@ -1487,7 +1525,7 @@ async function testDiscordOnlyNeverCountsOnline() {
   }
   // Real communities whose launcher runs a different build stay locked, even
   // though their route and Discord gate are configured.
-  for (const id of ['ch1-s3', 'ch1-s4', 'ch2-s1']) {
+  for (const id of ['ch1-s4', 'ch2-s1']) {
     const row = report.seasons.find((entry) => entry.id === id)
     assert.equal(row?.state, 'UNAVAILABLE', `${id} must stay locked while its build mismatches`)
     assert.equal(row?.wired, false, `${id} must not report itself as wired while locked`)

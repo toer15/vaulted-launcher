@@ -95,6 +95,7 @@ function main() {
   assert.ok(fs.existsSync(path.join(providersRoot, 'runtime', 'Cobalt-LICENSE.txt')), 'Cobalt license is missing')
 
   assert.equal(providerUsesLegacyRedirect('3.0', 'ch1-s3'), true)
+  assert.equal(providerUsesLegacyRedirect('3.6', 'ch1-s3'), true, 'Omen runs 3.6, still Cobalt')
   assert.equal(providerUsesLegacyRedirect('14.60', 'ch2-s4'), false)
 
   const providers = providerCatalog().filter((provider) => provider.mode !== 'external')
