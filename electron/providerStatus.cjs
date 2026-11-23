@@ -223,7 +223,18 @@ async function probeProviderStatus(provider, options = {}) {
     provider?.mode === 'external' &&
     !hasCompanionLauncher(provider) &&
     (!configuredStatus || isDiscordHost(configuredStatus) || provider?.launchKind === 'discord')
-  const url = discordOnly ? null : configuredStatus
+  // A project that ships its own launcher does not have to publish an
+  // unauthenticated JSON health endpoint. Its official site/CDN staying up is a
+  // real liveness signal for the launcher the player is about to open, so fall
+  // back to it instead of calling a live project unreachable.
+  const launcherSite =
+    provider?.mode === 'external' && hasCompanionLauncher(provider)
+      ? safeHttpUrl(provider?.website || provider?.launchUrl)
+      : null
+  const url = discordOnly
+    ? null
+    : configuredStatus ||
+      (launcherSite && !isDiscordHost(launcherSite) ? launcherSite : null)
   const checkedAt = new Date().toISOString()
   if (!providerId || !url) {
     return {

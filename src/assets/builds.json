@@ -62,20 +62,20 @@
       ],
       "sizeBytes": 6976364737,
       "onlineProvider": {
-        "id": "era-official",
-        "name": "Project Era",
-        "label": "Era"
+        "id": "sunset",
+        "name": "SunSet Studios",
+        "label": "SunSet"
       },
       "onlineProviders": [
-        {
-          "id": "era-official",
-          "name": "Project Era",
-          "label": "Era"
-        },
         {
           "id": "sunset",
           "name": "SunSet Studios",
           "label": "SunSet"
+        },
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
         }
       ]
     },
@@ -103,20 +103,20 @@
       ],
       "sizeBytes": 7384406276,
       "onlineProvider": {
-        "id": "era-official",
-        "name": "Project Era",
-        "label": "Era"
+        "id": "sunset",
+        "name": "SunSet Studios",
+        "label": "SunSet"
       },
       "onlineProviders": [
-        {
-          "id": "era-official",
-          "name": "Project Era",
-          "label": "Era"
-        },
         {
           "id": "sunset",
           "name": "SunSet Studios",
           "label": "SunSet"
+        },
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
         }
       ]
     },
@@ -144,20 +144,20 @@
       ],
       "sizeBytes": 11427640644,
       "onlineProvider": {
-        "id": "era-official",
-        "name": "Project Era",
-        "label": "Era"
+        "id": "arc",
+        "name": "ARC",
+        "label": "ARC"
       },
       "onlineProviders": [
-        {
-          "id": "era-official",
-          "name": "Project Era",
-          "label": "Era"
-        },
         {
           "id": "arc",
           "name": "ARC",
           "label": "ARC"
+        },
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
         },
         {
           "id": "sunset",
@@ -190,20 +190,20 @@
       ],
       "sizeBytes": 13283153744,
       "onlineProvider": {
-        "id": "era-official",
-        "name": "Project Era",
-        "label": "Era"
+        "id": "sunset",
+        "name": "SunSet Studios",
+        "label": "SunSet"
       },
       "onlineProviders": [
-        {
-          "id": "era-official",
-          "name": "Project Era",
-          "label": "Era"
-        },
         {
           "id": "sunset",
           "name": "SunSet Studios",
           "label": "SunSet"
+        },
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
         }
       ]
     },

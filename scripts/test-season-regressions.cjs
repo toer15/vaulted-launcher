@@ -317,10 +317,25 @@ function testWorkingSeasons() {
   assert.equal(eraOfficial.liveSeason?.equals, undefined, 'Era must follow, not pin a season')
   for (let number = 1; number <= 9; number += 1) {
     assert.equal(
-      season(`ch1-s${number}`).onlineProvider?.id,
-      'era-official',
+      routeIds(season(`ch1-s${number}`)).includes('era-official'),
+      true,
       `ch1-s${number} must carry Era so a rotation can follow it`,
     )
+  }
+  // A dedicated community's route must stay the primary one; Era is attached
+  // behind it so following a rotation never demotes SunSet or ARC.
+  for (const [seasonId, primaryId] of Object.entries({
+    'ch1-s2': 'sunset',
+    'ch1-s3': 'sunset',
+    'ch1-s4': 'arc',
+    'ch1-s5': 'sunset',
+  })) {
+    assert.equal(
+      season(seasonId).onlineProvider?.id,
+      primaryId,
+      `${seasonId} must keep ${primaryId} as its dedicated provider`,
+    )
+    assert.equal(season(seasonId).onlineProviders?.[0]?.id, primaryId)
   }
   assert.equal(
     routeIds(season('ch1-s10')).includes('era-official'),
@@ -540,8 +555,8 @@ function testLawinServerBan() {
   assert.match(echoCatalog?.bannedReason || '', /WinRAR SFX|malicious|SYSTEM scheduled task/i)
   assert.deepEqual(
     [...new Set(routeIds(season('ch1-s3')))],
-    ['era-official', 'sunset'],
-    'ch1-s3 keeps its SunSet gate and follows Era while Era hosts Season 3',
+    ['sunset', 'era-official'],
+    'ch1-s3 keeps SunSet as its dedicated route and adds Era behind it',
   )
   const sunset = providerCatalog().find((entry) => entry.id === 'sunset')
   assert.ok(sunset, 'the SunSet replacement is missing from the provider catalog')
@@ -1023,12 +1038,10 @@ function testDiscordOnlyDirectLaunch() {
   // A verified, installed Discord-only season runs the ordinary VAULTED direct
   // path: the injector plus the redirect DLL selected for the build (Cobalt for
   // 4.10) and the live public server as its join target.
-  // ARC stays the Discord direct-launch route for 4.10 while Era (verified
-  // launcher, season-gated) leads the card so a rotation can follow it.
-  assert.equal(season('ch1-s4').onlineProvider.id, 'era-official')
+  assert.equal(season('ch1-s4').onlineProvider.id, 'arc')
   assert.ok(
-    routeIds(season('ch1-s4')).includes('arc'),
-    'the ARC direct-launch route must stay registered for ch1-s4',
+    routeIds(season('ch1-s4')).includes('era-official'),
+    'Era must stay attached to ch1-s4 as the season-gated launcher route',
   )
   assert.match(MAIN, /ipcMain\.handle\('arc:launch-build'/, 'the direct launch IPC is missing')
   assert.match(MAIN, /legacy \? legacyRedirectDllPath\(\) : path\.join\(runtimeRoot\(\), 'Tellurium\.dll'\)/)
@@ -1211,6 +1224,19 @@ async function testSeasonRotationGuard() {
     /missing: onlineUnavailableForPlay\s*\?/,
     'a locked season must not advertise an install step',
   )
+
+  // A launcher-backed project without a JSON health endpoint still counts as
+  // reachable when its official site answers: no public API is required.
+  const noApi = { ...era, statusUrl: '', backendUrl: 'https://erafn.dev/' }
+  const siteOnly = await probeProviderStatus(noApi, {
+    fetchImpl: async () =>
+      new Response('<html>Era</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
+  })
+  assert.equal(siteOnly.online, true, 'a live launcher site is a reachability signal')
+  const siteDown = await probeProviderStatus(noApi, {
+    fetchImpl: async () => new Response('down', { status: 503 }),
+  })
+  assert.equal(siteDown.online, false, 'a failing site is never reported as live')
 }
 
 async function testDiscordOnlyNeverCountsOnline() {
