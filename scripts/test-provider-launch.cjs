@@ -372,6 +372,63 @@ function testLaunchArguments() {
   assert.equal(serialized.includes(backendUrl), false)
 }
 
+/**
+ * A season folder is named after the season, not the build, so the installed
+ * version must come from the client's own markers. A 3.0 folder on the 3.6
+ * ch1-s3 card has to be distinguishable or Omen is handed the wrong client.
+ */
+async function testInstalledBuildVersionDetection() {
+  const { detectBuildVersion, versionKey, changelist } = require('../electron/buildVersion.cjs')
+
+  assert.equal(versionKey('3.6.0-CL-4019403'), '3.6')
+  assert.equal(versionKey('++Fortnite+Release-3.0-CL-3901517'), '3.0')
+  assert.equal(versionKey(''), null)
+  assert.equal(changelist('++Fortnite+Release-3.6-CL-4019403'), 4019403)
+
+  const flat = path.join(temporaryRoot, 'install-3.6')
+  fs.mkdirSync(path.join(flat, 'Engine', 'Build'), { recursive: true })
+  fs.writeFileSync(
+    path.join(flat, 'Engine', 'Build', 'Build.version'),
+    JSON.stringify({
+      MajorVersion: 3,
+      MinorVersion: 6,
+      PatchVersion: 0,
+      Changelist: 4019403,
+      BranchName: '++Fortnite+Release-3.6-CL-4019403',
+    }),
+  )
+  const fresh = await detectBuildVersion(flat)
+  assert.equal(fresh.version, '3.6', 'a 3.6 folder must report 3.6')
+  assert.equal(fresh.changelist, 4019403)
+
+  const stale = path.join(temporaryRoot, 'install-3.0')
+  fs.mkdirSync(path.join(stale, 'Engine', 'Build'), { recursive: true })
+  fs.writeFileSync(
+    path.join(stale, 'Engine', 'Build', 'Build.version'),
+    JSON.stringify({ MajorVersion: 3, MinorVersion: 0, PatchVersion: 0, Changelist: 3901517 }),
+  )
+  assert.equal((await detectBuildVersion(stale)).version, '3.0', 'a 3.0 folder must report 3.0')
+
+  // Archives sometimes unpack one folder deeper: season folder -> version folder.
+  const nested = path.join(temporaryRoot, 'install-nested', '3.6')
+  fs.mkdirSync(path.join(nested, 'Engine', 'Build'), { recursive: true })
+  fs.writeFileSync(
+    path.join(nested, 'Engine', 'Build', 'Build.version'),
+    JSON.stringify({ MajorVersion: 3, MinorVersion: 6, Changelist: 4019403 }),
+  )
+  assert.equal(
+    (await detectBuildVersion(path.join(temporaryRoot, 'install-nested'))).version,
+    '3.6',
+    'a nested version folder is still readable',
+  )
+
+  const unknown = path.join(temporaryRoot, 'install-unknown')
+  fs.mkdirSync(unknown, { recursive: true })
+  assert.equal((await detectBuildVersion(unknown)).version, '')
+  assert.equal((await detectBuildVersion(path.join(temporaryRoot, 'missing'))).version, '')
+  assert.equal((await detectBuildVersion('')).version, '')
+}
+
 async function testStellarExchangeSuccess() {
   const requests = []
   const diagnostics = []
@@ -495,6 +552,7 @@ async function main() {
   testRetracPendingLaunchRouting()
   writeTokenStore()
   testLaunchArguments()
+  await testInstalledBuildVersionDetection()
   await testStellarExchangeSuccess()
   writeTokenStore()
   await testStellarExchangeHttpError()
@@ -503,7 +561,7 @@ async function main() {
   writeTokenStore()
   await testStellarExchangeTimeout()
   console.log(
-    'provider launch smoke passed: Stellar exchange payload, 401/invalid/timeout diagnostics, Stellar/Retrac/local launch arguments, and the post-download Retrac CLI handoff checked offline',
+    'provider launch smoke passed: Stellar exchange payload, 401/invalid/timeout diagnostics, Stellar/Retrac/local launch arguments, installed-build version detection (3.0 vs 3.6, nested and unknown folders), and the post-download Retrac CLI handoff checked offline',
   )
 }
 

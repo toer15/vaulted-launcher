@@ -57,6 +57,7 @@ import {
   pickBuildFolder,
   pickExistingBuildFolder,
   pickInstallDir,
+  sameBuildVersion,
   scanInstalledBuilds,
   startDownload,
   stopProviderLauncher,
@@ -355,6 +356,11 @@ export default function App() {
   const [profilesLoaded, setProfilesLoaded] = useState(false)
   const [phase, setPhase] = useState<LaunchPhase>('idle')
   const [installed, setInstalled] = useState<Record<string, boolean>>({})
+  // The real build inside each installed folder (Engine/Build/Build.version or
+  // the client's FileVersion). A card that moved from 3.0 to 3.6 must not keep
+  // launching the 3.0 folder just because the folder exists.
+  const [buildVersions, setBuildVersions] = useState<Record<string, string>>({})
+  const buildVersionCache = useRef(new Map<string, string>())
   const [diskSizes, setDiskSizes] = useState<Record<string, number>>({})
   const requestedDiskSizes = useRef(new Set<string>())
   const [downloads, setDownloads] = useState<Record<string, DownloadState>>({})
@@ -933,6 +939,15 @@ export default function App() {
     ],
   )
   const activePlayMode = activeBuild ? playModes[activeBuild.id] : undefined
+  // Installed-but-wrong-build: the folder exists, so every installed check
+  // passes, yet its own markers say another Fortnite version than the card.
+  const activeInstalledVersion = activeBuild ? buildVersions[activeBuild.id] ?? '' : ''
+  const activeVersionMismatch = Boolean(
+    activeBuild &&
+      installed[activeBuild.id] &&
+      activeInstalledVersion &&
+      !sameBuildVersion(activeInstalledVersion, activeBuild.version),
+  )
 
   // The hero dropdown and Play read one route: exact-season relay/manual rows
   // first, then external directories. A different-season external server is
@@ -1475,6 +1490,44 @@ export default function App() {
       cancelled = true
     }
   }, [builds, native, buildsRoot])
+
+  // An install, repair or removal changes what a folder holds, so the version
+  // cache starts fresh with every installed-map update.
+  useEffect(() => {
+    buildVersionCache.current.clear()
+  }, [installed])
+
+  const detectInstalledVersion = useCallback(
+    async (build: Build): Promise<string> => {
+      if (!build?.path || installed[build.id] !== true) return ''
+      if (typeof window === 'undefined' || typeof window.arc?.detectBuildVersion !== 'function') {
+        return ''
+      }
+      const cached = buildVersionCache.current.get(build.path)
+      if (cached !== undefined) return cached
+      try {
+        const result = await window.arc.detectBuildVersion(build.path)
+        const version = String(result?.version || '')
+        buildVersionCache.current.set(build.path, version)
+        if (version) {
+          setBuildVersions((prev) =>
+            prev[build.id] === version ? prev : { ...prev, [build.id]: version },
+          )
+        }
+        return version
+      } catch {
+        buildVersionCache.current.set(build.path, '')
+        return ''
+      }
+    },
+    [installed],
+  )
+
+  // The hero reads the folder's real version as soon as the card is installed.
+  useEffect(() => {
+    if (!activeBuild || installed[activeBuild.id] !== true) return
+    void detectInstalledVersion(activeBuild)
+  }, [activeBuild, detectInstalledVersion, installed])
 
   // Detected install sizes are read on demand and cached by path. Walking a
   // 20 GB build can take a moment, so the active card is measured first and
@@ -2765,6 +2818,33 @@ export default function App() {
   }, [activeBuild, activeBuildIssue, beginDownload, beginProviderSync, pushToast, seasonManifest])
 
   /**
+   * Replace an installed folder that holds another Fortnite build. `repair`
+   * lets the downloader overwrite the existing season folder instead of being
+   * refused because an executable is already there.
+   */
+  const handleReinstallSeason = useCallback(() => {
+    const build = activeBuild
+    if (!build) return
+    const seasonId = artKeyFor(build.season) ?? build.id
+    const source = seasonManifest[seasonId]
+    if (!source?.downloadUrl) {
+      pushToast({
+        tone: 'error',
+        title: 'No download source for this reinstall',
+        description: `VAULTED has no archive for ${build.season.label}.`,
+      })
+      return
+    }
+    void beginDownload(build, source.downloadUrl, source.sha256, source.fallbackDownloadUrl, {
+      repair: true,
+      preferredFolder: source.buildVersion || undefined,
+      buildVersion: source.buildVersion || undefined,
+      seasonId,
+      providerId: build.onlineProvider?.id,
+    })
+  }, [activeBuild, beginDownload, pushToast, seasonManifest])
+
+  /**
    * Retrac owns its signed Alea client and launcher. Every Retrac handoff,
    * including the automatic launch after Download Season, must go through the
    * installed official CLI so VAULTED can track its child PID and close the
@@ -3566,6 +3646,23 @@ export default function App() {
         return
       }
 
+      // A folder named for the season says nothing about the build inside it.
+      // A launcher accepts only its own client, so hand it the wrong one is a
+      // guaranteed failed session: block until the season is reinstalled.
+      const detectedVersion = await detectInstalledVersion(build)
+      if (detectedVersion && !sameBuildVersion(detectedVersion, build.version)) {
+        const message = `This folder holds Fortnite ${detectedVersion}, but ${build.season.label} now installs ${build.version}. Reinstall the season from the card to play online.`
+        setPhase('error')
+        setLaunchStage(null)
+        setLaunchFailure({ id: build.id, message })
+        pushToast({
+          tone: 'info',
+          title: 'Reinstall this season to play online',
+          description: message,
+        })
+        return
+      }
+
       // Discord-gated communities are checked at Play time, after the build is
       // installed. A detected companion launcher is an alternate Step 1 unlock,
       // so do not send the player back to Discord after Install Season.
@@ -3925,6 +4022,7 @@ export default function App() {
       shop.owned,
       shop.equipped,
       discordGateVerifications,
+      detectInstalledVersion,
     ],
   )
 
@@ -5384,6 +5482,9 @@ export default function App() {
                 downloadSize={activeDownloadSize}
                 diskSize={activeBuild ? diskSizes[activeBuild.path] ?? null : null}
                 installed={installed}
+                installedVersion={activeInstalledVersion}
+                versionMismatch={activeVersionMismatch}
+                onReinstallSeason={handleReinstallSeason}
                 canRemove={canRemoveActive}
                 canVerify={canVerifyActive}
                 managed={canVerifyActive}

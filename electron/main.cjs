@@ -46,6 +46,7 @@ const {
   hideCompanionLauncher,
 } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
+const { detectBuildVersion } = require('./buildVersion.cjs')
 const {
   communityLauncherExecutable,
   communityLauncherRecord,
@@ -6395,6 +6396,12 @@ function registerIpc() {
     }
     return result
   })
+
+  // The card's version is the season it maps to, not the build on disk. Read
+  // the folder's own markers so a stale 3.0 install cannot pass as 3.6.
+  ipcMain.handle('arc:detect-build-version', (_event, folder) =>
+    detectBuildVersion(typeof folder === 'string' ? folder : ''),
+  )
 
   ipcMain.handle('arc:download-build', (_event, payload) => downloadBuild(payload))
   ipcMain.handle('arc:sync-provider-build', (_event, payload) => syncProviderBuild(payload))

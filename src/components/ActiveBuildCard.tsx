@@ -117,6 +117,12 @@ interface ActiveBuildCardProps {
   launchVerificationUrl?: string | null
   /** provider build.verify rejected the installed files */
   buildVerificationRequired?: boolean
+  /** the real Fortnite version inside the installed folder, when detected */
+  installedVersion?: string
+  /** the folder is installed but holds another build than this card installs */
+  versionMismatch?: boolean
+  /** repair the season to the build this card installs */
+  onReinstallSeason?: () => void
   /** exact live version the repair will install, e.g. "6.21" */
   liveBuildVersion?: string | null
   /** one-click download/repair to the provider's live manifest */
@@ -331,6 +337,9 @@ export function ActiveBuildCard({
   launchErrorLocal,
   launchVerificationUrl,
   buildVerificationRequired,
+  installedVersion = '',
+  versionMismatch = false,
+  onReinstallSeason,
   liveBuildVersion,
   onUpdateLiveBuild,
   onRetryLaunch,
@@ -916,6 +925,33 @@ export function ActiveBuildCard({
             >
               <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
               <span>{unavailableMessage}</span>
+            </div>
+          )}
+
+          {versionMismatch && (
+            <div
+              role="status"
+              className="mt-4 flex max-w-xl flex-wrap items-start gap-2 rounded-xl border border-amber-400/40 bg-amber-400/[0.09] px-3 py-2.5 text-[11.5px] font-medium leading-relaxed text-amber-100 backdrop-blur 2xl:max-w-2xl 2xl:px-4 2xl:py-3 2xl:text-[12.5px]"
+            >
+              <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+              <span className="min-w-0 flex-1">
+                This folder holds Fortnite {installedVersion || 'an older build'}, but {season.label}{' '}
+                now installs {build.version}. Play is blocked until it is reinstalled.
+              </span>
+              {onReinstallSeason && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onReinstallSeason()
+                  }}
+                  title={`Download ${build.version} over the existing folder`}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-amber-300/45 bg-amber-300/15 px-2.5 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.05em] text-amber-100 transition-colors duration-200 hover:border-amber-200/70 hover:bg-amber-300/25 hover:text-white"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Reinstall Season{downloadSizeLabel ? ` · ${downloadSizeLabel}` : ''}
+                </button>
+              )}
             </div>
           )}
 
@@ -1523,6 +1559,12 @@ export function ActiveBuildCard({
                           return
                         }
                         if (primaryDisabled) return
+                        // A folder holding another build cannot launch: the
+                        // primary action repairs it instead of playing.
+                        if (versionMismatch && onReinstallSeason) {
+                          onReinstallSeason()
+                          return
+                        }
                         // An install or a paused transfer is a download intent:
                         // only the explicit handler may start or resume it.
                         if ((state === 'missing' || state === 'paused') && onInstallSeason) {
@@ -1534,8 +1576,10 @@ export function ActiveBuildCard({
                       disabled={primaryDisabled}
                       aria-disabled={requiresSignIn || accountConnectRequired || primaryDisabled}
                       title={
-                        onlineUnavailableForPlay
-                          ? unavailableMessage
+                        versionMismatch
+                          ? `This folder holds Fortnite ${installedVersion || 'another build'}; reinstall ${build.version} to play online`
+                          : onlineUnavailableForPlay
+                            ? unavailableMessage
                           : accountConnectRequired
                             ? 'Connect an online account to play this season'
                             : requiresSignIn
@@ -1555,7 +1599,11 @@ export function ActiveBuildCard({
                         <span className="absolute inset-0 -translate-x-[120%] bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-[120%]" />
                       )}
                       <PrimaryIcon className={cx('h-4 w-4', primaryBusy && 'animate-spin')} />
-                      <span className="relative">{primary.label}</span>
+                      <span className="relative">
+                        {versionMismatch
+                          ? `Reinstall Season${downloadSizeLabel ? ` · ${downloadSizeLabel}` : ''}`
+                          : primary.label}
+                      </span>
                     </button>
 
                   </div>

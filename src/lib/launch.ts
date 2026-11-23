@@ -241,6 +241,16 @@ export interface LauncherBridge {
     clear(): Promise<boolean>
   }
   checkBuilds?(builds: Array<{ id: string; executable: string; path: string }>): Promise<Record<string, boolean>>
+  /**
+   * The real build inside an installed folder (Engine/Build/Build.version or
+   * the shipping executable's FileVersion), so a season re-versioned from 3.0
+   * to 3.6 cannot keep launching an old folder.
+   */
+  detectBuildVersion?(folder: string): Promise<{
+    version: string
+    changelist: number | null
+    source: string
+  }>
   downloadBuild?(payload: {
     id: string
     key: string
@@ -504,6 +514,27 @@ declare global {
   interface Window {
     arc?: LauncherBridge
   }
+}
+
+/** Major.minor of a catalog or on-disk version; "3.6.0-CL-4019403" gives "3.6". */
+function versionKeyOf(value: string | null | undefined): string | null {
+  const match = String(value || '').match(/(?<!\d)(\d{1,2})\.(\d{1,2})(?:\.(\d{1,2}))?(?!\d)/)
+  return match ? `${Number(match[1])}.${Number(match[2])}` : null
+}
+
+/**
+ * True unless both sides name a real build and those builds differ. An unknown
+ * installed version (no Build.version, unreadable executable) never blocks a
+ * launch on its own.
+ */
+export function sameBuildVersion(
+  installed: string | null | undefined,
+  expected: string | null | undefined,
+): boolean {
+  const left = versionKeyOf(installed)
+  const right = versionKeyOf(expected)
+  if (!left || !right) return true
+  return left === right
 }
 
 export function hasNativeBridge(): boolean {

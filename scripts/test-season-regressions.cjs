@@ -1300,6 +1300,22 @@ function testCardStates() {
   assert.match(card, /communityHosted\s*\?\s*'ONLINE · DISCORD'/)
   assert.match(card, /serverBadge === 'ONLINE · DISCORD'/, 'the dropdown community pill must be green')
   assert.match(card, /Verified community · this season/)
+
+  // The card's version is the season it maps to; the folder may still hold an
+  // older build. Play must read the folder's own marker and refuse a launch
+  // until the season is reinstalled on the build the card installs.
+  const detector = read('electron/buildVersion.cjs')
+  assert.match(detector, /'Engine', 'Build', 'Build\.version'/, 'Build.version must be read')
+  assert.match(detector, /FortniteClient-Win64-Shipping\.exe/, 'the client FileVersion is the fallback')
+  assert.match(detector, /async function detectBuildVersion/)
+  const appSource = read('src/App.tsx')
+  assert.match(appSource, /detectInstalledVersion/)
+  assert.match(appSource, /sameBuildVersion\(detectedVersion, build\.version\)/)
+  assert.match(appSource, /Reinstall this season to play online/)
+  assert.match(appSource, /handleReinstallSeason/)
+  assert.match(card, /versionMismatch/)
+  assert.match(card, /onReinstallSeason/)
+  assert.match(card, /Play is blocked until it is reinstalled/)
   assert.match(
     card,
     /!onlineUnavailable && communityHosted &&/,
