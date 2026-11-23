@@ -281,17 +281,34 @@ function testLauncherOutlivesBootstrapper() {
 }
 
 function testWorkingSeasons() {
-  // Chapter 1 Season 6 has no verified public backend. Reboot only offers its
-  // embedded LawinServer, so the season must stay unavailable rather than
-  // silently starting a private local lobby.
+  // Chapter 1 Season 6 runs on Project Era's official launcher. Era's own
+  // installer (Era-Setup-4.0.42.exe, 115 MB NSIS) passed the installer safety
+  // gate and a Defender scan, installs silently to
+  // %LOCALAPPDATA%\Programs\era-launcher\Era.exe, and Era's public API reports
+  // the live season number, which is 6 today.
   const ch1s6 = season('ch1-s6')
   assert.equal(ch1s6.version, '6.21')
-  assert.equal(ch1s6.onlineProvider, undefined, 'ch1-s6 must not route to Reboot')
-  assert.equal(ch1s6.onlineProviders, undefined, 'ch1-s6 must not route to any launcher')
-  assert.deepEqual(routeIds(ch1s6), [], 'ch1-s6 has no public online route')
-  assert.equal(ch1s6.providerBuild, undefined, "ch1-s6 must not keep Era's live build id")
   assert.ok(ch1s6.downloadUrl, 'ch1-s6 must keep its real 6.21 season build download')
   assert.equal(ch1s6.runtimeProfile, 'legacy')
+  assert.equal(ch1s6.onlineProvider?.id, 'era-official', 'ch1-s6 must route through Era')
+  assert.deepEqual(
+    [...new Set(routeIds(ch1s6))],
+    ['era-official'],
+    'ch1-s6 must have exactly one verified launcher route',
+  )
+  const eraOfficial = providerCatalog().find((entry) => entry.id === 'era-official')
+  assert.ok(eraOfficial?.runtime, 'Era must ship its launcher runtime')
+  assert.deepEqual(eraOfficial.supportedSeasons, ['ch1-s6'])
+  assert.equal(eraOfficial.mode, 'external')
+  assert.deepEqual(eraOfficial.liveSeason, { path: 'data.season.number', equals: 6, label: 'Season 6' })
+  const eraRuntime = providerRuntimeMetadata('era-official')
+  assert.equal(eraRuntime?.processName, 'Era.exe')
+  assert.equal(eraRuntime?.silentArgs?.[0], '/S')
+  assert.ok(
+    eraRuntime?.installedExecutables?.includes('%LOCALAPPDATA%/Programs/era-launcher/Era.exe'),
+    'the verified Era install path must be first-class',
+  )
+  assert.match(eraRuntime?.downloadUrl || '', /^https:\/\/api\.erafn\.dev\//)
   const rebootOnline = providerCatalog().find((entry) => entry.id === 'reboot-official')
   assert.equal(rebootOnline, undefined, 'Reboot must not be exposed as an online provider')
   assert.equal(isBannedProvider('reboot-official'), true, 'Reboot must be banned')
@@ -345,7 +362,6 @@ function testWorkingSeasons() {
   // Reboot-only seasons and seasons without any public backend stay unavailable.
   for (const id of [
     'ch1-s1',
-    'ch1-s6',
     'ch1-s7',
     'ch1-s8',
     'ch1-s9',
@@ -460,7 +476,7 @@ function testResearchedLaunchersStayUnwired() {
   }
   assert.deepEqual(
     [...runtimeSeasons].sort(),
-    ['ch1-s10', 'ch2-s2', 'ch2-s4', 'ch2-s5', 'ch2-s7'],
+    ['ch1-s10', 'ch1-s6', 'ch2-s2', 'ch2-s4', 'ch2-s5', 'ch2-s7'],
     'only verified online seasons may ship a companion launcher',
   )
 }
@@ -1105,6 +1121,32 @@ function testCardStates() {
   assert.match(rail, /filter === 'online' && visibleBuilds\.length === 0/)
 }
 
+async function testSeasonRotationGuard() {
+  // Era hosts one Chapter 1 season at a time and publishes which one. The card
+  // may only stay live while Era reports the season VAULTED shipped for it, so
+  // a rotation must take the route offline instead of lying about Season 6.
+  const era = providerCatalog().find((entry) => entry.id === 'era-official')
+  assert.ok(era?.liveSeason, 'Era must declare its live-season guard')
+  const reply = (season) => async () =>
+    new Response(JSON.stringify({ data: { season: { number: season } } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  const live = await probeProviderStatus(era, { fetchImpl: reply(6) })
+  assert.equal(live.online, true, 'Era on Season 6 must count as live for ch1-s6')
+  const rotated = await probeProviderStatus(era, { fetchImpl: reply(7) })
+  assert.equal(rotated.online, false, 'Era on another season must not count as ch1-s6')
+  assert.match(rotated.reason || '', /running season 7/i)
+  const silent = await probeProviderStatus(era, {
+    fetchImpl: async () =>
+      new Response(JSON.stringify({ data: {} }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+  })
+  assert.equal(silent.online, true, 'a backend that hides its season stays reachable')
+}
+
 async function testDiscordOnlyNeverCountsOnline() {
   // The exact Ch1 S3 regression: SunSet is a live Discord community with no
   // public game-server endpoint and no companion launcher. Its invite must not
@@ -1375,6 +1417,7 @@ async function run() {
   testSessionStability()
   testProviderIsolation()
   testCardStates()
+  await testSeasonRotationGuard()
   await testDiscordOnlyNeverCountsOnline()
   testOnlineBadgeColors()
   testAutoFixWiring()

@@ -185,6 +185,18 @@
       "downloadUrl": "https://archive.org/download/fortnite_6.21/6.21.rar",
       "fallbackDownloadUrl": "https://ia800803.us.archive.org/20/items/fortnite_6.21/6.21.rar",
       "runtimeProfile": "legacy",
+      "onlineProvider": {
+        "id": "era-official",
+        "name": "Project Era",
+        "label": "Era"
+      },
+      "onlineProviders": [
+        {
+          "id": "era-official",
+          "name": "Project Era",
+          "label": "Era"
+        }
+      ],
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s6",
       "url": "https://archive.org/download/fortnite_6.21/6.21.rar",
       "version": "6.21",

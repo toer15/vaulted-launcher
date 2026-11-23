@@ -576,6 +576,23 @@ function catalogData() {
       mode === 'external' ? (entry.launchKind === 'discord' ? 'discord' : 'official') : undefined
     const apiBaseUrl = parseHttpUrl(entry.apiBaseUrl, true)
     const statusUrl = parseHttpUrl(entry.statusUrl)
+    // Optional rotation guard for projects that host one season at a time.
+    const liveSeason =
+      entry.liveSeason &&
+      typeof entry.liveSeason === 'object' &&
+      typeof entry.liveSeason.path === 'string' &&
+      /^[A-Za-z0-9_.]{1,80}$/.test(entry.liveSeason.path) &&
+      ['string', 'number'].includes(typeof entry.liveSeason.equals) &&
+      String(entry.liveSeason.equals).length <= 32
+        ? {
+            path: entry.liveSeason.path,
+            equals: entry.liveSeason.equals,
+            label:
+              typeof entry.liveSeason.label === 'string'
+                ? entry.liveSeason.label.trim().slice(0, 32)
+                : '',
+          }
+        : undefined
     const launchUrl = parseHttpUrl(entry.launchUrl) || parseHttpUrl(entry.website)
     const population =
       entry.population &&
@@ -645,6 +662,7 @@ function catalogData() {
       embeddedWeb,
       launchHandshakePending: entry.launchHandshakePending === true,
       statusUrl: statusUrl ? statusUrl.toString() : '',
+      liveSeason,
       population,
       apiBaseUrl: apiBaseUrl ? apiBaseUrl.origin : '',
       realtimeUrl: parseWssUrl(entry.realtimeUrl)?.origin || '',
@@ -712,6 +730,9 @@ function providerCatalog() {
     launchUrl: entry.launchUrl,
     launchHandshakePending: entry.launchHandshakePending,
     statusUrl: entry.statusUrl,
+    // Optional rotation guard: a project that cycles seasons publishes its
+    // current season, and a card must not claim an old one is live.
+    liveSeason: entry.liveSeason,
     population: entry.population,
     global: entry.global,
     dynamicSeasons: entry.dynamicSeasons,

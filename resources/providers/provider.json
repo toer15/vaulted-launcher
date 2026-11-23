@@ -771,6 +771,60 @@
       }
     },
     {
+      "id": "era-official",
+      "name": "Project Era",
+      "label": "Era",
+      "mode": "external",
+      "launchKind": "official",
+      "backendUrl": "https://erafn.dev/",
+      "website": "https://erafn.dev/",
+      "launchUrl": "https://erafn.dev/",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch1-s6"
+      ],
+      "statusUrl": "https://api.erafn.dev/api/v1/public/website",
+      "liveSeason": {
+        "path": "data.season.number",
+        "equals": 6,
+        "label": "Season 6"
+      },
+      "runtime": {
+        "kind": "exe",
+        "label": "Era Launcher",
+        "version": "4.0.42",
+        "downloadUrl": "https://api.erafn.dev/api/launcher/download",
+        "downloadHosts": [
+          "api.erafn.dev",
+          "cdn.erafn.dev"
+        ],
+        "installerName": "Era-Setup-4.0.42.exe",
+        "silentArgs": [
+          "/S"
+        ],
+        "allowUnsigned": true,
+        "interactive": true,
+        "autoInstall": true,
+        "installedExecutables": [
+          "%LOCALAPPDATA%/Programs/era-launcher/Era.exe",
+          "%LOCALAPPDATA%/Era/Era.exe",
+          "%PROGRAMFILES%/Era Launcher/Era.exe"
+        ],
+        "executableNames": [
+          "Era.exe"
+        ],
+        "installRoots": [
+          "%LOCALAPPDATA%/Programs",
+          "%LOCALAPPDATA%",
+          "%PROGRAMFILES%"
+        ],
+        "launchArgs": [],
+        "processName": "Era.exe"
+      }
+    },
+    {
       "id": "legacy-official",
       "name": "Project Legacy",
       "label": "Project Legacy",

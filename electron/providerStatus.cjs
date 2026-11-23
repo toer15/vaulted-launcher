@@ -43,6 +43,31 @@ function isDiscordHost(url) {
   return Boolean(url && /(^|\.)discord(?:app)?\.(?:com|gg)$/i.test(url.hostname))
 }
 
+/** Read a dotted path out of a JSON payload, or undefined when absent. */
+function readPayloadPath(root, dotted) {
+  let node = root
+  for (const key of String(dotted || '').split('.')) {
+    if (!node || typeof node !== 'object') return undefined
+    node = node[key]
+  }
+  return node
+}
+
+/**
+ * Some projects host one season at a time and rotate. Their public API reports
+ * which season is live right now, so a card must go offline instead of claiming
+ * a season the backend has already moved past.
+ */
+function rotationReason(provider, payload) {
+  const live = provider?.liveSeason
+  if (!live || typeof live !== 'object' || typeof live.path !== 'string') return null
+  const actual = readPayloadPath(payload, live.path)
+  if (actual === undefined || actual === null || actual === '') return null
+  if (String(actual) === String(live.equals)) return null
+  const label = provider.label || provider.name || 'This server'
+  return `${label} is currently running season ${actual}, not ${live.label || `season ${live.equals}`}. It was not counted as live for this season.`
+}
+
 function hasCompanionLauncher(provider) {
   // Direct launch is the opposite of a companion launcher: it joins a live
   // server through VAULTED. A `launcher` block is detection metadata only and
@@ -245,7 +270,7 @@ async function probeProviderStatus(provider, options = {}) {
       }
     }
     const payload = await readPayload(response)
-    const offlineReason = offlineReasonFromPayload(payload)
+    const offlineReason = offlineReasonFromPayload(payload) || rotationReason(provider, payload)
     if (offlineReason) {
       return {
         providerId,
