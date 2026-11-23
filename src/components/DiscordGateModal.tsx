@@ -89,7 +89,7 @@ export function DiscordGateModal({
             <p className="mt-2 text-[12.5px] leading-relaxed text-fog">
               <span className="font-semibold text-mist">{gate.label}</span>{' '}
               {verified
-                ? 'is verified. Drop the launcher you downloaded from its Discord and VAULTED will scan it before installing.'
+                ? 'is verified, so Install Season is unlocked. Press Done below to continue on the season card; adding its launcher here is only needed if you have not imported one yet.'
                 : 'hosts this season on its own servers. Join the community, download its launcher, then bring that file back here.'}
             </p>
           </div>
@@ -174,6 +174,7 @@ export function DiscordGateModal({
               gate={gate}
               verified={verified}
               onImported={onLauncherImported}
+              onDone={onClose}
             />
           )}
 

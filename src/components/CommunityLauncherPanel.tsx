@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
+  ArrowLeft,
   BadgeCheck,
+  CheckCircle2,
   Download,
   FileArchive,
   FileWarning,
@@ -27,6 +29,8 @@ interface CommunityLauncherPanelProps {
   /** the Discord gate is verified, so Step 2 can run */
   verified: boolean
   onImported: (providerId: string) => void
+  /** close the modal and hand the player back to the installed season card */
+  onDone?: () => void
 }
 
 type Phase = 'idle' | 'scanning' | 'installing' | 'done' | 'error'
@@ -48,7 +52,12 @@ function formatWhen(iso: string): string {
  * community's own Discord. Nothing installs until main has re-run the SFX and
  * Defender gates and rejected any self-hosted local backend.
  */
-export function CommunityLauncherPanel({ gate, verified, onImported }: CommunityLauncherPanelProps) {
+export function CommunityLauncherPanel({
+  gate,
+  verified,
+  onImported,
+  onDone,
+}: CommunityLauncherPanelProps) {
   const [candidates, setCandidates] = useState<CommunityLauncherCandidate[]>([])
   const [status, setStatus] = useState<CommunityLauncherStatus | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
@@ -160,6 +169,27 @@ export function CommunityLauncherPanel({ gate, verified, onImported }: Community
 
       {verified && (
         <>
+          {/* Step 1 already unlocked the season; Step 2 is only the launcher
+              handoff, so the way back to the card is always one click away. */}
+          <button
+            type="button"
+            onClick={() => onDone?.()}
+            disabled={busy}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/45 bg-emerald-400/15 px-3 py-2.5 text-[12px] font-bold text-emerald-50 shadow-[0_14px_30px_-18px_rgba(16,185,129,0.9)] transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-300/70 hover:bg-emerald-400/20 hover:text-white disabled:cursor-wait disabled:opacity-50"
+          >
+            <CheckCircle2 className="h-4 w-4" />
+            Done — Back to Season Card (Install Season)
+          </button>
+          <p className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-fog">
+            <ArrowLeft className="mt-0.5 h-3 w-3 shrink-0 text-emerald-300/80" />
+            <span>
+              Step 1 already unlocked{' '}
+              {installed ? 'Install Season and Start' : 'Install Season'}. Step 2 below is only
+              needed if VAULTED has not imported this community's launcher yet
+              {installed ? ' — yours is already ready.' : '.'}
+            </span>
+          </p>
+
           <div
             onDragOver={(event) => {
               event.preventDefault()
@@ -223,6 +253,10 @@ export function CommunityLauncherPanel({ gate, verified, onImported }: Community
             <div className="mt-3">
               <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-fog/70">
                 <Download className="h-3 w-3" /> Found in Downloads
+              </p>
+              <p className="mb-1.5 text-[10px] leading-relaxed text-fog/60">
+                Only launcher files VAULTED may import — its own setup and banned projects are
+                filtered out.
               </p>
               <ul className="space-y-1.5">
                 {candidates.map((candidate) => (

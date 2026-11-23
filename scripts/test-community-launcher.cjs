@@ -57,12 +57,40 @@ fs.mkdirSync(downloads, { recursive: true })
 fs.writeFileSync(path.join(downloads, 'GlowLauncher.exe'), Buffer.alloc(400_000))
 fs.writeFileSync(path.join(downloads, 'notes.txt'), Buffer.alloc(400_000))
 fs.writeFileSync(path.join(downloads, 'tiny.exe'), Buffer.alloc(1000))
+// Clutter and banned builds must never be offered as a community launcher.
+for (const name of [
+  'VAULTED-Launcher-1.0.200-Setup.exe',
+  'reboot_launcher.exe',
+  'ProjectRebooted-Launcher.exe',
+  'echo-launcher.exe',
+  'ProjectEcho-Setup.exe',
+  'LegacyMP-Setup.exe',
+  'ProjectLegacy.exe',
+]) {
+  fs.writeFileSync(path.join(downloads, name), Buffer.alloc(500_000))
+}
+assert.match('reboot_launcher.exe', launcher.BLOCKED_CANDIDATE_NAME)
+assert.match('VAULTED-Launcher-1.0.200-Setup.exe', launcher.BLOCKED_CANDIDATE_NAME)
+assert.match('echofn-setup.exe', launcher.BLOCKED_CANDIDATE_NAME)
+assert.match('ProjectLegacy-Setup.exe', launcher.BLOCKED_CANDIDATE_NAME)
+assert.equal(
+  launcher.BLOCKED_CANDIDATE_NAME.test('GlowLauncher.exe'),
+  false,
+  'a genuine community launcher stays listed',
+)
 const env = { USERPROFILE: tempRoot }
 const candidates = launcher.listDownloadedLaunchers(env)
 assert.equal(candidates.length, 1, 'only a real installer is offered from Downloads')
 assert.equal(candidates[0].name, 'GlowLauncher.exe')
 assert.equal(candidates[0].kind, 'exe')
 assert.match(candidates[0].path, /Downloads[\\/]GlowLauncher\.exe$/)
+for (const banned of ['VAULTED-Launcher', 'reboot', 'echo', 'Legacy']) {
+  assert.equal(
+    candidates.some((candidate) => candidate.name.toLowerCase().includes(banned.toLowerCase())),
+    false,
+    `Found in Downloads must never list ${banned}`,
+  )
+}
 
 // --- 3. Installer type drives the silent switches ---------------------------
 
@@ -176,6 +204,18 @@ assert.match(panel, /Step 2 — Select \/ Drop Downloaded Launcher/)
 assert.match(panel, /importCommunityLauncherFile/)
 assert.match(panel, /droppedFilePath/)
 assert.match(panel, /listCommunityLauncherCandidates/)
+assert.match(
+  panel,
+  /Done — Back to Season Card \(Install Season\)/,
+  'Step 2 must offer a way straight back to the season card',
+)
+assert.match(panel, /onDone\?.\(\)/, 'the Done button must close the gate')
+assert.match(
+  panel,
+  /only\s*\n?\s*needed if VAULTED has not imported this community's launcher/,
+  'Step 2 must explain that it is optional once Step 1 verified',
+)
+assert.match(modal, /onDone={onClose}/, 'the modal hands its close handler to Step 2')
 
 const app = read('src/App.tsx')
 assert.match(app, /communityUnlocked/)

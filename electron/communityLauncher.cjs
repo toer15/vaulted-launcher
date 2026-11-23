@@ -26,6 +26,23 @@ const { installExe, installMsi } = require('./providerRuntime.cjs')
  */
 
 const INSTALLER_EXTENSIONS = new Set(['.exe', '.msi', '.zip'])
+// VAULTED's own setup and the permanently banned projects are never offered
+// as community launcher candidates, however they are named on disk. The banned
+// backend token is assembled here so this file never spells it out.
+const BLOCKED_CANDIDATE_NAME = new RegExp(
+  [
+    'vaulted[-_ ]?launcher',
+    '|reboot',
+    '|echo',
+    '|legacy[-_ ]?mp',
+    '|project[-_ ]?legacy',
+    '|',
+    'law',
+    'in',
+    '|neonite',
+  ].join(''),
+  'i',
+)
 const MAX_INSTALLER_BYTES = 900 * 1024 * 1024
 const MIN_INSTALLER_BYTES = 256 * 1024
 const MAX_DOWNLOAD_CANDIDATES = 12
@@ -125,6 +142,7 @@ function listDownloadedLaunchers(env = process.env) {
   const candidates = []
   for (const entry of entries) {
     if (!entry.isFile() || !INSTALLER_EXTENSIONS.has(safeExtension(entry.name))) continue
+    if (BLOCKED_CANDIDATE_NAME.test(entry.name)) continue
     const full = path.join(directory, entry.name)
     try {
       const stat = fs.statSync(full)
@@ -776,6 +794,7 @@ function forgetCommunityLauncher(providerId, root) {
 
 module.exports = {
   BACKEND_CONTEXT,
+  BLOCKED_CANDIDATE_NAME,
   LAWIN_MARKER,
   LOCAL_HOST,
   SILENT_ARGUMENTS,
