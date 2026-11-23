@@ -408,7 +408,7 @@ function testLawinServerBan() {
   const reboot = catalog.find((entry) => entry.id === 'reboot-official')
   assert.equal(reboot?.banned, true, 'Reboot must be marked banned in the catalog')
   assert.deepEqual(reboot?.seasons, [], 'Reboot must not advertise any season')
-  assert.match(reboot?.bannedReason || '', /LawinServer/i)
+  assert.match(reboot?.bannedReason || '', /private local backend/i)
   for (const entry of catalog) {
     assert.equal(
       /(?:^|[/:@])(?:127\.0\.0\.1|localhost|\[::1\])(?:[/:]|$)/i.test(entry.backendUrl || ''),
@@ -432,13 +432,39 @@ function testLawinServerBan() {
     /if \(isBannedProvider\(id\)\) return null/,
     'the companion launcher must reject banned providers',
   )
-  assert.equal(/lawinserver\.exe/i.test(MAIN), false, 'main must never spawn LawinServer')
   const automation = read('electron/companionAutomation.cjs')
+  assert.equal(
+    /dismissCompanionServerPrompt|start a local game server/i.test(MAIN + automation),
+    false,
+    'the local-server prompt must not be clicked or accepted anywhere',
+  )
   assert.equal(
     /lawinserver|127\.0\.0\.1|localhost/i.test(automation),
     false,
     'companion automation must never interact with a local backend',
   )
+
+  // Strict project scan: no runtime source may mention or launch the private
+  // local server executable, and no prompt handler may reintroduce it.
+  const runtimeRoots = ['electron', 'src', 'resources/providers', 'runtime', 'server/assets']
+  const textExtensions = /\.(?:cjs|mjs|js|ts|tsx|json|ps1|cs|html|css|md)$/i
+  const walk = (dir) => {
+    const absolute = path.join(root, dir)
+    const entries = fs.readdirSync(absolute, { withFileTypes: true, recursive: true })
+    return entries
+      .filter((entry) => entry.isFile() && textExtensions.test(entry.name))
+      .map((entry) => path.join(entry.parentPath, entry.name))
+  }
+  const forbidden = []
+  for (const dir of runtimeRoots) {
+    for (const file of walk(dir)) {
+      if (/lawinserver|start a local game server/i.test(fs.readFileSync(file, 'utf8'))) {
+        forbidden.push(path.relative(root, file))
+      }
+    }
+  }
+  assert.deepEqual(forbidden, [], `local-server prompt/lawinserver remains in: ${forbidden.join(', ')}`)
+  assert.equal(/lawinserver\.exe/i.test(MAIN), false, 'main must never spawn the local server')
   assert.match(
     read('src/lib/onlinePolicy.ts'),
     /'reboot-official', 'reboot'/,
@@ -1045,7 +1071,7 @@ try {
   testAutoFixWiring()
   testRebootAutoLaunch()
   console.log(
-    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), fully hidden companion launchers (off-screen SW_HIDE windows, Flutter message clicks, zero cursor/foreground input), a complete LawinServer/loopback ban (Reboot removed from every season route and every launch entry point), no Reboot-only season presented as online, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route), and online badge colors (LAUNCHER green on the hero, sidebar and dropdown pills; ONLINE UNAVAILABLE red)',
+    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), fully hidden companion launchers (off-screen SW_HIDE windows, Flutter message clicks, zero cursor/foreground input), a complete local-server ban (no lawinserver executable or local-server prompt in runtime code, Reboot removed from every season route and every launch entry point), no Reboot-only season presented as online, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route), and online badge colors (LAUNCHER green on the hero, sidebar and dropdown pills; ONLINE UNAVAILABLE red)',
   )
 } catch (error) {
   console.error(error)

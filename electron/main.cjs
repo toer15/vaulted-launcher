@@ -43,7 +43,6 @@ const { isOptionalVerifyIssue, removeLooseFiles, scanLooseFiles } = require('./a
 const { writeSavedBuild } = require('./rebootLauncher.cjs')
 const {
   clickCompanionPlayButton,
-  dismissCompanionServerPrompt,
   hideCompanionLauncher,
 } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
@@ -2657,16 +2656,9 @@ function beginCompanionGameWatch({ providerId, launcherPid, launcherNames = [], 
               await clickCompanionPlayButton(launcher)
             }
           }
-          // Reboot then asks whether to start its local game server. Ignore
-          // starts the client immediately; Start server would open a large
-          // server download. The prompt shares the hidden Flutter view, so the
-          // same message click dismisses it without showing anything.
-          for (let attempt = 0; attempt < 3; attempt += 1) {
-            await delay(attempt === 0 ? 5_000 : 4_000)
-            if ((await processPidsByImage([CLIENT_EXE])).length > 0) break
-            await hideCompanionLauncher(launcher)
-            await dismissCompanionServerPrompt(launcher)
-          }
+          // Never accept a launcher's local-server flow. From here VAULTED
+          // only watches for the real client process and fails closed if no
+          // remote-backed game starts.
         }
       }
       const deadline = Date.now() + COMPANION_GAME_TIMEOUT_MS
@@ -2793,8 +2785,8 @@ function companionLauncherMetadata(providerId) {
 async function startCompanionLauncher(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return null
-  // Reboot always starts its embedded LawinServer, so it must never be
-  // spawned as a background companion either.
+  // Reboot always starts an embedded private local backend, so it must never
+  // be spawned as a background companion either.
   if (isBannedProvider(id)) return null
   const metadata = companionLauncherMetadata(id)
   const executable = metadata ? installedExecutable(metadata) : ''

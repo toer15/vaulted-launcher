@@ -20,13 +20,13 @@ const crypto = require('node:crypto')
 const BUNDLED_MANIFEST = require('../src/assets/builds.json')
 const SAFE_PROVIDER_ID = /^[a-z0-9][a-z0-9-]*$/i
 /**
- * Reboot Launcher always starts an embedded LawinServer (127.0.0.1), a local
- * single-user backend. It is never a public online route, so it is excluded
- * from the UI catalog and every launch entry point rejects it.
+ * Reboot Launcher always starts an embedded private local backend on
+ * 127.0.0.1. It is never a public online route, so it is excluded from the UI
+ * catalog and every launch entry point rejects it.
  */
 const BANNED_PROVIDER_IDS = new Set(['reboot-official', 'reboot'])
 const BANNED_PROVIDER_REASON =
-  'Reboot Launcher always starts its embedded LawinServer on 127.0.0.1, which is a private local backend, not public matchmaking. VAULTED will not launch it.'
+  'Reboot Launcher only offers a private local backend, not public matchmaking. VAULTED will not launch it.'
 
 function isBannedProvider(id) {
   return typeof id === 'string' && BANNED_PROVIDER_IDS.has(id.trim().toLowerCase())

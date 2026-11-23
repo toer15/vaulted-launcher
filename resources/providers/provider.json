@@ -668,7 +668,7 @@
       "name": "Project Reboot",
       "label": "Reboot",
       "banned": true,
-      "bannedReason": "Reboot always starts its embedded LawinServer (127.0.0.1), a private local backend. No launch is allowed.",
+      "bannedReason": "Reboot only offers a private local backend on 127.0.0.1. No launch is allowed.",
       "mode": "external",
       "launchKind": "official",
       "backendUrl": "https://rebootfn.org/",

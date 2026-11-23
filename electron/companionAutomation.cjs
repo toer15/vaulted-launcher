@@ -147,28 +147,8 @@ async function clickCompanionPlayButton(pid, options = {}) {
   return { clicked: false, error: last }
 }
 
-/**
- * Click Ignore on Reboot's hidden "start a local game server?" prompt. The
- * modal shares the launcher view, so the same hidden message click reaches it.
- * Ignore starts the client immediately; Start server would download a server.
- */
-async function dismissCompanionServerPrompt(pid, options = {}) {
-  if (process.platform !== 'win32') return { clicked: false, error: 'unsupported platform' }
-  const attempts = Number.isFinite(options.attempts) ? options.attempts : 1
-  let last = 'NO_VIEW'
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const { output, error } = await runPowerShell(clickScript(pid, 0.43, 0.574, 0))
-    if (output === 'CLICKED') return { clicked: true }
-    if (output === 'NO_PROCESS') return { clicked: false, error: 'the launcher closed' }
-    last = output || (error ? error.message : 'unknown error')
-    await delay(700)
-  }
-  return { clicked: false, error: last }
-}
-
 module.exports = {
   clickCompanionPlayButton,
-  dismissCompanionServerPrompt,
   hideCompanionLauncher,
   delay,
   runPowerShell,
