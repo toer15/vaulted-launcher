@@ -2626,10 +2626,21 @@ export default function App() {
   )
 
   const requestDownload = useCallback(
-    (build: Build, options: { launchAfter?: boolean } = {}) => {
+    (build: Build, options: { launchAfter?: boolean; explicit?: boolean } = {}) => {
       const launchAfter = options.launchAfter === true
       if (!canDownloadBuilds()) {
         pushToast({ tone: 'error', title: 'Downloads need the desktop app', description: 'Run "npm run app".' })
+        return
+      }
+      // A season build is 6–30 GB. Only the explicit Install Season button may
+      // start one: selecting a card, pressing Start or resuming a launch must
+      // never pull gigabytes on its own.
+      if (options.explicit !== true && !installed[build.id] && !downloads[build.id]) {
+        pushToast({
+          tone: 'info',
+          title: 'Install Season first',
+          description: `Press Install Season to download ${build.season.label}.`,
+        })
         return
       }
       // A launch-after-download may only start for a season whose route has
@@ -2702,8 +2713,15 @@ export default function App() {
         description: 'Add its archive to builds.json, then Refresh sources in Settings.',
       })
     },
-    [beginDownload, beginProviderSync, downloads, playModes, pushToast, seasonManifest],
+    [beginDownload, beginProviderSync, downloads, installed, playModes, pushToast, seasonManifest],
   )
+
+  /** The only entry point allowed to start a multi-gigabyte season install. */
+  const handleInstallSeason = useCallback(() => {
+    const build = activeBuild
+    if (!build) return
+    requestDownload(build, { explicit: true })
+  }, [activeBuild, requestDownload])
 
   /** One-click repair to the exact live provider build, then Play. */
   const handleUpdateLiveBuild = useCallback(() => {
@@ -2763,7 +2781,11 @@ export default function App() {
         return
       }
       if (!installed[build.id]) {
-        requestDownload(build, { launchAfter: true })
+        pushToast({
+          tone: 'info',
+          title: 'Install Season first',
+          description: `Press Install Season to download ${build.season.label}.`,
+        })
         return
       }
       setPhase('launching')
@@ -3363,12 +3385,14 @@ export default function App() {
       // The season build is a prerequisite for every online route, including a
       // launcher handoff: download it before Auto can open an external project.
       if (automaticExternal && !installed[build.id]) {
-        const seasonKey = artKeyFor(build.season)
-        const source = seasonKey ? seasonManifest[seasonKey] : undefined
-        if (source?.downloadUrl || source?.providerBuild) {
-          requestDownload(build, { launchAfter: true })
-          return
-        }
+        // Starting or opening a season is not an install decision. The card's
+        // Install Season button owns every multi-gigabyte download.
+        pushToast({
+          tone: 'info',
+          title: 'Install Season first',
+          description: `Press Install Season to download ${build.season.label}.`,
+        })
+        return
       }
       if (automaticExternal) {
         await startOnlineProvider(build, automaticExternal)
@@ -3384,10 +3408,14 @@ export default function App() {
       if (phase === 'launching') return
       // A paused entry is an invitation to resume, not an active download.
       if (downloads[build.id] && downloads[build.id].phase !== 'paused') return
-      // A partially installed build still reports as installed. Resume the
-      // saved transfer before the normal Play/provider routing runs.
+      // A paused transfer is resumed by the Install Season button, never by a
+      // launch or a selection.
       if (downloads[build.id]?.phase === 'paused') {
-        requestDownload(build, { launchAfter: true })
+        pushToast({
+          tone: 'info',
+          title: 'Download paused',
+          description: `Press Install Season to resume ${build.season.label}.`,
+        })
         return
       }
 
@@ -3429,7 +3457,11 @@ export default function App() {
       }
 
       if (!installed[build.id]) {
-        requestDownload(build, { launchAfter: true })
+        pushToast({
+          tone: 'info',
+          title: 'Install Season first',
+          description: `Press Install Season to download ${build.season.label}.`,
+        })
         return
       }
 
@@ -4280,7 +4312,11 @@ export default function App() {
         const seasonKey = artKeyFor(build.season)
         const source = seasonKey ? seasonManifest[seasonKey] : undefined
         if (source?.downloadUrl || source?.providerBuild) {
-          requestDownload(build, { launchAfter: true })
+          pushToast({
+            tone: 'info',
+            title: 'Install Season first',
+            description: `Press Install Season to download ${build.season.label}.`,
+          })
           return
         }
       }
@@ -5229,6 +5265,7 @@ export default function App() {
                 onSignIn={() => setSignInOpen(true)}
                 runtime={activeRuntime}
                 onInstallRuntime={() => void handleInstallRuntime()}
+                onInstallSeason={handleInstallSeason}
                 accountAuthRequired={Boolean(
                   activeBuild && installed[activeBuild.id] && activeAccountBackend,
                 )}

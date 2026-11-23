@@ -81,6 +81,8 @@ interface ActiveBuildCardProps {
     error?: string | null
   } | null
   onInstallRuntime?: () => void
+  /** explicit Install Season action: the only path allowed to start a download */
+  onInstallSeason?: () => void
   /** this season's active backend needs an online account link */
   accountAuthRequired?: boolean
   /** the hosted provider already has an encrypted session */
@@ -304,6 +306,7 @@ export function ActiveBuildCard({
   onSignIn,
   runtime = null,
   onInstallRuntime,
+  onInstallSeason,
   accountAuthRequired = false,
   accountSignedIn = false,
   onConnectAccount,
@@ -1320,7 +1323,10 @@ export function ActiveBuildCard({
                             type="button"
                             onClick={(event) => {
                               event.stopPropagation()
-                              if (downloadUnlocked) onPrimary()
+                              if (!downloadUnlocked) return
+                              // The season download starts only from this button.
+                              if (onInstallSeason) onInstallSeason()
+                              else onPrimary()
                             }}
                             disabled={!downloadUnlocked}
                             aria-disabled={!downloadUnlocked}
@@ -1437,6 +1443,12 @@ export function ActiveBuildCard({
                           return
                         }
                         if (primaryDisabled) return
+                        // An install or a paused transfer is a download intent:
+                        // only the explicit handler may start or resume it.
+                        if ((state === 'missing' || state === 'paused') && onInstallSeason) {
+                          onInstallSeason()
+                          return
+                        }
                         onPrimary()
                       }}
                       disabled={primaryDisabled}

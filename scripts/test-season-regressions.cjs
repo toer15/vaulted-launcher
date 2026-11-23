@@ -1181,6 +1181,34 @@ function testCardStates() {
   assert.match(rail, /filter === 'online' && visibleBuilds\.length === 0/)
 }
 
+function testInstallSeasonRequiresExplicitClick() {
+  // A season is 6-30 GB: selecting a card, pressing Start or resuming a launch
+  // must never start that download. Only the Install Season button may.
+  const app = read('src/App.tsx')
+  assert.match(
+    app,
+    /options\.explicit !== true && !installed\[build\.id\] && !downloads\[build\.id\]/,
+    'the download request must require an explicit install',
+  )
+  assert.match(
+    app,
+    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,200}requestDownload\(build, \{ explicit: true \}\)/,
+    'Install Season must be the only explicit download entry point',
+  )
+  assert.match(app, /onInstallSeason=\{handleInstallSeason\}/)
+  assert.equal(
+    (app.match(/requestDownload\(build, \{ launchAfter: true \}\)/g) || []).length,
+    0,
+    'no launch path may start a season download',
+  )
+  assert.match(app, /Press Install Season to download/)
+  assert.match(
+    read('src/components/ActiveBuildCard.tsx'),
+    /if \(onInstallSeason\) onInstallSeason\(\)/,
+    'the Install Season button must call the explicit handler',
+  )
+}
+
 async function testSeasonRotationGuard() {
   // Era hosts one Chapter 1 season at a time and publishes which one. The card
   // may only stay live while Era reports the season VAULTED shipped for it, so
@@ -1509,6 +1537,7 @@ async function run() {
   testSessionStability()
   testProviderIsolation()
   testCardStates()
+  testInstallSeasonRequiresExplicitClick()
   await testSeasonRotationGuard()
   await testDiscordOnlyNeverCountsOnline()
   testOnlineBadgeColors()

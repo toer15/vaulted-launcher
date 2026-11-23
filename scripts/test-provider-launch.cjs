@@ -250,7 +250,14 @@ function testRetracPendingLaunchRouting() {
   const helperAtEnd = renderer.indexOf('/** Show the generic account prompt', helperAt)
   const helperBody = renderer.slice(helperAt, helperAtEnd)
   assert.match(helperBody, /openProviderLauncher\?\.\('retrac-official'/, 'Retrac must use the official CLI bridge')
-  assert.match(helperBody, /requestDownload\(build, \{ launchAfter: true \}\)/, 'missing Retrac builds must still download first')
+  // A launch never pulls gigabytes: a missing Retrac build points the player
+  // at the explicit Install Season button instead.
+  assert.doesNotMatch(
+    helperBody,
+    /requestDownload\(build, \{ launchAfter: true \}\)/,
+    'opening Retrac must never start a season download',
+  )
+  assert.match(helperBody, /Press Install Season to download/, 'a missing Retrac build must point at Install Season')
 
   const pendingAt = renderer.indexOf('const pending = pendingProviderLaunchRef.current')
   const pendingBody = renderer.slice(pendingAt, pendingAt + 900)
