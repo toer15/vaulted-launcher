@@ -32,12 +32,16 @@ const localProviderIds = ['reboot', 'era', 'ezfn', 'ezfn-hybrid']
 // their own launchers/communities and deliberately have no redirect DLL.
 const globalProviderIds = ['stellar']
 const externalProviderIds = [
-  'eon', 'hydro', 'interloop', 'crystal', 'echo', 'arc', 'retrac-official',
+  'eon', 'hydro', 'interloop', 'crystal', 'arc', 'retrac-official',
   'slurp', 'ambient', 'reef', 'legacy-mp', 'horizon', 'sunset', 'blue-og', 'glow',
   'reboot-official',
 ]
 const dllProviderIds = [...localProviderIds, ...globalProviderIds]
-const providerIds = [...dllProviderIds, ...externalProviderIds]
+const bannedProviderIds = new Set(['reboot', 'reboot-official', 'echo'])
+const activeDllProviderIds = dllProviderIds.filter((id) => !bannedProviderIds.has(id))
+const providerIds = [...dllProviderIds, ...externalProviderIds].filter(
+  (id) => !bannedProviderIds.has(id),
+)
 const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-provider-repair-'))
 const packageRoot = path.join(temporaryRoot, 'package')
 const appDataRoot = path.join(temporaryRoot, 'appdata')
@@ -242,9 +246,9 @@ async function main() {
   const first = await ensureProviderRedirects()
   assert.deepEqual(first.errors, [])
   assert.deepEqual(first.checked.sort(), [...providerIds].sort())
-  assert.deepEqual(first.repaired.sort(), [...dllProviderIds].sort())
+  assert.deepEqual(first.repaired.sort(), [...activeDllProviderIds].sort())
 
-  for (const id of dllProviderIds) {
+  for (const id of activeDllProviderIds) {
     const profile = providerProfile(id)
     assert.equal('redirectDllUrl' in profile, false, `${id}: provider still carries a download URL`)
     assert.equal('redirectDllFallbackUrls' in profile, false, `${id}: provider still carries fallback URLs`)
@@ -270,7 +274,7 @@ async function main() {
   // network attempt.
   const second = await ensureProviderRedirects()
   assert.deepEqual(second.errors, [])
-  assert.deepEqual(second.repaired.sort(), [...dllProviderIds].sort())
+  assert.deepEqual(second.repaired.sort(), [...activeDllProviderIds].sort())
 
   // A launcher's download step stages every DLL it needs up front: the shared
   // runtime copies plus the provider's own (repaired) redirect DLL. Nothing is
@@ -316,21 +320,21 @@ async function main() {
   // Prove checksum validation is part of repair. Corrupt the only bundled
   // source while keeping a PE header and -backend= marker; repair must refuse
   // it rather than accepting a usable-looking DLL.
-  for (const id of dllProviderIds) fs.rmSync(path.dirname(targetPath(id)), { recursive: true, force: true })
+  for (const id of activeDllProviderIds) fs.rmSync(path.dirname(targetPath(id)), { recursive: true, force: true })
   fs.writeFileSync(
     path.join(packagedRuntime, 'Tellurium.dll'),
     Buffer.concat([Buffer.from('MZ'), Buffer.from('-backend=', 'utf16le')]),
   )
   const rejected = await ensureProviderRedirects()
   assert.equal(rejected.repaired.length, 0)
-  assert.equal(rejected.errors.length, dllProviderIds.length)
-  for (const id of dllProviderIds) {
+  assert.equal(rejected.errors.length, activeDllProviderIds.length)
+  for (const id of activeDllProviderIds) {
     assert.equal(fs.existsSync(targetPath(id)), false, `${id}: invalid bundled DLL was accepted`)
     assert.match(rejected.errors.find((item) => item.id === id)?.error || '', /checksum|missing/i)
   }
 
   console.log(
-    `provider repair end-to-end passed: overlay caps and cached archive reuse checked without network; bundled validated DLL copied for ${dllProviderIds.length}/${dllProviderIds.length} DLL providers`,
+    `provider repair end-to-end passed: overlay caps and cached archive reuse checked without network; bundled validated DLL copied for ${activeDllProviderIds.length}/${activeDllProviderIds.length} DLL providers`,
   )
 }
 

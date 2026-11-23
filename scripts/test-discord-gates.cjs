@@ -11,7 +11,6 @@ const expected = {
   eon: 'ch2-s7',
   hydro: 'ch2-s5',
   interloop: 'ch2-s2',
-  echo: 'ch1-s3',
 }
 
 const catalog = providerCatalog()

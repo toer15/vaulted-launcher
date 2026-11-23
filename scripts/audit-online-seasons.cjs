@@ -32,7 +32,7 @@ const { fetchProviderLiveStatuses } = require(path.join(root, 'electron', 'provi
 const REMOVED_PROVIDERS = new Set(['neo', 'neo-official', 'neonite'])
 // Reboot always starts its embedded LawinServer on loopback; it is not a
 // public online route even when it joins a community game server.
-const BANNED_PROVIDERS = new Set(['reboot', 'reboot-official'])
+const BANNED_PROVIDERS = new Set(['reboot', 'reboot-official', 'echo'])
 const LOOPBACK = /(?:^|[/:@])(?:127\.0\.0\.1|localhost|\[::1\])(?:[/:]|$)/i
 const MANAGED_MODES = new Set(['local', 'global_live'])
 

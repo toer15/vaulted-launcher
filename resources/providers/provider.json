@@ -334,9 +334,9 @@
         "label": "Echo Discord"
       },
       "global": true,
-      "seasons": [
-        "ch1-s3"
-      ],
+      "banned": true,
+      "bannedReason": "Project Echo's official installer is a WinRAR SFX that runs a malicious batch script (Defender exclusions, downloaded payload, SYSTEM scheduled task). VAULTED quarantines it and does not offer Echo as a launch route.",
+      "seasons": [],
       "statusUrl": "https://echofn.org/",
       "runtime": {
         "kind": "exe",

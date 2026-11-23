@@ -5,10 +5,13 @@ const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
 const { execFile, spawn } = require('node:child_process')
+const { downloadInstaller, probeReleaseInfo, validateInstaller } = require('./installerDownload.cjs')
+const { assertInstallerSafe } = require('./installerSafety.cjs')
 const {
   WINDOW_HIDER_PS,
   cleanProcessNames,
   startHiddenWindowWatcher,
+  startWindowsScriptHostGuard,
 } = require('./hiddenWindows.cjs')
 
 /**
@@ -24,12 +27,7 @@ const {
  */
 
 const VERSION_TIMEOUT_MS = 15_000
-const DOWNLOAD_TIMEOUT_MS = 10 * 60_000
 const INSTALL_TIMEOUT_MS = 10 * 60_000
-const MIN_INSTALLER_BYTES = 64 * 1024
-const DOWNLOAD_ATTEMPTS = 3
-const DOWNLOAD_RETRY_DELAY_MS = 900
-const MAX_INSTALLER_BYTES = 900 * 1024 * 1024
 const MAX_EXE_SEARCH_ENTRIES = 3_000
 // A vendor launcher can finish its own bootstrap (a script or a SFX that then
 // unpacks the real client) after its installer process exits, so the installed
@@ -307,132 +305,6 @@ async function sha256File(file) {
   return hash.digest('hex')
 }
 
-async function downloadInstallerOnce(release, metadata, options) {
-  const fetchImpl = options.fetchImpl || fetch
-  const target = options.target
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS)
-  const abort = () => controller.abort()
-  options.signal?.addEventListener('abort', abort, { once: true })
-  const part = `${target}.part`
-  let received = 0
-  let total = 0
-  let lastSent = 0
-  let startedAt = Date.now()
-  try {
-    const response = await fetchImpl(release.url, {
-      headers: { accept: 'application/octet-stream', 'user-agent': 'VAULTED-Launcher' },
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-    if (!response.ok || !response.body) {
-      const status = Number(response.status) || 0
-      const error = new Error(`The provider runtime download returned HTTP ${status}.`)
-      // A permanent rejection is reported immediately; a transient answer is
-      // retried by downloadInstaller below.
-      error.permanent = status >= 400 && status < 500 && status !== 408 && status !== 429
-      throw error
-    }
-    total = Number(response.headers.get('content-length')) || 0
-    if (total > 0 && (total < MIN_INSTALLER_BYTES || total > MAX_INSTALLER_BYTES)) {
-      throw new Error(`The provider runtime installer has an unsafe size (${total} bytes).`)
-    }
-    await fs.promises.mkdir(path.dirname(target), { recursive: true })
-    await fs.promises.rm(part, { force: true })
-    const output = fs.createWriteStream(part, { flags: 'wx' })
-    let outputError = null
-    output.once('error', (error) => {
-      outputError = error
-    })
-    const reader = response.body.getReader()
-    try {
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        if (options.signal?.aborted) throw new Error('The provider runtime download was cancelled.')
-        const chunk = Buffer.from(value)
-        received += chunk.length
-        if (received > MAX_INSTALLER_BYTES) {
-          throw new Error('The provider runtime installer exceeded the safe size limit.')
-        }
-        await new Promise((resolve, reject) => {
-          output.write(chunk, (error) => (error ? reject(error) : resolve()))
-        })
-        if (outputError) throw outputError
-        const now = Date.now()
-        if (now - lastSent >= 250) {
-          const elapsed = Math.max(0.001, (now - startedAt) / 1000)
-          options.report?.({
-            received,
-            total,
-            percent: total > 0 ? Math.min(100, Math.round((received / total) * 100)) : null,
-            etaSeconds:
-              total > 0 ? Math.max(0, Math.round((total - received) / (received / elapsed))) : null,
-            bytesPerSecond: Math.round(received / elapsed),
-            phase: 'runtime',
-            url: release.url,
-          })
-          lastSent = now
-        }
-      }
-      await new Promise((resolve, reject) => {
-        output.once('error', reject)
-        output.end(resolve)
-      })
-    } catch (error) {
-      output.destroy()
-      await fs.promises.rm(part, { force: true }).catch(() => {})
-      throw error
-    }
-    if (received < MIN_INSTALLER_BYTES) {
-      await fs.promises.rm(part, { force: true }).catch(() => {})
-      throw new Error('The provider runtime installer was empty or truncated.')
-    }
-    await fs.promises.rename(part, target)
-    options.report?.({
-      received,
-      total: received,
-      percent: 100,
-      etaSeconds: null,
-      bytesPerSecond: null,
-      phase: 'runtime',
-      url: release.url,
-    })
-    return { size: received, sha256: await sha256File(target) }
-  } finally {
-    clearTimeout(timer)
-    options.signal?.removeEventListener('abort', abort)
-    await fs.promises.rm(part, { force: true }).catch(() => {})
-  }
-}
-
-/**
- * Download a launcher installer with retries. A dropped connection, DNS blip
- * or transient 5xx must never leave a season stuck on "launcher not
- * installed"; permanent 4xx answers, cancelled downloads and unsafe payloads
- * still fail immediately. Every attempt sends the same validated HTTPS URL
- * and VAULTED/identity headers.
- */
-async function downloadInstaller(release, metadata, options) {
-  let lastError = null
-  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {
-    try {
-      return await downloadInstallerOnce(release, metadata, options)
-    } catch (error) {
-      lastError = error
-      const permanent =
-        options.signal?.aborted === true ||
-        error?.permanent === true ||
-        /unsafe size|exceeded the safe size|not from a trusted/i.test(
-          error instanceof Error ? error.message : '',
-        )
-      if (permanent || attempt === DOWNLOAD_ATTEMPTS) throw error
-      await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_DELAY_MS * attempt))
-    }
-  }
-  throw lastError || new Error('The provider runtime download failed.')
-}
-
 function installMsi(file) {
   return new Promise((resolve, reject) => {
     if (process.platform !== 'win32') {
@@ -566,6 +438,20 @@ function installExe(file, options = {}) {
       return
     }
     const args = Array.isArray(options.silentArgs) ? options.silentArgs : []
+    const wshLog = path.join(
+      os.tmpdir(),
+      `vaulted-wsh-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.log`,
+    )
+    startWindowsScriptHostGuard(wshLog, { seconds: INSTALL_TIMEOUT_MS / 1000 + 30 })
+    const readWshBlock = () => {
+      try {
+        const detail = fs.readFileSync(wshLog, 'utf8').trim()
+        fs.rmSync(wshLog, { force: true })
+        return detail
+      } catch {
+        return ''
+      }
+    }
     const child = spawn(file, args, {
       detached: false,
       stdio: 'ignore',
@@ -580,6 +466,17 @@ function installExe(file, options = {}) {
       settled = true
       clearTimeout(timer)
       if (probeTimer) clearInterval(probeTimer)
+      const blockedWsh = readWshBlock()
+      if (blockedWsh) {
+        callback(
+          reject,
+          new Error(
+            `The provider installer tried to run Windows Script Host and was blocked (${blockedWsh}). ` +
+              'Its setup script was not allowed to finish.',
+          ),
+        )
+        return
+      }
       callback(value)
     }
     const timer = setTimeout(() => {
@@ -611,6 +508,17 @@ function installExe(file, options = {}) {
       // of surfacing a misleading permission error.
       if (error?.code === 'EACCES' || error?.code === 'EPERM') {
         if (settled) return
+        const blockedWsh = readWshBlock()
+        if (blockedWsh) {
+          settled = true
+          clearTimeout(timer)
+          reject(
+            new Error(
+              `The provider installer tried to run Windows Script Host and was blocked (${blockedWsh}).`,
+            ),
+          )
+          return
+        }
         settled = true
         clearTimeout(timer)
         installExeElevated(file, args, {
@@ -655,6 +563,12 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
 
   const task = (async () => {
     const release = await resolveRelease(metadata, options)
+    const expectedInfo = await probeReleaseInfo(release, options).catch(() => ({
+      total: 0,
+      etag: '',
+      lastModified: '',
+    }))
+    const expectedSize = expectedInfo.total || 0
     const folder = runtimeFolder(options.root, providerId)
     const installer = path.join(folder, installerFileName(metadata, release.version))
     const metaPath = path.join(folder, 'runtime.json')
@@ -670,11 +584,14 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
       meta?.version === release.version &&
       meta?.url === release.url &&
       meta?.sha256 &&
+      (!expectedSize || Number(meta.size) === expectedSize) &&
+      (!expectedInfo.etag || meta?.etag === expectedInfo.etag) &&
       fs.existsSync(installer)
     ) {
       try {
         const size = (await fs.promises.stat(installer)).size
         if (size === Number(meta.size) && (await sha256File(installer)) === meta.sha256) {
+          await validateInstaller(installer, metadata)
           if (metadata.signerSubject) await authenticode(installer, metadata.signerSubject)
           verified = true
         }
@@ -684,6 +601,19 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
     }
 
     if (!verified) {
+      // A previous build may have accepted a short CDN response. Keep those
+      // bytes as a resume seed instead of downloading them again.
+      if (expectedSize > 0 && fs.existsSync(installer)) {
+        try {
+          const existingSize = (await fs.promises.stat(installer)).size
+          if (existingSize > 0 && existingSize < expectedSize) {
+            await fs.promises.rm(`${installer}.part`, { force: true })
+            await fs.promises.rename(installer, `${installer}.part`)
+          }
+        } catch {
+          /* a fresh download is still safe */
+        }
+      }
       options.report?.({
         received: 0,
         total: 0,
@@ -704,12 +634,25 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
         version: release.version,
         url: release.url,
         size: downloaded.size,
+        total: downloaded.total || downloaded.size,
+        etag: downloaded.etag || expectedInfo.etag || '',
+        lastModified: downloaded.lastModified || expectedInfo.lastModified || '',
         sha256: downloaded.sha256,
         publisher,
         verifiedAt: new Date().toISOString(),
       }
       await fs.promises.mkdir(folder, { recursive: true })
       await fs.promises.writeFile(metaPath, `${JSON.stringify(meta, null, 2)}\n`)
+    }
+
+    // Never hand an archive with an embedded setup script to Windows. This
+    // blocks WinRAR SFX droppers before they can extract a script into RarSFX*
+    // and launch wscript.exe.
+    try {
+      await assertInstallerSafe(installer, options)
+    } catch (error) {
+      await fs.promises.rm(metaPath, { force: true }).catch(() => {})
+      throw error
     }
 
     let executable = installedExecutable(metadata, options.env)
@@ -803,11 +746,13 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
 }
 
 module.exports = {
+  downloadInstaller,
   ensureProviderRuntime,
   installExe,
   installedExecutable,
   installedExecutables,
   launchArguments,
   resolveRelease,
+  validateInstaller,
   waitForExecutable,
 }

@@ -6,7 +6,7 @@
  * someone's server browser, so VAULTED refuses the whole launcher instead of
  * quietly starting a private lobby.
  */
-export const BANNED_ONLINE_PROVIDER_IDS = ['reboot-official', 'reboot'] as const
+export const BANNED_ONLINE_PROVIDER_IDS = ['reboot-official', 'reboot', 'echo'] as const
 
 const BANNED_ONLINE_PROVIDERS = new Set<string>(BANNED_ONLINE_PROVIDER_IDS)
 

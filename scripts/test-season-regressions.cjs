@@ -17,6 +17,8 @@
 
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
+const http = require('node:http')
+const os = require('node:os')
 const path = require('node:path')
 
 const root = path.join(__dirname, '..')
@@ -327,7 +329,6 @@ function testWorkingSeasons() {
   // Discord-gated communities keep their gate route.
   for (const [id, seasonId] of Object.entries({
     arc: 'ch1-s4',
-    echo: 'ch1-s3',
     eon: 'ch2-s7',
     hydro: 'ch2-s5',
     interloop: 'ch2-s2',
@@ -379,6 +380,32 @@ function testLawinServerBan() {
   // offer it as an online route, and no launch entry point may start it.
   assert.equal(BANNED_PROVIDER_IDS.has('reboot-official'), true)
   assert.equal(BANNED_PROVIDER_IDS.has('reboot'), true)
+  assert.equal(BANNED_PROVIDER_IDS.has('echo'), true, 'the malicious Echo installer must stay banned')
+
+  // Echo's SFX embeds echo.vbs/echo.bat. The batch disables Defender,
+  // downloads a payload and creates a SYSTEM scheduled task; it must never run.
+  const echoCatalog = JSON.parse(read('resources/providers/provider.json')).providers.find(
+    (entry) => entry.id === 'echo',
+  )
+  assert.equal(echoCatalog?.banned, true)
+  assert.deepEqual(echoCatalog?.seasons, [])
+  assert.match(echoCatalog?.bannedReason || '', /WinRAR SFX|malicious|SYSTEM scheduled task/i)
+  assert.equal(routeIds(season('ch1-s3')).includes('echo'), false, 'ch1-s3 still routes through Echo')
+  const safety = read('electron/installerSafety.cjs')
+  assert.match(safety, /Setup\\s\*=\\s\*/, 'the SFX scanner must read the WinRAR Setup command')
+  assert.match(safety, /assertInstallerSafe/)
+  assert.match(safety, /RarSFX|WinRAR SFX/, 'the block must identify script-driven SFX installers')
+  const wshSample = "Add-MpPreference -ExclusionPath 'C:\\ProgramData\\System'; schtasks /Create"
+  const installerSafety = require('../electron/installerSafety.cjs')
+  assert.match(wshSample, installerSafety.DANGEROUS_SCRIPT)
+  assert.match(
+    installerSafety.inspectionFailureReason('ERROR: contains a virus or potentially unwanted software'),
+    /Defender.*malicious/i,
+    'a Defender-blocked installer must report a real security reason',
+  )
+  assert.match(read('electron/providerRuntime.cjs'), /assertInstallerSafe\(installer/, 'installers must be inspected before execution')
+  assert.match(read('electron/providerRuntime.cjs'), /startWindowsScriptHostGuard\(wshLog/, 'installer spawns must guard Windows Script Host')
+  assert.match(read('electron/hiddenWindows.cjs'), /blocked ' \+ \$_\.ProcessName/, 'the WSH guard must log blocked scripts')
   assert.equal(
     providerCatalog().some((provider) => isBannedProvider(provider.id)),
     false,
@@ -467,7 +494,7 @@ function testLawinServerBan() {
   assert.equal(/lawinserver\.exe/i.test(MAIN), false, 'main must never spawn the local server')
   assert.match(
     read('src/lib/onlinePolicy.ts'),
-    /'reboot-official', 'reboot'/,
+    /'reboot-official', 'reboot', 'echo'/,
     'the renderer must keep the same ban list',
   )
 }
@@ -728,10 +755,12 @@ function testOnlineRoutes() {
   )
   // Launcher downloads retry transient failures with the same headers.
   const runtimeSource = read('electron/providerRuntime.cjs')
-  assert.match(runtimeSource, /const DOWNLOAD_ATTEMPTS = 3/)
-  assert.match(runtimeSource, /for \(let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt \+= 1\)/)
-  assert.match(runtimeSource, /async function downloadInstallerOnce\(/)
-  assert.match(runtimeSource, /'user-agent': 'VAULTED-Launcher'/, 'launcher downloads keep their identity header')
+  const downloadSource = read('electron/installerDownload.cjs')
+  assert.match(runtimeSource, /require\('\.\/installerDownload\.cjs'\)/, 'launcher downloads use the resilient transport')
+  assert.match(downloadSource, /const DOWNLOAD_ATTEMPTS = 8/)
+  assert.match(downloadSource, /for \(let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt \+= 1\)/)
+  assert.match(downloadSource, /'user-agent': USER_AGENT/, 'launcher downloads keep a browser identity header')
+  assert.match(downloadSource, /headers\.range = `bytes=\$\{offset\}-/, 'launcher retries request only the missing bytes')
 }
 
 function testProviderIsolation() {
@@ -790,7 +819,6 @@ function testDiscordOnlyDirectLaunch() {
     'eon',
     'hydro',
     'interloop',
-    'echo',
     'retrac-official',
     'era',
     'ezfn',
@@ -990,6 +1018,101 @@ function testOnlineBadgeColors() {
   assert.match(playMode, /ONLINE_UNAVAILABLE_LABEL = 'ONLINE UNAVAILABLE'/)
 }
 
+/**
+ * Launcher installers must never use the old fetch() body reader, which turns
+ * a CDN reset into `TypeError: terminated`. The live download is exercised
+ * against a local server that cuts the first response in half; the retry must
+ * ask for the remaining bytes and the finished file must be a real MZ setup.
+ */
+async function testResilientLauncherDownloads() {
+  const { downloadInstaller, validateInstaller } = require('../electron/installerDownload.cjs')
+  const runtime = read('electron/providerRuntime.cjs')
+  assert.equal(/getReader\(|downloadInstallerOnce|response\.body/.test(runtime), false, 'the launcher installer must not use a fetch body stream')
+  assert.match(runtime, /require\('\.\/installerDownload\.cjs'\)/, 'providerRuntime must use the resilient downloader')
+  assert.match(runtime, /await validateInstaller\(installer, metadata\)/, 'cached installers must be header-checked too')
+  const transport = read('electron/installerDownload.cjs')
+  assert.match(transport, /electron\.net\.request/, 'downloads must use Electron net.request')
+  assert.match(transport, /new electron\.BrowserWindow/, 'downloads must have an off-screen BrowserWindow fallback')
+  assert.match(transport, /headers\.range = `bytes=\$\{offset\}-/, 'downloads must send a byte Range when resuming')
+  assert.match(transport, /function validateInstaller/, 'downloads must validate the installer header')
+  assert.match(transport, /function probeTotalSize/, 'downloads must verify the host total before accepting a file')
+  assert.match(transport, /if-range/, 'a resume must be tied to the host ETag/Last-Modified')
+  assert.match(transport, /existingMeta/, 'a partial without matching identity must be discarded')
+  assert.match(transport, /isMz/, 'EXE downloads must be checked for the MZ header')
+
+  // Every active launcher URL is HTTPS, never loopback. Live reachability is
+  // audited separately; this lock prevents a future local/plain-HTTP route.
+  const catalog = JSON.parse(read('resources/providers/provider.json')).providers || []
+  for (const provider of catalog) {
+    for (const url of [provider.runtime?.downloadUrl, provider.runtime?.versionUrl]) {
+      if (!url) continue
+      const parsed = new URL(url)
+      assert.equal(parsed.protocol, 'https:', `${provider.id} launcher URL is not HTTPS`)
+      assert.equal(
+        /^(?:127\.0\.0\.1|localhost|\[::1\])$/i.test(parsed.hostname),
+        false,
+        `${provider.id} launcher URL points at loopback`,
+      )
+    }
+  }
+
+  const total = 180 * 1024
+  const payload = Buffer.alloc(total, 0x41)
+  payload[0] = 0x4d
+  payload[1] = 0x5a
+  let requests = 0
+  const ranges = []
+  const server = http.createServer((req, res) => {
+    if (req.method === 'HEAD') {
+      res.writeHead(200, { 'content-length': total, 'content-type': 'application/octet-stream' })
+      res.end()
+      return
+    }
+    requests += 1
+    const range = String(req.headers.range || '')
+    ranges.push(range)
+    const match = /^bytes=(\d+)-/.exec(range)
+    const start = match ? Number(match[1]) : 0
+    if (requests === 1) {
+      // Echo-style first answer: no Content-Length, then the connection drops.
+      // The independent probe total is what makes this short read detectable.
+      res.writeHead(200, { 'content-type': 'application/octet-stream' })
+      res.write(payload.subarray(0, 70 * 1024))
+      setTimeout(() => res.destroy(), 20)
+      return
+    }
+    res.writeHead(206, {
+      'content-length': total - start,
+      'content-range': `bytes ${start}-${total - 1}/${total}`,
+      'content-type': 'application/octet-stream',
+    })
+    res.end(payload.subarray(start))
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-launcher-download-'))
+  const target = path.join(dir, 'EchoLauncher-Setup.exe')
+  try {
+    const result = await downloadInstaller(
+      { url: `http://127.0.0.1:${server.address().port}/download` },
+      { kind: 'exe' },
+      { target },
+    )
+    assert.ok(requests >= 2, 'a terminated stream must be retried')
+    assert.match(ranges[0] || '', /^bytes=0-\d+$/, 'the first request must use a bounded Range')
+    assert.match(ranges[1] || '', /^bytes=[1-9]\d*-\d+$/, 'the retry must resume at the received byte offset')
+    assert.equal(result.size, total)
+    assert.deepEqual(fs.readFileSync(target), payload, 'the resumed download must contain every byte')
+    assert.equal(fs.existsSync(`${target}.part`), false, 'the partial file must be cleaned up')
+
+    const bad = path.join(dir, 'not-an-installer.exe')
+    fs.writeFileSync(bad, Buffer.alloc(70 * 1024, 0x41))
+    await assert.rejects(() => validateInstaller(bad, { kind: 'exe' }), /not a valid Windows installer/i)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 function testRebootAutoLaunch() {
   const existing = { name: 'My own build', gameVersion: '7.30', location: 'D:\\games\\other' }
   const storage = {
@@ -1056,8 +1179,9 @@ function testRebootAutoLaunch() {
   )
 }
 
-try {
-  testLifecycleRule()
+async function run() {
+  try {
+    testLifecycleRule()
   testLauncherOutlivesBootstrapper()
   testLaunchWiring()
   testWorkingSeasons()
@@ -1069,11 +1193,15 @@ try {
   testCardStates()
   testOnlineBadgeColors()
   testAutoFixWiring()
-  testRebootAutoLaunch()
+    testRebootAutoLaunch()
+    await testResilientLauncherDownloads()
   console.log(
     'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), fully hidden companion launchers (off-screen SW_HIDE windows, Flutter message clicks, zero cursor/foreground input), a complete local-server ban (no lawinserver executable or local-server prompt in runtime code, Reboot removed from every season route and every launch entry point), no Reboot-only season presented as online, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route), and online badge colors (LAUNCHER green on the hero, sidebar and dropdown pills; ONLINE UNAVAILABLE red)',
   )
 } catch (error) {
   console.error(error)
   process.exitCode = 1
+  }
 }
+
+void run()

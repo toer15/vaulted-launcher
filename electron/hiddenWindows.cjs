@@ -130,9 +130,58 @@ function startHiddenWindowWatcher(names, options = {}) {
   }
 }
 
+/**
+ * WinRAR SFX installers run their embedded setup through wscript.exe. A broken
+ * script produces a Windows Script Host dialog that blocks the install and
+ * pops over VAULTED. This guard records and terminates only WSH processes that
+ * appear after the installer starts; it never touches an existing script.
+ */
+function startWindowsScriptHostGuard(logPath, options = {}) {
+  if (process.platform !== 'win32') return null
+  const seconds = Math.min(21_600, Math.max(10, Math.round(options.seconds ?? 900)))
+  const quote = (value) => `'${String(value).replace(/'/g, "''")}'`
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$log = ${quote(logPath)}`,
+    '$known = @{}',
+    'Get-Process -Name wscript,cscript -ErrorAction SilentlyContinue | ForEach-Object { $known[[int]$_.Id] = $true }',
+    `$deadline = (Get-Date).AddSeconds(${seconds})`,
+    'while ((Get-Date) -lt $deadline) {',
+    "  Get-Process -Name wscript,cscript -ErrorAction SilentlyContinue | ForEach-Object {",
+    "    if (-not $known.ContainsKey([int]$_.Id)) {",
+    "      Add-Content -LiteralPath $log -Value ('blocked ' + $_.ProcessName + ' pid=' + $_.Id) -ErrorAction SilentlyContinue",
+    '      Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue',
+    '    }',
+    '  }',
+    '  Start-Sleep -Milliseconds 200',
+    '}',
+    'Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue',
+  ].join('\r\n')
+  const scriptPath = path.join(
+    os.tmpdir(),
+    `vaulted-wsh-guard-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`,
+  )
+  try {
+    fs.mkdirSync(path.dirname(logPath), { recursive: true })
+    fs.writeFileSync(scriptPath, `${script}\r\n`, 'utf8')
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', scriptPath],
+      { windowsHide: true, stdio: 'ignore' },
+    )
+    child.once('error', () => fs.promises.rm(scriptPath, { force: true }).catch(() => {}))
+    child.unref()
+    return child.pid ?? null
+  } catch {
+    fs.promises.rm(scriptPath, { force: true }).catch(() => {})
+    return null
+  }
+}
+
 module.exports = {
   WINDOW_HIDER_PS,
   cleanProcessNames,
   hideWindowsSnippet,
   startHiddenWindowWatcher,
+  startWindowsScriptHostGuard,
 }

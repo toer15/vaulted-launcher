@@ -24,7 +24,7 @@ const SAFE_PROVIDER_ID = /^[a-z0-9][a-z0-9-]*$/i
  * 127.0.0.1. It is never a public online route, so it is excluded from the UI
  * catalog and every launch entry point rejects it.
  */
-const BANNED_PROVIDER_IDS = new Set(['reboot-official', 'reboot'])
+const BANNED_PROVIDER_IDS = new Set(['reboot-official', 'reboot', 'echo'])
 const BANNED_PROVIDER_REASON =
   'Reboot Launcher only offers a private local backend, not public matchmaking. VAULTED will not launch it.'
 
@@ -1043,6 +1043,9 @@ function ensureProviderRedirects() {
   providerRepairPromise = (async () => {
     const report = { checked: [], repaired: [], errors: [] }
     for (const id of PROVIDERS.keys()) {
+      // Banned providers must never be probed, repaired or staged. Echo's
+      // installer is malicious, so it is not a launchable route at all.
+      if (isBannedProvider(id)) continue
       report.checked.push(id)
       let profile
       try {

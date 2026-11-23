@@ -86,16 +86,11 @@
       ],
       "sizeBytes": 7384406276,
       "onlineProvider": {
-        "id": "echo",
-        "name": "Project Echo",
-        "label": "Echo"
+        "id": "sunset",
+        "name": "SunSet Studios",
+        "label": "SunSet"
       },
       "onlineProviders": [
-        {
-          "id": "echo",
-          "name": "Project Echo",
-          "label": "Echo"
-        },
         {
           "id": "sunset",
           "name": "SunSet Studios",
