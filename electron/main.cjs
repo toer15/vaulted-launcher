@@ -39,7 +39,11 @@ const { createEraBridge } = require('./eraBridge.cjs')
 const { cleanupManagedBuild: cleanupBuildFolder } = require('./buildCleanup.cjs')
 const { isOptionalVerifyIssue, removeLooseFiles, scanLooseFiles } = require('./autoFix.cjs')
 const { writeSavedBuild } = require('./rebootLauncher.cjs')
-const { clickCompanionPlayButton, dismissCompanionServerPrompt } = require('./companionAutomation.cjs')
+const {
+  clickCompanionPlayButton,
+  dismissCompanionServerPrompt,
+  hideCompanionLauncher,
+} = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
@@ -100,6 +104,36 @@ const downloads = new Map()
 const extractions = new Map()
 /** providerId -> signed external launcher spawned by VAULTED */
 const providerLaunchers = new Map()
+/** providerId -> interval that keeps that launcher's window hidden */
+const companionWindowHiders = new Map()
+
+/**
+ * Keep a companion launcher invisible for its whole session: immediately after
+ * spawn, then once a second in case Flutter recreates or restores its window
+ * when the game starts. The player must only ever see VAULTED and Fortnite.
+ */
+function startCompanionWindowHider(providerId, pid) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id || !pid) return null
+  stopCompanionWindowHider(id)
+  const state = { pid, timer: null }
+  const hide = () => {
+    void hideCompanionLauncher(pid)
+  }
+  hide()
+  state.timer = setInterval(hide, 1_000)
+  state.timer.unref?.()
+  companionWindowHiders.set(id, state)
+  return state
+}
+
+function stopCompanionWindowHider(providerId) {
+  const id = String(providerId || '').trim().toLowerCase()
+  const state = companionWindowHiders.get(id)
+  if (!state) return
+  if (state.timer) clearInterval(state.timer)
+  companionWindowHiders.delete(id)
+}
 /** providerId -> live game-session monitor for that merged companion launcher */
 const companionMonitors = new Map()
 /** providerId -> auth heartbeat that keeps the launched session alive */
@@ -2610,25 +2644,26 @@ function beginCompanionGameWatch({ providerId, launcherPid, launcherNames = [], 
         await delay(800)
         running = await processPidsByImage([CLIENT_EXE])
         if (running.length === 0) {
+          await hideCompanionLauncher(launcher)
           const play = await clickCompanionPlayButton(launcher)
           if (!play.clicked) {
             // A bootstrapper can hand off to a second launcher process.
             const current = await processPidsByImage(launcherNames)
             if (current.length > 0) {
               launcher = current[0]
+              startCompanionWindowHider(id, launcher)
               await clickCompanionPlayButton(launcher)
             }
           }
           // Reboot then asks whether to start its local game server. Ignore
           // starts the client immediately; Start server would open a large
-          // server download. Only the prompt's real Ignore button is clicked,
-          // verified by the teal primary button that appears with it.
-          const dialogDeadline = Date.now() + 20_000
-          while (Date.now() < dialogDeadline) {
+          // server download. The prompt shares the hidden Flutter view, so the
+          // same message click dismisses it without showing anything.
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            await delay(attempt === 0 ? 5_000 : 4_000)
             if ((await processPidsByImage([CLIENT_EXE])).length > 0) break
-            const dismissed = await dismissCompanionServerPrompt(launcher)
-            if (dismissed.clicked) break
-            await delay(1_500)
+            await hideCompanionLauncher(launcher)
+            await dismissCompanionServerPrompt(launcher)
           }
         }
       }
@@ -2807,6 +2842,7 @@ async function closeCompanionLauncherForProvider(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return false
   companionGameWaits.delete(id)
+  stopCompanionWindowHider(id)
   let closed = false
   const monitor = companionMonitors.get(id)
   if (monitor) {
@@ -5481,14 +5517,26 @@ function spawnExternalLauncher(executable, args) {
   return new Promise((resolve) => {
     let child
     try {
-      // Visible on purpose: this is the player's game entry, so the window it
-      // creates must show. `windowsHide` would start it minimised/hidden.
+      // The launcher is a background helper now, never the player's window.
+      // windowsHide covers the console/bootstrapper; the automation below also
+      // moves and hides the Flutter window as soon as it exists.
       child = spawn(executable, args, {
         detached: true,
         stdio: 'ignore',
-        windowsHide: false,
+        windowsHide: true,
         cwd: path.dirname(executable),
       })
+      if (child.pid) {
+        // The Flutter window appears during the stability wait below, before
+        // the provider-scoped hider exists. Keep hiding it from the first
+        // moment so even a launcher that shows itself cannot flash on screen.
+        const earlyPid = child.pid
+        void hideCompanionLauncher(earlyPid)
+        const earlyHide = setInterval(() => void hideCompanionLauncher(earlyPid), 400)
+        earlyHide.unref?.()
+        const stopEarlyHide = setTimeout(() => clearInterval(earlyHide), 12_000)
+        stopEarlyHide.unref?.()
+      }
     } catch (error) {
       resolve({ child: null, exitCode: null, error })
       return
@@ -5540,6 +5588,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         const pids = await runningLauncherPids(names)
         if (pids.length === 0) return null
         providerLaunchers.set(id, { pid: pids[0], startedAt: Date.now() })
+        startCompanionWindowHider(id, pids[0])
         startCompanionSessionMonitor(id, current)
         return { opened: true, path: current, pid: pids[0], tracked: true, alreadyRunning: true }
       }
@@ -5600,7 +5649,9 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       // Only a managed provider's background companion (startCompanionLauncher)
       // is hidden. The session monitor keeps this launcher alive for the whole
       // game session and closes it after Fortnite exits or on Stop.
-      registerProviderLauncher(id, launch.child); startCompanionSessionMonitor(id, current)
+      registerProviderLauncher(id, launch.child)
+      startCompanionWindowHider(id, launch.child.pid)
+      startCompanionSessionMonitor(id, current)
       return { opened: true, path: current, pid: launch.child.pid ?? null, tracked: true }
     }
 

@@ -457,22 +457,21 @@ function testOnlineRoutes() {
   assert.match(auth, /config\.id === 'ezfn'/, 'EZFN lost its exchange-code handshake')
   assert.match(auth, /config\.id === 'stellar'/, 'Stellar lost its exchange-code handshake')
 
-  // An external project's launcher is the player's game entry, so VAULTED must
-  // open it visibly. Only a managed background companion is hidden.
+  // Every companion launcher is a background helper: it must never be shown,
+  // focused or clicked with the real cursor. VAULTED hides it off-screen and
+  // posts mouse messages straight to its Flutter view.
   const openAt = MAIN.indexOf('async function openProviderLauncherEntry(')
   const launchAt = MAIN.indexOf('async function launchOnlineProvider(', openAt)
   assert.ok(openAt > 0 && launchAt > openAt, 'the external launcher handoff is missing')
   const externalHandoff = MAIN.slice(openAt, launchAt)
-  assert.equal(
-    /startHiddenWindowWatcher/.test(externalHandoff),
-    false,
-    'an external launcher must not be hidden; the player needs its window to start the game',
-  )
   assert.match(
     externalHandoff,
-    /registerProviderLauncher\(id, launch\.child\); startCompanionSessionMonitor\(id, current\)/,
-    'an external launcher must still be tracked and closed after the game exits',
+    /registerProviderLauncher\(id, launch\.child\)\r?\n\s*startCompanionWindowHider\(id, launch\.child\.pid\)\r?\n\s*startCompanionSessionMonitor\(id, current\)/,
+    'an external launcher must be hidden and closed after the game exits',
   )
+  assert.match(MAIN, /function startCompanionWindowHider\(providerId, pid\)/)
+  assert.match(MAIN, /state\.timer = setInterval\(hide, 1_000\)/)
+  assert.match(MAIN, /stopCompanionWindowHider\(id\)/, 'Stop must stop the window hider')
   const companionAt = MAIN.indexOf('async function startCompanionLauncher(')
   assert.ok(companionAt > 0, 'the managed companion launcher start is missing')
   assert.match(
@@ -508,9 +507,24 @@ function testOnlineRoutes() {
   )
   assert.match(
     spawnHelper,
-    /windowsHide: false/,
-    'an external launcher window must not be started hidden',
+    /windowsHide: true/,
+    'an external launcher must start hidden',
   )
+  assert.match(spawnHelper, /void hideCompanionLauncher\(earlyPid\)/, 'the launcher window must be hidden on spawn')
+  assert.match(spawnHelper, /setInterval\(\(\) => void hideCompanionLauncher\(earlyPid\), 400\)/, 'the launcher must stay hidden during its startup wait')
+  const automation = read('electron/companionAutomation.cjs')
+  assert.match(automation, /ShowWindow\(\$top, 0\)/, 'the launcher window must be hidden with SW_HIDE')
+  assert.match(automation, /-20000, -20000/, 'the launcher window must be moved off every monitor')
+  assert.match(automation, /GetClassName/, 'the automation must target the Flutter view')
+  assert.match(automation, /FLUTTERVIEW/, 'mouse messages must go to FLUTTERVIEW')
+  assert.match(automation, /PostMessage\(\$view, 0x0201/, 'Play must be a hidden message click')
+  for (const banned of ['SetCursorPos', 'mouse_event', 'SetForegroundWindow', 'SetWindowPos($h, [IntPtr]::new(-1)']) {
+    assert.equal(
+      automation.includes(banned),
+      false,
+      `companion automation must not use visible input: ${banned}`,
+    )
+  }
   assert.match(read('electron/providerRuntime.cjs'), /\n  installedExecutables,\n/)
   assert.match(handoff, /alreadyRunning: true/)
   assert.match(handoff, /forceInstall: true/)
@@ -980,7 +994,7 @@ try {
   testAutoFixWiring()
   testRebootAutoLaunch()
   console.log(
-    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route), and online badge colors (LAUNCHER green on the hero, sidebar and dropdown pills; ONLINE UNAVAILABLE red)',
+    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), fully hidden companion launchers (off-screen SW_HIDE windows, Flutter message clicks, zero cursor/foreground input), Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route), and online badge colors (LAUNCHER green on the hero, sidebar and dropdown pills; ONLINE UNAVAILABLE red)',
   )
 } catch (error) {
   console.error(error)

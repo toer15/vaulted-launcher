@@ -3,11 +3,12 @@
 const { execFile } = require('node:child_process')
 
 /**
- * Companion launchers (Reboot, …) expose no CLI or URL to start the game, so
- * VAULTED triggers the launcher's own Play button and its automatic game
- * server prompt. This only sends a real mouse click to that launcher's window
- * after confirming it is the foreground window; it never types, clicks another
- * app, or bypasses the launcher's own backend/DLL handshake.
+ * Companion launchers expose no CLI or URL to start the game, so VAULTED
+ * triggers their own Play button. Everything here is invisible: the launcher
+ * window is moved outside every monitor and hidden with ShowWindow(SW_HIDE),
+ * then mouse messages are posted directly to its Flutter view. The player never
+ * sees a third-party window, the cursor never moves, and the launcher is never
+ * brought to the foreground.
  */
 
 function delay(ms) {
@@ -31,144 +32,113 @@ function runPowerShell(script, timeout = 20_000) {
 const WINDOW_TYPES = `
 Add-Type @"
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
-public class VaultedCompanionClick {
-  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
-  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
-  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out int pid);
-  [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
-  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
-  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
-  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint attachTo, bool set);
-  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
-  [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
-  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
-  [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
-  public const uint LEFTDOWN = 0x0002;
-  public const uint LEFTUP = 0x0004;
+public class VaultedHiddenWindow {
+  public delegate bool EnumProc(IntPtr h, IntPtr l);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr l);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
 }
 "@
+function Find-VaultedTopWindow([int]$targetPid) {
+  $script:foundTop = [IntPtr]::Zero
+  $cb = [VaultedHiddenWindow+EnumProc]{
+    param($h, $l)
+    $owner = [uint32]0
+    [void][VaultedHiddenWindow]::GetWindowThreadProcessId($h, [ref]$owner)
+    if ($owner -eq $targetPid) { $script:foundTop = $h; return $false }
+    return $true
+  }
+  [void][VaultedHiddenWindow]::EnumWindows($cb, [IntPtr]::Zero)
+  return $script:foundTop
+}
+function Hide-VaultedTopWindow([IntPtr]$top) {
+  # Outside every monitor first, then remove it from the desktop/taskbar.
+  [void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, -20000, -20000, 0, 0, 0x0001 -bor 0x0004)
+  [void][VaultedHiddenWindow]::ShowWindow($top, 0)
+}
+function Find-VaultedView([IntPtr]$top) {
+  $script:foundView = [IntPtr]::Zero
+  $cb = [VaultedHiddenWindow+EnumProc]{
+    param($h, $l)
+    $name = New-Object System.Text.StringBuilder 128
+    [void][VaultedHiddenWindow]::GetClassName($h, $name, 128)
+    if ($name.ToString() -eq 'FLUTTERVIEW') { $script:foundView = $h; return $false }
+    return $true
+  }
+  [void][VaultedHiddenWindow]::EnumChildWindows($top, $cb, [IntPtr]::Zero)
+  return $script:foundView
+}
+function Send-VaultedClick([IntPtr]$view, [int]$x, [int]$y) {
+  $lp = [IntPtr](($y -shl 16) -bor ($x -band 0xffff))
+  [void][VaultedHiddenWindow]::PostMessage($view, 0x0200, [IntPtr]::Zero, $lp)
+  [void][VaultedHiddenWindow]::PostMessage($view, 0x0201, [IntPtr]1, $lp)
+  Start-Sleep -Milliseconds 70
+  [void][VaultedHiddenWindow]::PostMessage($view, 0x0202, [IntPtr]::Zero, $lp)
+}
 `
 
-function clickScript(pid, { xRatio, yRatio, yFromBottom }) {
-  const safePid = Math.max(1, Math.floor(Number(pid) || 0))
-  const vertical =
-    Number.isFinite(yRatio) && yRatio > 0
-      ? `$rect.Top + [int]($ht * ${Number(yRatio)})`
-      : `$rect.Top + $ht - ${Math.max(1, Math.floor(Number(yFromBottom) || 53))}`
+function hideScript(pid) {
   return `
 ${WINDOW_TYPES}
-[void][VaultedCompanionClick]::SetProcessDPIAware()
+$p = Get-Process -Id ${Math.max(1, Math.floor(Number(pid) || 0))} -ErrorAction SilentlyContinue
+if (-not $p) { 'NO_PROCESS'; exit 1 }
+$top = Find-VaultedTopWindow ${Math.max(1, Math.floor(Number(pid) || 0))}
+if ($top -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
+Hide-VaultedTopWindow $top
+'HIDDEN'
+`
+}
+
+function clickScript(pid, xRatio, yRatio, fromBottom) {
+  const safePid = Math.max(1, Math.floor(Number(pid) || 0))
+  const vertical =
+    Number.isFinite(fromBottom) && fromBottom > 0
+      ? '$height - ' + Math.floor(fromBottom)
+      : '[int]($height * ' + Number(yRatio) + ')'
+  return `
+${WINDOW_TYPES}
 $p = Get-Process -Id ${safePid} -ErrorAction SilentlyContinue
 if (-not $p) { 'NO_PROCESS'; exit 1 }
-$h = $p.MainWindowHandle
-if ($h -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
-function Invoke-VaultedClick([int]$cx, [int]$cy) {
-  $old = New-Object VaultedCompanionClick+POINT
-  [void][VaultedCompanionClick]::GetCursorPos([ref]$old)
-  [void][VaultedCompanionClick]::SetCursorPos($cx, $cy)
-  Start-Sleep -Milliseconds 150
-  [VaultedCompanionClick]::mouse_event([VaultedCompanionClick]::LEFTDOWN, 0, 0, 0, [UIntPtr]::Zero)
-  Start-Sleep -Milliseconds 70
-  [VaultedCompanionClick]::mouse_event([VaultedCompanionClick]::LEFTUP, 0, 0, 0, [UIntPtr]::Zero)
-  Start-Sleep -Milliseconds 250
-  [void][VaultedCompanionClick]::SetCursorPos($old.X, $old.Y)
-}
-function Get-VaultedForegroundPid {
-  $fgPid = 0
-  [void][VaultedCompanionClick]::GetWindowThreadProcessId([VaultedCompanionClick]::GetForegroundWindow(), [ref]$fgPid)
-  return $fgPid
-}
-[void][VaultedCompanionClick]::ShowWindow($h, 9)
-# Raise above every other window first: a launcher opened behind the app that
-# requested it would otherwise receive the click only after losing it once.
-[void][VaultedCompanionClick]::SetWindowPos($h, [IntPtr]::new(-1), 0, 0, 0, 0, 0x0043)
-[void][VaultedCompanionClick]::SetWindowPos($h, [IntPtr]::new(-2), 0, 0, 0, 0, 0x0043)
-$fgPid = 0
-$fgThread = [VaultedCompanionClick]::GetWindowThreadProcessId([VaultedCompanionClick]::GetForegroundWindow(), [ref]$fgPid)
-$dummy = 0
-$targetThread = [VaultedCompanionClick]::GetWindowThreadProcessId($h, [ref]$dummy)
-[void][VaultedCompanionClick]::AttachThreadInput([uint32]$fgThread, [uint32]$targetThread, $true)
-[void][VaultedCompanionClick]::BringWindowToTop($h)
-[void][VaultedCompanionClick]::SetForegroundWindow($h)
-[void][VaultedCompanionClick]::SetFocus($h)
-[void][VaultedCompanionClick]::AttachThreadInput([uint32]$fgThread, [uint32]$targetThread, $false)
-Start-Sleep -Milliseconds 350
-$rect = New-Object VaultedCompanionClick+RECT
-[void][VaultedCompanionClick]::GetWindowRect($h, [ref]$rect)
-$w = $rect.Right - $rect.Left
-$ht = $rect.Bottom - $rect.Top
-if ($w -lt 200 -or $ht -lt 200) { 'BAD_RECT'; exit 4 }
-if ((Get-VaultedForegroundPid) -ne ${safePid}) {
-  # Windows' foreground lock can still refuse SetForegroundWindow. Minimizing
-  # and restoring grants the launcher the foreground, then the click is
-  # delivered to it, not to whatever window happened to be on top.
-  [void][VaultedCompanionClick]::ShowWindow($h, 6)
-  Start-Sleep -Milliseconds 250
-  [void][VaultedCompanionClick]::ShowWindow($h, 9)
-  [void][VaultedCompanionClick]::SetForegroundWindow($h)
-  Start-Sleep -Milliseconds 600
-}
-if ((Get-VaultedForegroundPid) -ne ${safePid}) { "NOT_FOCUSED:$(Get-VaultedForegroundPid):$($h)"; exit 3 }
-$x = $rect.Left + [int]($w * ${Number(xRatio)})
+$top = Find-VaultedTopWindow ${safePid}
+if ($top -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
+# Hide before every interaction so the launcher can never flash on screen.
+Hide-VaultedTopWindow $top
+$view = Find-VaultedView $top
+if ($view -eq [IntPtr]::Zero) { 'NO_VIEW'; exit 3 }
+$rect = New-Object VaultedHiddenWindow+RECT
+[void][VaultedHiddenWindow]::GetClientRect($view, [ref]$rect)
+$width = $rect.R - $rect.L
+$height = $rect.B - $rect.T
+if ($width -lt 200 -or $height -lt 200) { 'BAD_RECT'; exit 4 }
+$x = [int]($width * ${Number(xRatio)})
 $y = ${vertical}
-Invoke-VaultedClick $x $y
+Send-VaultedClick $view $x $y
 'CLICKED'
 `
 }
 
-/**
- * Sample one window-relative pixel. Reboot's primary dialog button is teal, so
- * checking it tells VAULTED whether the automatic-server prompt is really up
- * before it clicks; on the Play page that point is an ordinary settings row.
- */
-function pixelScript(pid, xRatio, yRatio) {
-  const safePid = Math.max(1, Math.floor(Number(pid) || 0))
-  return `
-${WINDOW_TYPES}
-Add-Type -AssemblyName System.Drawing
-[void][VaultedCompanionClick]::SetProcessDPIAware()
-$p = Get-Process -Id ${safePid} -ErrorAction SilentlyContinue
-if (-not $p) { 'NO_PROCESS'; exit 1 }
-$h = $p.MainWindowHandle
-if ($h -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
-$rect = New-Object VaultedCompanionClick+RECT
-[void][VaultedCompanionClick]::GetWindowRect($h, [ref]$rect)
-$w = $rect.Right - $rect.Left
-$ht = $rect.Bottom - $rect.Top
-if ($w -lt 200 -or $ht -lt 200) { 'BAD_RECT'; exit 4 }
-$bmp = New-Object System.Drawing.Bitmap $w, $ht
-$g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
-$c = $bmp.GetPixel([int]($w * ${Number(xRatio)}), [int]($ht * ${Number(yRatio)}))
-"$($c.R),$($c.G),$($c.B)"
-$g.Dispose()
-$bmp.Dispose()
-`
+async function hideCompanionLauncher(pid) {
+  if (process.platform !== 'win32') return false
+  const { output } = await runPowerShell(hideScript(pid), 10_000)
+  return output === 'HIDDEN'
 }
 
-function parseRgb(output) {
-  const match = String(output || '').match(/^(\d{1,3}),(\d{1,3}),(\d{1,3})$/)
-  if (!match) return null
-  return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) }
-}
-
-function isTeal({ r, g, b }) {
-  // fluent_ui primary button (#00b7c3) with room for JPEG/AA noise.
-  return r < 100 && g > 120 && b > 130 && Math.abs(g - b) < 70
-}
-
-async function clickAt(pid, coords, options = {}) {
+/** Click the hidden launcher's bottom full-width Play/Close button. */
+async function clickCompanionPlayButton(pid, options = {}) {
   if (process.platform !== 'win32') return { clicked: false, error: 'unsupported platform' }
-  const attempts = Number.isFinite(options.attempts) ? options.attempts : 6
-  const waitMs = Number.isFinite(options.waitMs) ? options.waitMs : 1_500
+  const attempts = Number.isFinite(options.attempts) ? options.attempts : 8
+  const waitMs = Number.isFinite(options.waitMs) ? options.waitMs : 1_000
   let last = 'NO_WINDOW'
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const { output, error } = await runPowerShell(clickScript(pid, coords))
+    const { output, error } = await runPowerShell(clickScript(pid, 0.5, 0, 53))
     if (output === 'CLICKED') return { clicked: true }
     if (output === 'NO_PROCESS') return { clicked: false, error: 'the launcher closed' }
     last = output || (error ? error.message : 'unknown error')
@@ -177,35 +147,29 @@ async function clickAt(pid, coords, options = {}) {
   return { clicked: false, error: last }
 }
 
-/** Click the launcher's bottom full-width Play button once its window is up. */
-async function clickCompanionPlayButton(pid, options = {}) {
-  const xRatio = Number.isFinite(options.xRatio) ? options.xRatio : 0.5
-  const yFromBottom = Number.isFinite(options.yFromBottom) ? options.yFromBottom : 53
-  return clickAt(pid, { xRatio, yFromBottom }, options)
-}
-
 /**
- * Dismiss Reboot's "start a game server" prompt with Ignore, but only when its
- * teal Start server button is actually visible. Ignore launches the client and
- * connects to online servers; Start server instead opens a multi-gigabyte
- * server download dialog. Returns `{ skipped: true }` on a normal Play page so
- * VAULTED never clicks an unrelated settings row.
+ * Click Ignore on Reboot's hidden "start a local game server?" prompt. The
+ * modal shares the launcher view, so the same hidden message click reaches it.
+ * Ignore starts the client immediately; Start server would download a server.
  */
 async function dismissCompanionServerPrompt(pid, options = {}) {
   if (process.platform !== 'win32') return { clicked: false, error: 'unsupported platform' }
-  // The teal primary button only exists while the modal is up. Sample just
-  // below its top edge so anti-aliasing on the border cannot read as dark.
-  const { output } = await runPowerShell(pixelScript(pid, 0.571, 0.6))
-  const color = parseRgb(output)
-  if (!color || !isTeal(color)) return { clicked: false, skipped: true }
-  return clickAt(pid, { xRatio: 0.43, yRatio: 0.584 }, options)
+  const attempts = Number.isFinite(options.attempts) ? options.attempts : 1
+  let last = 'NO_VIEW'
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const { output, error } = await runPowerShell(clickScript(pid, 0.43, 0.574, 0))
+    if (output === 'CLICKED') return { clicked: true }
+    if (output === 'NO_PROCESS') return { clicked: false, error: 'the launcher closed' }
+    last = output || (error ? error.message : 'unknown error')
+    await delay(700)
+  }
+  return { clicked: false, error: last }
 }
 
 module.exports = {
   clickCompanionPlayButton,
   dismissCompanionServerPrompt,
+  hideCompanionLauncher,
   delay,
-  isTeal,
-  parseRgb,
   runPowerShell,
 }
