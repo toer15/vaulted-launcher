@@ -358,6 +358,58 @@ export interface BuildVerifyReport {
   elapsedMs: number
 }
 
+export type AutoFixIssueKind =
+  | 'path'
+  | 'build'
+  | 'runtime'
+  | 'launcher'
+  | 'temp'
+  | 'cleanup'
+  | 'summary'
+
+/** One Auto-Fix finding for a downloaded season. */
+export interface AutoFixIssue {
+  kind: AutoFixIssueKind
+  label: string
+  detail?: string
+}
+
+export interface AutoFixScanResult {
+  id: string
+  managed: boolean
+  running?: boolean
+  verified?: boolean
+  issues: AutoFixIssue[]
+  checkedAt: string
+  launcher?: {
+    providerId: string
+    required: boolean
+    label: string
+    installed: boolean
+  } | null
+  loose?: { temp: number; locks: number; archives: number }
+  verify?: BuildVerifyReport | null
+  /** A season folder was found again after profiles.json went stale. */
+  recovered?: { folder: string; executable: string } | null
+}
+
+export interface AutoFixRepairResult {
+  id: string
+  actions: string[]
+  remaining: string[]
+  removed: string[]
+  freedBytes: number
+  recovered?: { folder: string; executable: string } | null
+  launcher?: { installed?: boolean; version?: string } | null
+}
+
+export interface AutoFixProgress {
+  id: string
+  phase: 'runtime' | 'dlls' | 'cleanup' | 'launcher' | 'done' | 'error'
+  label: string
+  percent: number
+}
+
 export interface BuildExitInfo {
   id: string
   code: number | null

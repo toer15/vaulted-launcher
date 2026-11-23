@@ -825,6 +825,38 @@ function testSessionStability() {
   assert.match(read('src/App.tsx'), /session expired`/)
 }
 
+function testAutoFixWiring() {
+  const app = read('src/App.tsx')
+  const main = read('electron/main.cjs')
+  const topbar = read('src/components/TopBar.tsx')
+  const view = read('src/components/AutoFixView.tsx')
+  assert.match(main, /ipcMain\.handle\('arc:autofix-scan'/, 'Auto-Fix scan IPC is missing')
+  assert.match(main, /ipcMain\.handle\('arc:autofix-repair'/, 'Auto-Fix repair IPC is missing')
+  assert.match(main, /await ensureRuntimeInstalled\(\)/, 'Auto-Fix must restore runtime files')
+  assert.match(main, /await stageSeasonLauncherDlls\(providerId\)/, 'Auto-Fix must stage DLLs')
+  assert.match(main, /ensureProviderRuntime\(providerId, metadata,/, 'Auto-Fix must repair launchers')
+  assert.match(app, /const preLaunchAutoFix = useCallback/, 'the pre-launch check is missing')
+  assert.match(
+    app,
+    /if \(!\(await preLaunchAutoFix\(build\)\)\) return/,
+    'Play must use the pre-launch Auto-Fix check',
+  )
+  assert.match(app, /<AutoFixView/, 'the Auto-Fix tab is not rendered')
+  assert.match(app, /view === 'autofix'/, 'the Auto-Fix view state is missing')
+  assert.match(topbar, /Auto-Fix<\/span>/, 'the top navigation lost Auto-Fix')
+  assert.match(view, /Auto-Fix Everything/, 'Auto-Fix must offer one-click repair')
+  assert.match(view, /Fix season/, 'Auto-Fix must repair a single season')
+  // Local play stays removed: Auto-Fix only repairs real online seasons.
+  assert.match(app, /onlineIsPlayable\(playModes\[build\.id\]\)/)
+  assert.equal(/127\.0\.0\.1|localhost/i.test(view), false, 'Auto-Fix must not add a local route')
+  const autoFix = require('../electron/autoFix.cjs')
+  assert.equal(autoFix.isTempFile('build.7z.part'), true)
+  assert.equal(autoFix.isTempFile('build.7z.part.json'), true, 'resume metadata is a temp file')
+  assert.equal(autoFix.isTempFile('pakchunk0-WindowsClient.pak'), false)
+  assert.equal(autoFix.isLockFile('Fortnite.lock'), true)
+  assert.equal(autoFix.isLockFile('pakchunk0.sig'), false)
+}
+
 function testCardStates() {
   const playMode = read('src/lib/playMode.ts')
   assert.match(playMode, /ONLINE_UNAVAILABLE_LABEL = 'ONLINE UNAVAILABLE'/)
@@ -843,8 +875,9 @@ try {
   testSessionStability()
   testProviderIsolation()
   testCardStates()
+  testAutoFixWiring()
   console.log(
-    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), and the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging)',
+    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), and the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route)',
   )
 } catch (error) {
   console.error(error)

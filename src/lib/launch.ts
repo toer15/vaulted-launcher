@@ -1,5 +1,8 @@
 import { artKeyFor } from './art'
 import type {
+  AutoFixProgress,
+  AutoFixRepairResult,
+  AutoFixScanResult,
   Build,
   BuildExitInfo,
   BuildVerifyReport,
@@ -237,6 +240,26 @@ export interface LauncherBridge {
   deleteBuild?(payload: { id: string; path: string }): Promise<{ deleted: boolean; managed: boolean; running?: boolean }>
   cleanupBuildStorage?(): Promise<{ folders: string[]; freedBytes: number; removed: string[] }>
   verifyBuild?(payload: { id: string; path: string; executable: string }): Promise<BuildVerifyReport>
+  /** Auto-Fix scan/repair for a downloaded season */
+  autoFix?: {
+    scan(payload: {
+      id: string
+      path: string
+      executable: string
+      providerId?: string
+      seasonId?: string
+      deep?: boolean
+    }): Promise<AutoFixScanResult>
+    repair(payload: {
+      id: string
+      path: string
+      executable: string
+      providerId?: string
+      seasonId?: string
+      forceLauncher?: boolean
+    }): Promise<AutoFixRepairResult>
+    onProgress(callback: (progress: AutoFixProgress) => void): () => void
+  }
   cancelDownload?(payload: { id: string }): Promise<{ cancelled: boolean }>
   pauseDownload?(payload: { id: string }): Promise<{ paused: boolean }>
   /** partial downloads left behind by a crash, quit, or network stop */

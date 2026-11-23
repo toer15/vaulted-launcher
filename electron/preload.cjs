@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld('arc', {
   deleteBuild: (payload) => ipcRenderer.invoke('arc:delete-build', payload),
   cleanupBuildStorage: () => ipcRenderer.invoke('arc:cleanup-build-storage'),
   verifyBuild: (payload) => ipcRenderer.invoke('arc:verify-build', payload),
+  autoFix: {
+    scan: (payload) => ipcRenderer.invoke('arc:autofix-scan', payload),
+    repair: (payload) => ipcRenderer.invoke('arc:autofix-repair', payload),
+    onProgress: (callback) => subscribe('arc:autofix-progress', callback),
+  },
   cancelDownload: (payload) => ipcRenderer.invoke('arc:cancel-download', payload),
   pauseDownload: (payload) => ipcRenderer.invoke('arc:pause-download', payload),
   listInterruptedDownloads: () => ipcRenderer.invoke('arc:list-interrupted-downloads'),

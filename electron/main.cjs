@@ -37,6 +37,7 @@ const {
 } = require('./providerLaunchArgs.cjs')
 const { createEraBridge } = require('./eraBridge.cjs')
 const { cleanupManagedBuild: cleanupBuildFolder } = require('./buildCleanup.cjs')
+const { isOptionalVerifyIssue, removeLooseFiles, scanLooseFiles } = require('./autoFix.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
@@ -872,6 +873,27 @@ function runtimeProblems() {
       fs.accessSync(file, fs.constants.R_OK)
     } catch {
       problems.push(`Runtime file is unreadable: ${name} (${label})`)
+    }
+  }
+  return problems
+}
+
+/** DLLs the launcher stages before a season is called ready. */
+function stagedRuntimeProblems() {
+  const problems = []
+  const root = runtimeRoot()
+  for (const name of STAGED_RUNTIME_DLLS) {
+    // Tellurium and Memory are already covered by runtimeProblems; only report
+    // the extra staged DLLs here so the list stays free of duplicates.
+    if (name === 'Tellurium.dll' || name === 'Memory.dll') continue
+    const file = path.join(root, name)
+    try {
+      const stat = fs.statSync(file)
+      if (!stat.isFile() || stat.size === 0) {
+        problems.push(`Runtime DLL is missing or empty: ${name}`)
+      }
+    } catch {
+      problems.push(`Runtime DLL is missing or empty: ${name}`)
     }
   }
   return problems
@@ -4885,6 +4907,354 @@ async function verifyBuild(payload) {
   return report
 }
 
+/* ------------------------------------------------------------------ auto-fix */
+
+function resolveAutoFixTarget(payload = {}) {
+  const id = typeof payload?.id === 'string' ? payload.id : ''
+  const root = path.resolve(buildsRoot())
+  const raw = typeof payload?.path === 'string' ? payload.path : ''
+  const target = raw ? path.resolve(raw) : ''
+  const relative = target ? path.relative(root.toLowerCase(), target.toLowerCase()) : ''
+  const managed =
+    Boolean(target) && Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative)
+  return { id, root, target, managed }
+}
+
+function verifyIssueLabel(kind) {
+  switch (kind) {
+    case 'missing':
+      return 'Fortnite file is missing'
+    case 'empty':
+      return 'Fortnite file is empty'
+    case 'unreadable':
+      return 'Fortnite file is unreadable'
+    case 'corrupt':
+      return 'Fortnite file is corrupt'
+    case 'temp':
+      return 'Leftover temporary file'
+    case 'runtime':
+      return 'VAULTED runtime needs repair'
+    default:
+      return 'Fortnite build needs repair'
+  }
+}
+
+/**
+ * Read-only Auto-Fix health report for one downloaded season. A quick scan
+ * checks the executable, PAK folder, runtime DLLs, launcher and leftovers; a
+ * deep scan also hashes/samples every installed game file through verifyBuild.
+ */
+async function autoFixScan(payload = {}) {
+  const { id, root, target, managed } = resolveAutoFixTarget(payload)
+  const providerId =
+    typeof payload?.providerId === 'string' ? payload.providerId.trim().toLowerCase() : ''
+  const seasonId = typeof payload?.seasonId === 'string' ? payload.seasonId.trim() : ''
+  const checkedAt = new Date().toISOString()
+  const issues = []
+  const seen = new Set()
+  const add = (kind, label, detail = '') => {
+    const key = `${kind}|${label}|${detail}`
+    if (seen.has(key)) return
+    seen.add(key)
+    issues.push({ kind, label, detail })
+  }
+
+  if (!id) return { id, managed: false, issues, checkedAt }
+  if (running.has(id) || downloads.has(id)) {
+    return { id, managed, running: true, issues, checkedAt }
+  }
+
+  // A stale profile can point at a folder that no longer exists while the
+  // build is still on disk. Recover the canonical tree instead of asking for a
+  // full re-download.
+  let recovered = null
+  if (managed && target && !fs.existsSync(target) && seasonId) {
+    const candidate = path.join(root, seasonId)
+    if (candidate !== target && fs.existsSync(candidate)) {
+      const found = findPrimaryExecutable(candidate)
+      if (found) recovered = { folder: folderForExecutable(found), executable: found }
+    }
+  }
+  let folder = recovered?.folder || target
+  let executable =
+    recovered?.executable ||
+    (typeof payload?.executable === 'string' ? path.resolve(payload.executable) : '')
+  // A build that was reinstalled or moved can keep a valid season folder but a
+  // stale executable path. Find the real client before calling it missing.
+  if (managed && folder && fs.existsSync(folder) && (!executable || !fs.existsSync(executable))) {
+    const found = findPrimaryExecutable(folder)
+    if (found) {
+      recovered = { folder: folderForExecutable(found), executable: found }
+      folder = recovered.folder
+      executable = found
+    }
+  }
+  const looseCounts = { temp: 0, locks: 0, archives: 0 }
+  const loosePaths = new Set()
+
+  if (!managed) {
+    add('path', "This build is not inside VAULTED's builds folder", target)
+  } else if (!folder || !fs.existsSync(folder)) {
+    add('path', 'Install folder is missing', target || '(not set)')
+  }
+
+  if (folder && fs.existsSync(folder)) {
+    const relativeExecutable = executable ? path.relative(folder, executable) : ''
+    const executableIsInside =
+      Boolean(executable) &&
+      Boolean(relativeExecutable) &&
+      !relativeExecutable.startsWith('..') &&
+      !path.isAbsolute(relativeExecutable)
+    if (!executableIsInside || !fs.existsSync(executable)) {
+      add(
+        'build',
+        'Fortnite client executable is missing',
+        executable ? path.basename(executable) : 'FortniteClient-Win64-Shipping.exe',
+      )
+    } else {
+      try {
+        const stat = await fs.promises.stat(executable)
+        if (stat.size === 0) {
+          add('build', 'Fortnite client executable is empty', relativeExecutable)
+        } else {
+          const header = Buffer.alloc(2)
+          const handle = await fs.promises.open(executable, 'r')
+          try {
+            await handle.read(header, 0, 2, 0)
+          } finally {
+            await handle.close()
+          }
+          if (header[0] !== 0x4d || header[1] !== 0x5a) {
+            add('build', 'Fortnite client executable is corrupt', relativeExecutable)
+          }
+        }
+      } catch {
+        add('build', 'Fortnite client executable is unreadable', relativeExecutable)
+      }
+    }
+
+    const paksDir = path.join(folder, 'FortniteGame', 'Content', 'Paks')
+    if (!fs.existsSync(paksDir)) {
+      add('build', 'Fortnite content PAK folder is missing', path.relative(folder, paksDir))
+    }
+
+    const loose = scanLooseFiles(folder, {
+      maxDepth: payload.deep === true ? 4 : 1,
+      maxEntries: payload.deep === true ? 60_000 : 1_500,
+    })
+    looseCounts.temp = loose.temp.length
+    looseCounts.locks = loose.locks.length
+    looseCounts.archives = loose.archives.length
+    for (const file of loose.temp) {
+      loosePaths.add(file.relative.toLowerCase())
+      add('temp', 'Leftover temporary file', file.relative)
+    }
+    // A lock younger than a minute may belong to an operation still running.
+    for (const file of loose.locks) {
+      loosePaths.add(file.relative.toLowerCase())
+      if (file.ageMs >= 60_000) add('temp', 'Stale lock file', file.relative)
+    }
+    for (const file of loose.archives) {
+      loosePaths.add(file.relative.toLowerCase())
+      add('cleanup', 'Leftover downloaded archive', file.relative)
+    }
+  }
+
+  for (const problem of runtimeProblems()) add('runtime', 'VAULTED runtime needs repair', problem)
+  for (const problem of stagedRuntimeProblems()) add('runtime', 'VAULTED DLL needs repair', problem)
+
+  let launcher = null
+  const metadata = providerId ? providerRuntimeMetadata(providerId) : null
+  if (metadata) {
+    launcher = providerRuntimeStatus(providerId)
+    if (!launcher?.installed) {
+      add('launcher', `${metadata.label} is not installed`, 'Auto-Fix installs the official launcher')
+    }
+  }
+
+  let verify = null
+  if (payload.deep === true && managed && folder && fs.existsSync(folder) && executable) {
+    verify = await verifyBuild({ id, path: folder, executable })
+    if (verify.running) {
+      return { id, managed, running: true, issues: [], checkedAt, recovered }
+    }
+    const kinds = {
+      missing: 'build',
+      empty: 'build',
+      unreadable: 'build',
+      corrupt: 'build',
+      temp: 'temp',
+      runtime: 'runtime',
+    }
+    let listed = 0
+    let ignored = 0
+    for (const [kind, list] of Object.entries(verify.issues || {})) {
+      for (const item of list || []) {
+        const relative = String(item || '').replace(/\\/g, '/').toLowerCase()
+        // A fragment or lock the cleanup pass owns is not also a broken build
+        // file, and a cosmetic empty cache file is not worth a full re-download.
+        if (isOptionalVerifyIssue(item, kind)) {
+          ignored += 1
+          continue
+        }
+        if (loosePaths.has(relative) || loosePaths.has(item)) {
+          ignored += 1
+          continue
+        }
+        listed += 1
+        add(kinds[kind] || 'build', verifyIssueLabel(kind), item)
+      }
+    }
+    if ((verify.issueCount || 0) - ignored > listed) {
+      add(
+        'summary',
+        'More build problems found',
+        `${verify.issueCount - ignored - listed} additional file issues`,
+      )
+    }
+  }
+
+  return {
+    id,
+    managed,
+    running: false,
+    verified: verify ? verify.verified : issues.length === 0,
+    issues,
+    checkedAt,
+    launcher,
+    loose: looseCounts,
+    verify,
+    recovered,
+  }
+}
+
+/**
+ * Repair everything Auto-Fix owns without touching good game files: VAULTED
+ * runtime + staged DLLs, leftover temp/lock files, duplicate trees, stale
+ * archives and a missing/broken companion launcher. Game-file repair is driven
+ * by the renderer through the normal archive/provider sync path.
+ */
+async function autoFixRepair(payload = {}) {
+  const { id, root, target, managed } = resolveAutoFixTarget(payload)
+  if (!id) throw new Error('Invalid Auto-Fix request.')
+  if (running.has(id) || downloads.has(id)) {
+    throw new Error('Close Fortnite and wait for downloads to finish before Auto-Fix repairs this season.')
+  }
+  if (!managed) {
+    throw new Error("Auto-Fix can only repair seasons downloaded inside VAULTED's builds folder.")
+  }
+  if (await anyFortniteClientRunning()) {
+    throw new Error('Close Fortnite before running Auto-Fix.')
+  }
+  const providerId =
+    typeof payload?.providerId === 'string' ? payload.providerId.trim().toLowerCase() : ''
+  const seasonId = typeof payload?.seasonId === 'string' ? payload.seasonId.trim() : ''
+  const actions = []
+  const remaining = []
+  let freedBytes = 0
+  const report = (phase, label, percent) =>
+    send('arc:autofix-progress', { id, phase, label, percent })
+  const messageOf = (error) => (error instanceof Error ? error.message : String(error || ''))
+
+  report('runtime', 'Repairing VAULTED runtime files…', 8)
+  try {
+    await ensureRuntimeInstalled()
+    await stageCoreRuntimeDlls()
+    actions.push('Restored VAULTED runtime files (injector, Tellurium, Cobalt, Server DLL)')
+  } catch (error) {
+    remaining.push(messageOf(error))
+  }
+
+  let metadata = null
+  if (providerId) {
+    metadata = providerRuntimeMetadata(providerId)
+    report('dlls', `Staging ${metadata?.label || providerId} DLLs…`, 24)
+    try {
+      const staged = await stageSeasonLauncherDlls(providerId)
+      if (staged.staged.length > 0) {
+        actions.push(`Verified ${staged.staged.length} launcher DLLs`)
+      }
+    } catch (error) {
+      remaining.push(messageOf(error))
+    }
+  }
+
+  let recovered = null
+  let folder = target
+  if (managed && folder && !fs.existsSync(folder) && seasonId) {
+    const candidate = path.join(root, seasonId)
+    const found = fs.existsSync(candidate) ? findPrimaryExecutable(candidate) : null
+    if (found) {
+      recovered = { folder: folderForExecutable(found), executable: found }
+      folder = recovered.folder
+      actions.push(`Recovered the install path ${folder}`)
+    }
+  }
+
+  if (folder && fs.existsSync(folder)) {
+    report('cleanup', 'Removing temp files and stale locks…', 46)
+    const removal = removeLooseFiles(folder, { includeArchives: false })
+    freedBytes += removal.freedBytes
+    if (removal.removed.length > 0) {
+      actions.push(`Removed ${removal.removed.length} temporary or stale lock file(s)`)
+    }
+    if (removal.kept.length > 0) {
+      remaining.push(`${removal.kept.length} recent lock file(s) kept because they may be in use`)
+    }
+
+    report('cleanup', 'Cleaning duplicate installs and old archives…', 64)
+    try {
+      const executable = recovered?.executable || payload?.executable || ''
+      const cleanup = await cleanupManagedBuild(
+        seasonId || path.basename(folder),
+        folder,
+        executable ? folderForExecutable(executable) : folder,
+      )
+      if (cleanup) {
+        freedBytes += cleanup.freedBytes || 0
+        const removedCount = (cleanup.removed || []).length
+        if (removedCount > 0) actions.push(`Removed ${removedCount} leftover archive or broken tree(s)`)
+      }
+    } catch (error) {
+      remaining.push(messageOf(error))
+    }
+  } else if (managed) {
+    remaining.push('The season folder is missing, so its game files need a fresh download')
+  }
+
+  let launcher = null
+  if (metadata) {
+    const status = providerRuntimeStatus(providerId)
+    let force = payload?.forceLauncher === true
+    if (status?.installed && !force) {
+      const executable = installedExecutable(metadata)
+      try {
+        const stat = executable ? fs.statSync(executable) : null
+        if (!stat || stat.size === 0) force = true
+      } catch {
+        force = true
+      }
+    }
+    if (!status?.installed || force) {
+      report('launcher', `${force ? 'Repairing' : 'Installing'} ${metadata.label}…`, 80)
+      try {
+        launcher = await ensureProviderRuntime(providerId, metadata, {
+          root: path.join(app.getPath('userData'), 'provider-runtimes'),
+          forceInstall: force,
+        })
+        actions.push(
+          `${metadata.label}${launcher?.version ? ` ${launcher.version}` : ''} ${force ? 'repaired' : 'installed'}`,
+        )
+      } catch (error) {
+        remaining.push(messageOf(error))
+      }
+    }
+  }
+
+  report('done', 'Auto-Fix finished', 100)
+  return { id, actions, remaining, removed: [], freedBytes, recovered, launcher }
+}
+
 const PROVIDER_ACCOUNT_STATUS_PREFIX = 'VAULTED_PROVIDER_ACCOUNT_STATUS:'
 const PROVIDER_BUILD_STATUS_PREFIX = 'VAULTED_PROVIDER_BUILD_STATUS:'
 
@@ -5763,6 +6133,8 @@ function registerIpc() {
   })
 
   ipcMain.handle('arc:verify-build', (_event, payload) => verifyBuild(payload))
+  ipcMain.handle('arc:autofix-scan', (_event, payload) => autoFixScan(payload))
+  ipcMain.handle('arc:autofix-repair', (_event, payload) => autoFixRepair(payload))
 
   ipcMain.handle('arc:scan-builds', (_event, roots) => scanForBuilds(roots))
 

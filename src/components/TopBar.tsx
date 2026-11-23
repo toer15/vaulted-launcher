@@ -1,4 +1,4 @@
-import { LayoutGrid, LockKeyhole, LogIn, Radio, Settings2, Sparkles, Store, Users } from 'lucide-react'
+import { LayoutGrid, LockKeyhole, LogIn, Radio, Settings2, Sparkles, Store, Users, Wrench } from 'lucide-react'
 import brandIcon from '../assets/brand-icon.png'
 import { AccountChip } from './AccountChip'
 import { WindowControls } from './WindowControls'
@@ -23,11 +23,13 @@ interface TopBarProps {
   settingsActive: boolean
   shopActive: boolean
   friendsActive: boolean
+  autoFixActive: boolean
   friendRequests: number
   onOpenLibrary: () => void
   onOpenSettings: () => void
   onOpenShop: () => void
   onOpenFriends: () => void
+  onOpenAutoFix: () => void
   onSignIn: () => void
   onLogout: () => void
 }
@@ -44,11 +46,13 @@ export function TopBar({
   settingsActive,
   shopActive,
   friendsActive,
+  autoFixActive,
   friendRequests,
   onOpenLibrary,
   onOpenSettings,
   onOpenShop,
   onOpenFriends,
+  onOpenAutoFix,
   onSignIn,
   onLogout,
 }: TopBarProps) {
@@ -136,6 +140,22 @@ export function TopBar({
         >
           <Store className="h-4 w-4" />
           <span className="hidden sm:inline">Item Shop</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={onOpenAutoFix}
+          aria-pressed={autoFixActive}
+          title="Auto-Fix — scan and repair downloaded seasons"
+          className={cx(
+            'app-no-drag inline-flex items-center gap-2 rounded-xl border px-2.5 py-2 text-[12px] font-medium transition-all duration-300',
+            autoFixActive
+              ? 'border-emerald-400/50 bg-emerald-400/15 text-emerald-100'
+              : 'border-line bg-panel/70 text-fog hover:border-emerald-400/45 hover:bg-panel-hi hover:text-mist',
+          )}
+        >
+          <Wrench className="h-4 w-4" />
+          <span className="hidden sm:inline">Auto-Fix</span>
         </button>
 
         <button

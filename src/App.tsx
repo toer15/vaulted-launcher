@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActiveBuildCard } from './components/ActiveBuildCard'
+import { AutoFixView, type AutoFixEntryView } from './components/AutoFixView'
 import { AddBuildDialog } from './components/AddBuildDialog'
 import { ConnectAccountModal } from './components/ConnectAccountModal'
 import { DiscordGateModal } from './components/DiscordGateModal'
@@ -12,6 +13,12 @@ import { SettingsView } from './components/SettingsView'
 import { ToastStack } from './components/Toast'
 import { TopBar } from './components/TopBar'
 import { artKeyFor } from './lib/art'
+import {
+  repairAutoFix,
+  scanAutoFix,
+  subscribeAutoFixProgress,
+  type AutoFixTarget,
+} from './lib/autoFix'
 import { fetchFriends, type LobbyInfo } from './lib/friends'
 import {
   mergeLobbies,
@@ -370,9 +377,18 @@ export default function App() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
-  const [view, setView] = useState<'home' | 'shop' | 'settings' | 'friends'>('home')
+  const [view, setView] = useState<'home' | 'shop' | 'settings' | 'friends' | 'autofix'>('home')
   const [friendRequests, setFriendRequests] = useState(0)
   const [verifyJobs, setVerifyJobs] = useState<Record<string, VerifyJob>>({})
+  // Auto-Fix runs outside the season card so one pass can cover every
+  // downloaded season without changing its play route.
+  const [autoFixEntries, setAutoFixEntries] = useState<Record<string, AutoFixEntryView>>({})
+  const [autoFixScanning, setAutoFixScanning] = useState(false)
+  const [autoFixScanLabel, setAutoFixScanLabel] = useState<string | null>(null)
+  const [autoFixFixingAll, setAutoFixFixingAll] = useState(false)
+  const autoFixBusyRef = useRef(false)
+  const autoFixScannedRef = useRef(false)
+  const launchHealthChecked = useRef<Set<string>>(new Set())
   const [launchFailure, setLaunchFailure] = useState<{
     id: string
     message: string
@@ -3780,6 +3796,331 @@ export default function App() {
     })
   }, [handleJoinFailure, native])
 
+  /* ---------------------------------------------------------------- Auto-Fix */
+
+  const patchAutoFixEntry = useCallback((id: string, patch: Partial<AutoFixEntryView>) => {
+    setAutoFixEntries((prev) => {
+      const current = prev[id] || { status: 'idle' as const }
+      return { ...prev, [id]: { ...current, ...patch } }
+    })
+  }, [])
+
+  const autoFixTargetFor = useCallback(
+    (build: Build): AutoFixTarget => ({
+      id: build.id,
+      path: build.path,
+      executable: build.executable,
+      providerId: build.onlineProvider?.id || '',
+      seasonId: artKeyFor(build.season) || build.id,
+    }),
+    [],
+  )
+
+  /** A stale profile can be re-pointed at the tree main found on disk. */
+  const adoptAutoFixRecovery = useCallback(
+    (
+      build: Build,
+      recovered: { folder: string; executable: string } | null | undefined,
+    ): Build => {
+      if (!recovered) return build
+      const next: Build = { ...build, path: recovered.folder, executable: recovered.executable }
+      setBuilds((prev) => prev.map((item) => (item.id === build.id ? next : item)))
+      setInstalled((prev) => ({ ...prev, [build.id]: true }))
+      rememberInstalledBuild(next, recovered.folder)
+      return next
+    },
+    [rememberInstalledBuild],
+  )
+
+  const scanAutoFixSeason = useCallback(
+    async (build: Build, deep = true) => {
+      patchAutoFixEntry(build.id, {
+        status: 'scanning',
+        label: `Checking ${build.season.label}…`,
+        percent: 6,
+        summary: undefined,
+        error: undefined,
+      })
+      try {
+        const scan = await scanAutoFix(autoFixTargetFor(build), deep)
+        adoptAutoFixRecovery(build, scan.recovered)
+        patchAutoFixEntry(build.id, {
+          status: 'done',
+          scan,
+          label: scan.running ? 'Fortnite is running' : 'Scan complete',
+          percent: 100,
+          error: undefined,
+        })
+        return scan
+      } catch (error) {
+        const message = nativeMessage(
+          error instanceof Error ? error.message : 'The season could not be scanned.',
+        )
+        patchAutoFixEntry(build.id, { status: 'done', percent: 100, error: message })
+        return null
+      }
+    },
+    [adoptAutoFixRecovery, autoFixTargetFor, patchAutoFixEntry],
+  )
+
+  const scanAllAutoFix = useCallback(async () => {
+    if (autoFixBusyRef.current) return
+    const targets = builds.filter(
+      (build) => installed[build.id] && !build.archived && isManagedBuild(build),
+    )
+    if (targets.length === 0) return
+    autoFixBusyRef.current = true
+    setAutoFixScanning(true)
+    try {
+      for (let index = 0; index < targets.length; index += 1) {
+        const build = targets[index]
+        setAutoFixScanLabel(
+          `Scanning ${index + 1} of ${targets.length} · ${build.season.label}`,
+        )
+        await scanAutoFixSeason(build, true)
+      }
+    } finally {
+      autoFixScannedRef.current = true
+      setAutoFixScanLabel(null)
+      setAutoFixScanning(false)
+      autoFixBusyRef.current = false
+    }
+  }, [builds, installed, scanAutoFixSeason])
+
+  /**
+   * Repair only the damaged parts of a build. A managed provider sync reuses
+   * every file that still matches its manifest; a season without a live
+   * manifest repairs from its configured archive while the old tree is kept as
+   * a `.vaulted-previous` backup.
+   */
+  const repairGameFilesForAutoFix = useCallback(
+    async (build: Build) => {
+      const seasonId = artKeyFor(build.season) || build.id
+      const provider = build.onlineProvider
+        ? providerCatalog.find((entry) => entry.id === build.onlineProvider?.id) ?? null
+        : null
+      const source = seasonManifest[seasonId]
+      if (provider && provider.mode !== 'external') {
+        const synced = await beginProviderSync(build, {
+          providerId: provider.id,
+          seasonId,
+          quiet: true,
+        })
+        if (!synced) throw new Error('The online build could not be repaired.')
+        return
+      }
+      if (source?.downloadUrl) {
+        await beginDownload(build, source.downloadUrl, source.sha256, source.fallbackDownloadUrl, {
+          repair: true,
+          launchAfter: false,
+          preferredFolder: source.buildVersion || undefined,
+          buildVersion: source.buildVersion || undefined,
+          providerId: provider?.id,
+          seasonId,
+          buildId: source.providerBuild?.buildId,
+        })
+        return
+      }
+      if (source?.providerBuild) {
+        const synced = await beginProviderSync(build, {
+          ...source.providerBuild,
+          seasonId,
+          quiet: true,
+        })
+        if (!synced) throw new Error('The live build could not be repaired.')
+        return
+      }
+      throw new Error('This season has no downloadable build source to repair from.')
+    },
+    [beginDownload, beginProviderSync, providerCatalog, seasonManifest],
+  )
+
+  const fixAutoFixSeason = useCallback(
+    async (build: Build) => {
+      if (autoFixBusyRef.current) return
+      autoFixBusyRef.current = true
+      setLaunchFailure((current) => (current?.id === build.id ? null : current))
+      patchAutoFixEntry(build.id, {
+        status: 'fixing',
+        label: 'Scanning before repair…',
+        percent: 4,
+        error: undefined,
+        summary: undefined,
+      })
+      try {
+        const before = await scanAutoFix(autoFixTargetFor(build), true)
+        let current = adoptAutoFixRecovery(build, before.recovered)
+        const found = before.issues.length
+        if (before.running) {
+          patchAutoFixEntry(build.id, {
+            status: 'done',
+            scan: before,
+            label: 'Close Fortnite first',
+            percent: 100,
+          })
+          return
+        }
+
+        if (before.issues.some((issue) => issue.kind === 'build' || issue.kind === 'path')) {
+          patchAutoFixEntry(build.id, {
+            status: 'fixing',
+            label: 'Repairing game files…',
+            percent: 28,
+          })
+          await repairGameFilesForAutoFix(current)
+          // The download may have moved the install to its canonical folder.
+          await new Promise((resolve) => setTimeout(resolve, 150))
+          const latest = buildsRef.current.find((item) => item.id === build.id)
+          if (latest) current = latest
+        }
+
+        patchAutoFixEntry(build.id, {
+          status: 'fixing',
+          label: 'Repairing DLLs, launcher and leftovers…',
+          percent: 66,
+        })
+        const repair = await repairAutoFix(autoFixTargetFor(current))
+        current = adoptAutoFixRecovery(current, repair.recovered)
+
+        patchAutoFixEntry(build.id, {
+          status: 'fixing',
+          label: 'Re-checking the repaired season…',
+          percent: 92,
+        })
+        const after = await scanAutoFix(autoFixTargetFor(current), true)
+        adoptAutoFixRecovery(current, after.recovered)
+        const remaining = after.running ? 0 : after.issues.length
+        launchHealthChecked.current.delete(build.id)
+        patchAutoFixEntry(build.id, {
+          status: 'done',
+          scan: after,
+          label: remaining === 0 ? 'Auto-Fix finished' : 'Auto-Fix needs attention',
+          percent: 100,
+          summary: {
+            found,
+            fixed: Math.max(0, found - remaining),
+            remaining,
+            freedBytes: repair.freedBytes,
+          },
+        })
+        pushToast({
+          tone: remaining === 0 ? 'success' : 'info',
+          title:
+            remaining === 0
+              ? `${build.season.label} is healthy`
+              : `${build.season.label} needs attention`,
+          description:
+            remaining === 0
+              ? `${found === 0 ? 'No problems found' : `${found} problem${found === 1 ? '' : 's'} fixed`}${repair.actions.length > 0 ? ` · ${repair.actions[0]}` : ''}.`
+              : `${remaining} problem${remaining === 1 ? '' : 's'} remain — open Auto-Fix for details.`,
+        })
+      } catch (error) {
+        const message = nativeMessage(
+          error instanceof Error ? error.message : 'Auto-Fix could not finish.',
+        )
+        patchAutoFixEntry(build.id, {
+          status: 'done',
+          percent: 100,
+          label: 'Auto-Fix could not finish',
+          error: message,
+        })
+        pushToast({ tone: 'error', title: 'Auto-Fix failed', description: message })
+      } finally {
+        autoFixBusyRef.current = false
+      }
+    },
+    [
+      adoptAutoFixRecovery,
+      autoFixTargetFor,
+      beginDownload,
+      builds,
+      patchAutoFixEntry,
+      providerCatalog,
+      pushToast,
+      repairGameFilesForAutoFix,
+      seasonManifest,
+    ],
+  )
+
+  const fixAllAutoFix = useCallback(async () => {
+    if (autoFixBusyRef.current) return
+    const targets = builds.filter(
+      (build) => installed[build.id] && !build.archived && isManagedBuild(build),
+    )
+    if (targets.length === 0) return
+    setAutoFixFixingAll(true)
+    try {
+      for (const build of targets) await fixAutoFixSeason(build)
+    } finally {
+      setAutoFixFixingAll(false)
+    }
+  }, [builds, fixAutoFixSeason, installed])
+
+  // Live repair progress from main keeps the Auto-Fix rows moving without
+  // polling the filesystem.
+  useEffect(() => {
+    if (!native) return
+    return subscribeAutoFixProgress((progress) => {
+      setAutoFixEntries((prev) => {
+        const current = prev[progress.id]
+        if (!current) return prev
+        return {
+          ...prev,
+          [progress.id]: {
+            ...current,
+            status: progress.phase === 'done' ? current.status : 'fixing',
+            label: progress.label,
+            percent: progress.percent,
+          },
+        }
+      })
+    })
+  }, [native])
+
+  useEffect(() => {
+    if (view !== 'autofix' || !native) return
+    if (autoFixScannedRef.current || builds.length === 0) return
+    autoFixScannedRef.current = true
+    void scanAllAutoFix()
+  }, [builds.length, native, scanAllAutoFix, view])
+
+  /**
+   * Fast pre-launch check. Repairs runtime DLLs, stale leftovers and a broken
+   * launcher silently; if game files are still damaged it opens Auto-Fix
+   * instead of launching a client that is guaranteed to fail.
+   */
+  const preLaunchAutoFix = useCallback(
+    async (build: Build): Promise<boolean> => {
+      if (!native || !installed[build.id] || !isManagedBuild(build)) return true
+      if (launchHealthChecked.current.has(build.id)) return true
+      try {
+        const target = autoFixTargetFor(build)
+        let scan = await scanAutoFix(target, false)
+        if (scan.running) return true
+        if (scan.issues.length > 0) {
+          await repairAutoFix(target)
+          scan = await scanAutoFix(target, false)
+        }
+        if (scan.issues.length === 0) {
+          launchHealthChecked.current.add(build.id)
+          return true
+        }
+        await scanAutoFixSeason(build, true)
+        setView('autofix')
+        pushToast({
+          tone: 'info',
+          title: `${build.season.label} needs Auto-Fix`,
+          description: `${scan.issues[0]?.label || 'Files are damaged'}. Run Auto-Fix before launching.`,
+        })
+        return false
+      } catch {
+        // A diagnostic failure must never block a launch.
+        return true
+      }
+    },
+    [autoFixTargetFor, installed, native, pushToast, scanAutoFixSeason],
+  )
+
   const handlePrimary = useCallback(async () => {
     const build = activeBuild
     if (!build) return
@@ -3828,6 +4169,10 @@ export default function App() {
       }
       return
     }
+
+    // Fast pre-launch health check: repair DLL/launcher/leftover damage, and
+    // send a genuinely broken install to Auto-Fix instead of starting it.
+    if (!(await preLaunchAutoFix(build))) return
 
     // Discord-only seasons use the same first step as a launcher install:
     // verify the community (or detect its already-installed launcher) before
@@ -3888,6 +4233,7 @@ export default function App() {
     handleInstallRuntime,
     installed,
     openRetracBuild,
+    preLaunchAutoFix,
     seasonManifest,
     phase,
     providerOnly,
@@ -4663,16 +5009,32 @@ export default function App() {
           settingsActive={view === 'settings'}
           shopActive={view === 'shop'}
           friendsActive={view === 'friends'}
+          autoFixActive={view === 'autofix'}
           friendRequests={friendRequests}
           onOpenLibrary={() => setDrawerOpen(true)}
           onOpenSettings={() => setView((current) => (current === 'settings' ? 'home' : 'settings'))}
           onOpenShop={() => setView((current) => (current === 'shop' ? 'home' : 'shop'))}
+          onOpenAutoFix={() => setView((current) => (current === 'autofix' ? 'home' : 'autofix'))}
           onOpenFriends={handleOpenFriends}
           onSignIn={() => setSignInOpen(true)}
         />
 
         <main className="mt-5 flex min-h-0 flex-1 flex-col overflow-y-auto pr-1 sm:mt-6">
-          {view === 'settings' ? (
+          {view === 'autofix' ? (
+            <AutoFixView
+              builds={builds.filter(
+                (build) => installed[build.id] && !build.archived && isManagedBuild(build),
+              )}
+              entries={autoFixEntries}
+              scanning={autoFixScanning}
+              scanLabel={autoFixScanLabel}
+              fixingAll={autoFixFixingAll}
+              onBack={() => setView('home')}
+              onScanAll={() => void scanAllAutoFix()}
+              onFixAll={() => void fixAllAutoFix()}
+              onFix={(build) => void fixAutoFixSeason(build)}
+            />
+          ) : view === 'settings' ? (
             <SettingsView
               build={settingsBuild}
               installed={activeBuild ? Boolean(installed[activeBuild.id]) : false}
