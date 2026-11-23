@@ -40,7 +40,13 @@ const REMOVED_PROVIDERS = new Set(['neo', 'neo-official', 'neonite'])
 // Reboot always starts its embedded LawinServer on loopback; it is not a public
 // online route even when it joins a community game server. Echo's installer was
 // confirmed malicious and must never be routed again.
-const BANNED_PROVIDERS = new Set(['reboot', 'reboot-official', 'echo'])
+const BANNED_PROVIDERS = new Set([
+  'reboot',
+  'reboot-official',
+  'echo',
+  // Defender: Trojan:Win32/Suschil!rfn in the official installer (2026-11-23).
+  'legacy-official',
+])
 const LOOPBACK = /(?:^|[/:@])(?:127\.0\.0\.1|localhost|\[::1\])(?:[/:]|$)/i
 const MANAGED_MODES = new Set(['global_live'])
 

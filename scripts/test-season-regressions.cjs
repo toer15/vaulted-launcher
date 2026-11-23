@@ -376,6 +376,63 @@ function testWorkingSeasons() {
   assert.match(providerRuntime(providerProfile('reboot'), { legacy: true }).dll, /Cobalt\.dll$/)
 }
 
+function testResearchedLaunchersStayUnwired() {
+  // 2026-11-23 research sweep. The community index (awesome-ogfn) lists six
+  // hosted OG Fortnite projects: Stellar, Retrac, EZFN, Era, Eon and Neo.
+  // Everything else found online was rejected on evidence, and none of it may
+  // quietly become a green online route or an installer VAULTED runs.
+  assert.equal(isBannedProvider('legacy-official'), true, 'Project Legacy must stay banned')
+  assert.equal(
+    providerCatalog().some((entry) => entry.id === 'legacy-official'),
+    false,
+    'a banned launcher must never reach the renderer',
+  )
+  const legacy = JSON.parse(read('resources/providers/provider.json')).providers.find(
+    (entry) => entry.id === 'legacy-official',
+  )
+  assert.equal(legacy?.banned, true, 'Project Legacy must be marked banned in the catalog')
+  assert.deepEqual(legacy?.seasons, [], 'Project Legacy owns no season')
+  assert.equal(legacy?.runtime, undefined, 'Project Legacy must have no installable runtime')
+  assert.match(
+    legacy?.bannedReason || '',
+    /Trojan:Win32\/Suschil|Defender/i,
+    'the Defender detection must stay documented',
+  )
+  assert.ok(
+    !providerRuntimeMetadata('legacy-official'),
+    'no installer metadata may revive the flagged Legacy download',
+  )
+  for (const value of Object.values(builds.seasons)) {
+    assert.equal(
+      routeIds(value).includes('legacy-official'),
+      false,
+      `${value.id} must not route through the flagged Project Legacy launcher`,
+    )
+  }
+
+  // Prototypes that only ship a Discord invite, a dead host, or an installer we
+  // could not verify stay locked instead of gaining a launcher by accident.
+  for (const id of ['ch1-s3', 'ch1-s4', 'ch1-s10', 'ch3-s1', 'ch4-s4', 'ch2-s1']) {
+    for (const routeId of routeIds(season(id))) {
+      const entry = providerCatalog().find((provider) => provider.id === routeId)
+      assert.ok(!entry?.runtime, `${id} must not gain an unverified installer through ${routeId}`)
+    }
+  }
+
+  // Only the four verified online seasons ship a companion launcher. A new
+  // provider without a live status sample and a clean installer must fail here.
+  const runtimeSeasons = new Set()
+  for (const entry of providerCatalog()) {
+    if (!entry.runtime) continue
+    for (const seasonId of entry.supportedSeasons || []) runtimeSeasons.add(seasonId)
+  }
+  assert.deepEqual(
+    [...runtimeSeasons].sort(),
+    ['ch2-s2', 'ch2-s4', 'ch2-s5', 'ch2-s7'],
+    'only the four verified online seasons may ship a companion launcher',
+  )
+}
+
 function testLawinServerBan() {
   // Reboot always starts an embedded LawinServer on loopback, even when its
   // server browser points a match at someone else's game server. No season may
@@ -1279,6 +1336,7 @@ async function run() {
   testLauncherOutlivesBootstrapper()
   testLaunchWiring()
   testWorkingSeasons()
+  testResearchedLaunchersStayUnwired()
   testLawinServerBan()
   testOnlineRoutes()
   testDiscordOnlyDirectLaunch()

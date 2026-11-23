@@ -24,7 +24,10 @@ const SAFE_PROVIDER_ID = /^[a-z0-9][a-z0-9-]*$/i
  * 127.0.0.1. It is never a public online route, so it is excluded from the UI
  * catalog and every launch entry point rejects it.
  */
-const BANNED_PROVIDER_IDS = new Set(['reboot-official', 'reboot', 'echo'])
+// Reboot and Echo are banned for local/malicious installers. Legacy joined them
+// on 2026-11-23: Windows Defender flags its official installer as
+// Trojan:Win32/Suschil!rfn, so it must never be offered as a route again.
+const BANNED_PROVIDER_IDS = new Set(['reboot-official', 'reboot', 'echo', 'legacy-official'])
 const BANNED_PROVIDER_REASON =
   'Reboot Launcher only offers a private local backend, not public matchmaking. VAULTED will not launch it.'
 

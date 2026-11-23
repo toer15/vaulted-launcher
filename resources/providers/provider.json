@@ -722,6 +722,22 @@
         "launchArgs": [],
         "processName": "reboot_launcher.exe"
       }
+    },
+    {
+      "id": "legacy-official",
+      "name": "Project Legacy",
+      "label": "Project Legacy",
+      "banned": true,
+      "bannedReason": "Windows Defender detects Trojan:Win32/Suschil!rfn inside Project Legacy's official installer (SHA-256 9bceaabb56f498cea9b4d4c06f8c18d20085868ecf1a4368cf9c7be21880b667, checked 2026-11-23). The installer is also unsigned. VAULTED never downloads or runs it.",
+      "mode": "external",
+      "launchKind": "official",
+      "backendUrl": "https://projectlegacy.pages.dev/",
+      "website": "https://projectlegacy.pages.dev/",
+      "launchUrl": "https://projectlegacy.pages.dev/",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": []
     }
   ]
 }
