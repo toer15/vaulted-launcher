@@ -667,6 +667,10 @@ function catalogData() {
       deeplink,
       embeddedWeb,
       launchHandshakePending: entry.launchHandshakePending === true,
+      // A community gate whose guild identity was checked by hand and is
+      // still live may show ONLINE · DISCORD while the player imports the
+      // launcher. Unverified gates stay UNAVAILABLE.
+      communityVerified: entry.communityVerified === true,
       statusUrl: statusUrl ? statusUrl.toString() : '',
       liveSeason,
       population,
@@ -735,6 +739,7 @@ function providerCatalog() {
     launchKind: entry.launchKind,
     launchUrl: entry.launchUrl,
     launchHandshakePending: entry.launchHandshakePending,
+    communityVerified: entry.communityVerified === true,
     statusUrl: entry.statusUrl,
     // Optional rotation guard: a project that cycles seasons publishes its
     // current season, and a card must not claim an old one is live.
@@ -949,6 +954,7 @@ function providerProfile(id) {
         return gate ? { providerId: provider.id, ...gate } : undefined
       })(),
     launchHandshakePending: catalogEntry?.launchHandshakePending === true,
+    communityVerified: catalogEntry?.communityVerified === true,
     directLaunch: catalogEntry?.directLaunch === true,
     statusUrl: catalogEntry?.statusUrl || '',
     mode:

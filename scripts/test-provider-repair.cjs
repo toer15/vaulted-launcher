@@ -34,6 +34,7 @@ const globalProviderIds = ['stellar']
 const externalProviderIds = [
   'eon', 'hydro', 'interloop', 'crystal', 'arc', 'retrac-official',
   'slurp', 'ambient', 'reef', 'legacy-mp', 'horizon', 'sunset', 'blue-og', 'glow',
+  'rewind-official', 'origins-official',
   'reboot-official', 'neo', 'era-official', 'hestia-official',
 ]
 const dllProviderIds = [...localProviderIds, ...globalProviderIds]

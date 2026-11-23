@@ -6,6 +6,8 @@ const { inviteCode, verifyDiscordCommunity } = require('../electron/discordGate.
 const builds = require('../src/assets/builds.json')
 
 const expected = {
+  'rewind-official': 'ch4-s2',
+  'origins-official': 'ch3-s1',
   crystal: 'ch2-s5',
   arc: 'ch1-s4',
   eon: 'ch2-s7',

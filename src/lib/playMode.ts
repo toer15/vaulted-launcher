@@ -10,6 +10,7 @@ export type PlayModeLabel =
   | 'SERVER DOWN'
   | 'READY'
   | 'LAUNCHER'
+  | 'ONLINE · DISCORD'
   | 'ONLINE UNAVAILABLE'
   | 'OFFLINE'
   | 'ARCHIVED'
@@ -54,6 +55,8 @@ export interface SeasonPlayMode {
   availability?: SeasonAvailability
   /** a reachable external project hosts this season through its own launcher */
   externalAvailable?: boolean
+  /** a verified Discord community hosts the season through its own launcher */
+  communityAvailable?: boolean
   /** compact label for the reachable external project(s) */
   externalProviderLabel?: string
   /** archive-only card; never offers Play */
@@ -97,7 +100,13 @@ export function onlineIsLive(mode: SeasonPlayMode | null | undefined): boolean {
  */
 export function onlineIsPlayable(mode: SeasonPlayMode | null | undefined): boolean {
   if (!mode || mode.archived) return false
-  return onlineIsLive(mode) || mode.externalAvailable === true
+  // A verified community hosts the season on its own servers; its launcher is
+  // brought in by the two-step import before Start launches it hidden.
+  return (
+    onlineIsLive(mode) ||
+    mode.externalAvailable === true ||
+    mode.communityAvailable === true
+  )
 }
 
 /** True when the probe has finished and no online route was found. */
@@ -167,7 +176,8 @@ export function seasonStatusLabel(mode: SeasonPlayMode | null | undefined): stri
     return mode.globalOffline ? ONLINE_UNAVAILABLE_LABEL : 'CHECKING'
   }
   if (mode?.availability === 'launcher') {
-    return mode.externalAvailable ? 'LAUNCHER' : ONLINE_UNAVAILABLE_LABEL
+    if (mode.externalAvailable) return 'LAUNCHER'
+    return mode.communityAvailable ? 'ONLINE · DISCORD' : ONLINE_UNAVAILABLE_LABEL
   }
   return ONLINE_UNAVAILABLE_LABEL
 }
@@ -531,7 +541,23 @@ export function playModesForBuilds(
 ): Record<string, SeasonPlayMode> {
   const globalBySeason = new Map<string, GlobalBackend[]>()
   const externalBySeason = new Map<string, GlobalBackend[]>()
+  // Communities whose invite and guild are verified in the bundled catalog are
+  // real hosted servers. They unlock the two-step launcher import instead of
+  // pretending a health endpoint exists.
+  const communityBySeason = new Map<string, GlobalBackend[]>()
   for (const backend of globalBackends) {
+    if (
+      backend.mode === 'external' &&
+      backend.communityVerified === true &&
+      backend.discordGate &&
+      backend.discordGate.statusOnly !== true
+    ) {
+      for (const seasonId of backend.supportedSeasons) {
+        const current = communityBySeason.get(seasonId) ?? []
+        current.push(backend)
+        communityBySeason.set(seasonId, current)
+      }
+    }
     // Local launchers are not global multiplayer backends. Their probe only
     // confirms the bundled private lobby can start, so it must not make a
     // season look globally ONLINE or become Auto's chosen server.
@@ -574,6 +600,9 @@ export function playModesForBuilds(
     const hasGlobal = !archived && Boolean(seasonKey && globalBySeason.has(seasonKey))
     const external = !archived && seasonKey ? externalBySeason.get(seasonKey) ?? [] : []
     const hasExternal = external.length > 0
+    const community =
+      !archived && seasonKey ? communityBySeason.get(seasonKey) ?? [] : []
+    const hasCommunity = community.length > 0
     const configuredProviders = [
       build.onlineProvider,
       ...(build.onlineProviders ?? []),
@@ -601,7 +630,9 @@ export function playModesForBuilds(
           ? 'SERVER CHECKING'
           : hasExternal
             ? 'LAUNCHER'
-            : ONLINE_UNAVAILABLE_LABEL,
+            : hasCommunity
+              ? 'ONLINE · DISCORD'
+              : ONLINE_UNAVAILABLE_LABEL,
       lobbyCount: 0,
       playerCount: 0,
       ...(hasProvider
@@ -611,6 +642,14 @@ export function playModesForBuilds(
           }
         : {}),
       availability,
+      ...(hasCommunity && !hasExternal
+        ? {
+            communityAvailable: true,
+            externalProviderLabel: community
+              .map((provider) => provider.label)
+              .join(" / "),
+          }
+        : {}),
       ...(hasExternal
         ? {
             externalAvailable: true,

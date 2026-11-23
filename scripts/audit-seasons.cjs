@@ -173,6 +173,19 @@ function routeDetail(season, routes, statuses, problems) {
     return true
   })
 
+  // A community whose invite and guild are verified in the bundled catalog is a
+  // real hosted route. It has no health endpoint: the card reads
+  // ONLINE · DISCORD and unlocks through the two-step launcher import.
+  const community = routes.filter((route) => {
+    const provider = entryFor(route.id)
+    return provider?.mode === 'external' && provider.communityVerified === true && provider.discordGate
+  })
+  if (community.length > 0) {
+    return {
+      state: 'COMMUNITY',
+      detail: community.map((route) => route.label || route.id).join(', '),
+    }
+  }
   if (reachableManaged.length > 0) {
     return {
       state: 'MANAGED',
@@ -240,7 +253,7 @@ async function main() {
       acc[row.state] = (acc[row.state] || 0) + 1
       return acc
     },
-    { MANAGED: 0, LAUNCHER: 0, UNAVAILABLE: 0 },
+    { MANAGED: 0, LAUNCHER: 0, COMMUNITY: 0, UNAVAILABLE: 0 },
   )
 
   if (json) {
@@ -263,7 +276,7 @@ async function main() {
       )
     }
     console.log(
-      `\n${rows.length} seasons · ${counts.MANAGED} managed · ${counts.LAUNCHER} launcher · ${counts.UNAVAILABLE} unavailable`,
+      `\n${rows.length} seasons · ${counts.MANAGED} managed · ${counts.LAUNCHER} launcher · ${counts.COMMUNITY} community · ${counts.UNAVAILABLE} unavailable`,
     )
     // A Discord-only route on an unavailable season is expected: it must not
     // turn the card green. Report the count so an operator can see it was

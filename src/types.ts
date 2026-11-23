@@ -129,6 +129,12 @@ export interface GlobalBackend extends OnlineProviderConfig {
   statusUrl?: string
   /** public fallback population source when the health endpoint omits players */
   population?: ProviderPopulationConfig
+  /**
+   * This community invite and guild were verified live by hand for the
+   * bundled catalog. The card may read ONLINE · DISCORD and offer the
+   * two-step launcher import; an unverified gate keeps ONLINE UNAVAILABLE.
+   */
+  communityVerified?: boolean
   /** Discord community that must be joined before online play unlocks */
   /**
    * Discord-only community with no vendor launcher application: Start joins a

@@ -717,6 +717,11 @@
           "id": "blue-og",
           "name": "BlueOG",
           "label": "BlueOG"
+        },
+        {
+          "id": "origins-official",
+          "name": "Project Origins",
+          "label": "Origins"
         }
       ]
     },
@@ -838,7 +843,19 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 33412713556
+      "sizeBytes": 33412713556,
+      "onlineProvider": {
+        "id": "rewind-official",
+        "name": "Project Rewind",
+        "label": "Rewind"
+      },
+      "onlineProviders": [
+        {
+          "id": "rewind-official",
+          "name": "Project Rewind",
+          "label": "Rewind"
+        }
+      ]
     },
     "ch4-s3": {
       "id": "ch4-s3",

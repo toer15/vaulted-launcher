@@ -411,7 +411,6 @@ function testWorkingSeasons() {
     'ch3-s3',
     'ch3-s4',
     'ch4-s1',
-    'ch4-s2',
     'ch4-s3',
     'ch4-s5',
   ]) {
@@ -419,6 +418,30 @@ function testWorkingSeasons() {
     assert.equal(value.onlineProvider, undefined, `${id} must stay unavailable`)
     assert.equal(value.onlineProviders, undefined, `${id} must stay unavailable`)
   }
+
+  // Project Rewind is a live 2026 Chapter 4 community (Discord guild pinned
+  // and verified: 45k members, 5k online). Its season routes through the
+  // two-step community unlock, never through an installer VAULTED runs.
+  const ch4s2 = season('ch4-s2')
+  assert.equal(ch4s2.version, '24.20')
+  assert.equal(ch4s2.onlineProvider?.id, 'rewind-official', 'ch4-s2 must route through Rewind')
+  assert.deepEqual([...new Set(routeIds(ch4s2))], ['rewind-official'])
+  const rewind = providerCatalog().find((entry) => entry.id === 'rewind-official')
+  assert.ok(rewind?.discordGate, 'Rewind needs its Discord gate')
+  assert.equal(rewind.discordGate.guildId, '1419395512121032879', 'Rewind guild must stay pinned')
+  assert.equal(rewind.discordGate.inviteUrl, 'https://discord.gg/rewindmp')
+  assert.equal(rewind.runtime, undefined, 'Rewind ships no installer VAULTED runs')
+  assert.equal(rewind.directLaunch, true, 'Rewind unlocks through the community launcher import')
+
+  // Project Origins hosts Chapter 3 Season 1 (19.01). It joins the verified
+  // BlueOG route as a second, equally Discord-gated community.
+  const ch3s1 = season('ch3-s1')
+  assert.equal(ch3s1.onlineProvider?.id, 'blue-og', 'BlueOG must stay the primary Ch3 S1 route')
+  const ch3s1Routes = [...new Set(routeIds(ch3s1))]
+  assert.ok(ch3s1Routes.includes('origins-official'), 'ch3-s1 must list Origins')
+  const origins = providerCatalog().find((entry) => entry.id === 'origins-official')
+  assert.equal(origins?.discordGate?.guildId, '1500960775743733942', 'Origins guild must stay pinned')
+  assert.equal(origins?.runtime, undefined, 'Origins ships no installer VAULTED runs')
 
   // Chapter 1 Season X runs on Project Neo's verified launcher. The launcher
   // installs to %LOCALAPPDATA%\NeoLauncher\current\NeoLauncher.exe (confirmed on
@@ -925,7 +948,12 @@ function testOnlineRoutes() {
   const appHub = read('src/App.tsx')
   const playModeSource = read('src/lib/playMode.ts')
   assert.match(playModeSource, /export function onlineIsPlayable\(/)
-  assert.match(playModeSource, /onlineIsLive\(mode\) \|\| mode\.externalAvailable === true/)
+  assert.match(playModeSource, /onlineIsLive\(mode\) \|\|/)
+  assert.match(
+    playModeSource,
+    /mode\.externalAvailable === true \|\|\r?\n\s*mode\.communityAvailable === true/,
+    'a verified community route is playable too',
+  )
   const card = read('src/components/ActiveBuildCard.tsx')
   assert.match(card, /onlineIsPlayable\(playMode\)/, 'a launcher-backed season must unlock its download')
   assert.match(
@@ -990,6 +1018,8 @@ function testDiscordOnlyDirectLaunch() {
     'sunset',
     'blue-og',
     'glow',
+    'rewind-official',
+    'origins-official',
   ]
   for (const id of directIds) {
     const entry = catalog.find((provider) => provider.id === id)
@@ -1323,6 +1353,25 @@ async function testDiscordOnlyNeverCountsOnline() {
     /return Boolean\(mode\.online \|\| mode\.globalOnline \|\| mode\.externalAvailable\)/,
     'online availability must require a live backend or launcher-backed external route',
   )
+  // Playability is wider than availability: a community catalog-verified by
+  // hand is a real hosted route through the two-step launcher import, while
+  // SunSet (unverified here) keeps its invite out of both flags.
+  assert.match(
+    playMode,
+    /mode\.externalAvailable === true \|\|\r?\n\s*mode\.communityAvailable === true/,
+    'a verified community may count as playable, nothing else',
+  )
+  assert.match(playMode, /communityVerified === true/, 'only a catalog-verified community unlocks')
+  assert.doesNotMatch(
+    playMode,
+    /communityVerified:\s*true/,
+    'the renderer must not hard-code a community as verified',
+  )
+  assert.equal(
+    providerCatalog().find((entry) => entry.id === 'sunset')?.communityVerified,
+    false,
+    'an unverified community gate must keep ONLINE UNAVAILABLE',
+  )
   assert.match(
     read('src/components/BuildList.tsx'),
     /discordGate && onlineIsPlayable\(playMode\)/,
@@ -1352,6 +1401,14 @@ async function testDiscordOnlyNeverCountsOnline() {
   assert.equal(report.expectedSeasons, 43)
   assert.equal(report.seasons.length, 43, 'the audit must sweep every bundled season')
   assert.equal(report.counts.LAUNCHER, 0, 'offline mode must not report a launcher as verified')
+  assert.equal(report.counts.COMMUNITY, 3, 'only the three verified communities are community routes')
+  for (const id of ['ch4-s2', 'ch4-s4', 'ch3-s1']) {
+    assert.equal(
+      report.seasons.find((row) => row.id === id)?.state,
+      'COMMUNITY',
+      `${id} must be reported as a verified community route`,
+    )
+  }
   const ch1s3 = report.seasons.find((row) => row.id === 'ch1-s3')
   assert.equal(ch1s3?.state, 'UNAVAILABLE', 'Ch1 S3 must be locked without live evidence')
   assert.equal(ch1s3?.wired, false)

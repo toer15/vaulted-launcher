@@ -661,7 +661,8 @@
       "seasons": [
         "ch4-s4"
       ],
-      "statusUrl": "https://discord.gg/wZf8RaucJd"
+      "statusUrl": "https://discord.gg/wZf8RaucJd",
+      "communityVerified": true
     },
     {
       "id": "reboot-official",
@@ -892,6 +893,62 @@
       "external": true,
       "global": true,
       "seasons": []
+    },
+    {
+      "id": "rewind-official",
+      "name": "Project Rewind",
+      "label": "Rewind",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://www.rewindmp.com/",
+      "website": "https://www.rewindmp.com/",
+      "launchUrl": "https://discord.gg/rewindmp",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "rewindmp",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/rewindmp",
+        "guildId": "1419395512121032879",
+        "label": "Rewind Discord"
+      },
+      "seasons": [
+        "ch4-s2"
+      ],
+      "statusUrl": "https://www.rewindmp.com/",
+      "communityVerified": true
+    },
+    {
+      "id": "origins-official",
+      "name": "Project Origins",
+      "label": "Origins",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/PHfHHukX3",
+      "launchUrl": "https://discord.gg/PHfHHukX3",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "PHfHHukX3",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/PHfHHukX3",
+        "guildId": "1500960775743733942",
+        "label": "Origins Discord"
+      },
+      "seasons": [
+        "ch3-s1"
+      ],
+      "statusUrl": "https://discord.gg/PHfHHukX3",
+      "communityVerified": true
     }
   ]
 }
