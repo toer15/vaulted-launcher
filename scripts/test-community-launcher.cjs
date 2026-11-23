@@ -69,6 +69,7 @@ assert.match(candidates[0].path, /Downloads[\\/]GlowLauncher\.exe$/)
 assert.equal(launcher.installerType('Type = NSIS'), 'nsis')
 assert.equal(launcher.installerType('Type = Inno'), 'inno')
 assert.equal(launcher.installerType('Type = Zip'), 'archive')
+assert.equal(launcher.installerType('Type = PE'), 'portable', 'a bare program image is a portable launcher')
 assert.deepEqual(launcher.SILENT_ARGUMENTS.nsis[0], ['/S'])
 assert.deepEqual(launcher.SILENT_ARGUMENTS.inno[0], ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART'])
 
@@ -164,6 +165,96 @@ assert.match(app, /openProviderLauncher\(/)
 assert.match(app, /onLauncherImported=\{handleCommunityLauncherImported\}/)
 assert.match(app, /The community launcher stays hidden off-screen while Fortnite runs/)
 
-console.log(
-  'community launcher checks passed: LawinServer/127.0.0.1 refusal, Downloads detection, silent switches, provider-scoped executable record, hidden launch wiring, two-step Discord UI, and an unchanged installer/local-server ban',
-)
+// --- 8. A portable launcher is linked in place, never re-run as a setup ----
+
+async function checkPortableLauncher() {
+  const sevenZip = safety.sevenZipBinary()
+  assert.ok(sevenZip, 'the bundled 7-Zip helper is available')
+  assert.equal(await launcher.detectInstallerKind(sevenZip), 'portable', 'a bare .exe is portable')
+
+  const portableDir = path.join(tempRoot, 'portable')
+  fs.mkdirSync(portableDir, { recursive: true })
+  const portable = path.join(portableDir, 'OriginsLauncher.exe')
+  fs.copyFileSync(sevenZip, portable)
+
+  assert.equal(
+    await launcher.inspectExecutableForLocalBackend(portable),
+    null,
+    'a plain program image passes the binary backend scan',
+  )
+  const bundledName = ['Law', 'in', 'Server'].join('')
+  const bundled = path.join(portableDir, 'Bundled.exe')
+  fs.copyFileSync(sevenZip, bundled)
+  fs.appendFileSync(bundled, Buffer.from(`\nbaseUrl=http://127.0.0.1:3551/api\n`))
+  assert.match(
+    String(await launcher.inspectExecutableForLocalBackend(bundled)),
+    /self-hosted lobby/,
+    'a portable launcher that points its backend at this PC is refused',
+  )
+  const bundledNamed = path.join(portableDir, 'Community.exe')
+  fs.copyFileSync(sevenZip, bundledNamed)
+  fs.appendFileSync(bundledNamed, Buffer.from(`\n${bundledName}.exe\n`))
+  assert.match(
+    String(await launcher.inspectExecutableForLocalBackend(bundledNamed)),
+    /local game backend/,
+    'a portable launcher bundling the banned backend is refused',
+  )
+
+  // The setup path still claims installer-looking names.
+  const setupNamed = path.join(portableDir, 'GlowSetup.exe')
+  fs.copyFileSync(sevenZip, setupNamed)
+  assert.equal(await launcher.detectInstallerKind(setupNamed), 'nsis', 'a setup-named .exe keeps the installer path')
+
+  // Importing the portable launcher records it where it is, with no install.
+  const store = path.join(tempRoot, 'portable-store')
+  const portableEnv = { USERPROFILE: tempRoot, LOCALAPPDATA: path.join(tempRoot, 'LocalAppData') }
+  const phases = []
+  const result = await launcher.importCommunityLauncher({
+    providerId: 'origins',
+    label: 'Origins',
+    file: portable,
+    root: store,
+    env: portableEnv,
+    report: (step) => phases.push(step.phase),
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.portable, true, 'a plain launcher .exe imports as portable')
+  assert.equal(result.executableName, 'OriginsLauncher.exe')
+  assert.deepEqual(phases, ['installing', 'done'])
+  assert.equal(fs.existsSync(portable), true, 'the portable launcher is not consumed by an install')
+  assert.equal(
+    fs.existsSync(path.join(store, 'origins', 'launcher')),
+    false,
+    'nothing is unpacked or installed for a portable launcher',
+  )
+  assert.equal(
+    launcher.communityLauncherExecutable('origins', store),
+    path.normalize(portable),
+    'the recorded launcher is the exact file the player picked',
+  )
+  assert.equal(launcher.communityLauncherStatus('origins', store).portable, true)
+
+  await assert.rejects(
+    launcher.importCommunityLauncher({
+      providerId: 'glow',
+      label: 'Glow',
+      file: bundled,
+      root: store,
+      env: portableEnv,
+      report: () => {},
+    }),
+    /self-hosted lobby/,
+    'a portable launcher with a local backend never imports',
+  )
+}
+
+checkPortableLauncher()
+  .then(() => {
+    console.log(
+      'community launcher checks passed: LawinServer/127.0.0.1 refusal, Downloads detection, silent switches, portable .exe linked in place without reinstalling, provider-scoped executable record, hidden launch wiring, two-step Discord UI, and an unchanged installer/local-server ban',
+    )
+  })
+  .catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })

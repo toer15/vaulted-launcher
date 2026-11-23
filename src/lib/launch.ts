@@ -913,7 +913,7 @@ export async function fetchCommunityLauncherStatus(
 export async function importCommunityLauncherFile(
   providerId: string,
   file: string,
-): Promise<{ ok: boolean; executableName?: string; defender?: string }> {
+): Promise<{ ok: boolean; portable?: boolean; executableName?: string; defender?: string }> {
   if (!window.arc?.communityLauncher) {
     throw new Error('Importing a community launcher needs the desktop app.')
   }

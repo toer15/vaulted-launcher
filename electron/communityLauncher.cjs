@@ -17,6 +17,10 @@ const { installExe, installMsi } = require('./providerRuntime.cjs')
  * anything that would start a self-hosted local backend, installs only
  * after those checks pass, and records the installed executable per provider.
  *
+ * Many communities ship a portable launcher instead of a setup program: a
+ * single .exe the player just runs. Those are recognised as portable, recorded
+ * exactly where the player keeps them, and never re-run with setup switches.
+ *
  * Nothing here starts a local game server. The launcher that gets installed is
  * the community's own hosted client; VAULTED only opens it hidden.
  */
@@ -30,6 +34,10 @@ const MAX_CONFIG_FILE_BYTES = 256 * 1024
 const MAX_CONFIG_FILES = 12
 const DEFENDER_TIMEOUT_MS = 300_000
 const INSTALL_SCAN_BUDGET = 8000
+const SETUP_NAME = /(?:setup|install|patch|updater)/i
+const BINARY_CHUNK_BYTES = 8 * 1024 * 1024
+const BINARY_OVERLAP_BYTES = 4096
+const MAX_BINARY_SCAN_BYTES = 768 * 1024 * 1024
 
 // A banned local game backend is a self-hosted lobby, not the hosted server
 // the player joined the community for. The token is assembled at runtime so
@@ -272,7 +280,51 @@ function installerType(listingText) {
   if (/msi|installer/i.test(type)) return 'msi'
   if (/rar/i.test(type)) return 'rar'
   if (/zip|7z|gzip|tar/i.test(type)) return 'archive'
+  // 7-Zip reports a plain executable as PE (or Coff/MZ for older toolchains)
+  // and lists no archive entries for it: that file is the launcher itself.
+  if (/^(?:pe|coff|mz)$/i.test(type)) return 'portable'
   return ''
+}
+
+/**
+ * A portable launcher is a bare executable, so there is no archive config to
+ * read. Scan the program image itself for a bundled local backend instead: a
+ * banned backend module name, or a loopback host held next to backend/API
+ * wording. Plain `localhost` debug strings alone do not trip it.
+ */
+async function inspectExecutableForLocalBackend(file) {
+  if (safeExtension(file) !== '.exe') return null
+  let handle
+  try {
+    handle = await fs.promises.open(file, 'r')
+  } catch {
+    return null
+  }
+  try {
+    const buffer = Buffer.allocUnsafe(BINARY_CHUNK_BYTES + BINARY_OVERLAP_BYTES)
+    let position = 0
+    let carry = 0
+    let total = 0
+    while (total < MAX_BINARY_SCAN_BYTES) {
+      const { bytesRead } = await handle.read(buffer, carry, BINARY_CHUNK_BYTES, position)
+      if (bytesRead <= 0) break
+      const length = carry + bytesRead
+      const text = buffer.subarray(0, length).toString('latin1')
+      if (LAWIN_MARKER.test(text)) {
+        return 'This launcher is bundled with a local game backend, which VAULTED does not run.'
+      }
+      if (LOCAL_HOST.test(text) && BACKEND_CONTEXT.test(text)) {
+        return 'This launcher points its backend at this PC (127.0.0.1/localhost), so it is a self-hosted lobby, not the hosted community server.'
+      }
+      carry = Math.min(length, BINARY_OVERLAP_BYTES)
+      buffer.copy(buffer, 0, length - carry, length)
+      position += bytesRead
+      total += bytesRead
+    }
+    return null
+  } finally {
+    await handle.close()
+  }
 }
 
 /** Full safety gate for one launcher file: SFX + Defender + local backend. */
@@ -280,6 +332,12 @@ async function scanCommunityLauncher(file, options = {}) {
   const validated = validateInstallerPath(file)
   if (!validated.ok) return { safe: false, reason: validated.reason }
   const target = validated.path
+
+  // A bare launcher has no archive config, so its program image is checked for
+  // a bundled local backend first: that answer is more precise than the SFX
+  // gate's generic quarantine message.
+  const binaryBackend = await inspectExecutableForLocalBackend(target)
+  if (binaryBackend) return { safe: false, reason: binaryBackend }
 
   // WinRAR SFX with an embedded VBS/BAT setup script is deleted here, before
   // anything is installed or spawned. Same gate as VAULTED's own downloads.
@@ -399,7 +457,13 @@ async function detectInstallerKind(file, options = {}) {
   const binary = sevenZipBinary(options)
   if (!binary) return 'nsis'
   const listing = await run7z(binary, ['l', '-slt', file])
-  return installerType(listing.stdout) || 'nsis'
+  const kind = installerType(listing.stdout)
+  if (kind === 'portable') {
+    // A setup program can also report as PE when 7-Zip cannot parse it, so a
+    // name that says it installs keeps the installer path.
+    return SETUP_NAME.test(path.basename(file, extension)) ? 'nsis' : 'portable'
+  }
+  return kind || 'nsis'
 }
 
 async function extractArchive(file, target, options = {}) {
@@ -502,28 +566,40 @@ async function importCommunityLauncher(payload = {}) {
   report({ phase: 'installing', name: scan.name })
   const label = String(payload.label || providerId)
   const tokens = providerTokens(label, providerId)
-  const before = executableSnapshot(env)
   const kind = await detectInstallerKind(scan.path)
-  const extractedRoot = await installLauncherFile(scan.path, kind, {
-    env,
-    root,
-    providerId,
-    label,
-  })
-  const after = executableSnapshot(env)
-  let executable = extractedRoot ? findExecutableUnder(extractedRoot, tokens) : ''
-  if (!executable) executable = findNewExecutable(before, after, tokens)
+  let executable = ''
+  if (kind === 'portable') {
+    // A portable launcher is the program, not a setup wrapper: record the file
+    // the player picked instead of running it with installer switches. Leaving
+    // it in place also keeps any files that sit beside it next to it.
+    executable = scan.path
+  } else {
+    const before = executableSnapshot(env)
+    const extractedRoot = await installLauncherFile(scan.path, kind, {
+      env,
+      root,
+      providerId,
+      label,
+    })
+    const after = executableSnapshot(env)
+    executable = extractedRoot ? findExecutableUnder(extractedRoot, tokens) : ''
+    if (!executable) executable = findNewExecutable(before, after, tokens)
+  }
   if (!executable) {
     throw new Error(
       `${label} installed, but VAULTED could not find its launcher executable. ` +
-        'Install it normally, then press "Select / Drop Downloaded Launcher" and choose the launcher .exe.',
+        'Press "Select / Drop Downloaded Launcher" and choose the launcher .exe itself ' +
+        '(a portable launcher is verified where it is and never reinstalled).',
     )
   }
 
+  const portable = kind === 'portable'
   const store = readStore(root)
   store[providerId] = {
     providerId,
     executable,
+    portable,
+    kind,
     installerName: scan.name,
     sha256: scan.sha256,
     defender: scan.defender,
@@ -535,6 +611,7 @@ async function importCommunityLauncher(payload = {}) {
     ok: true,
     providerId,
     installed: true,
+    portable,
     executableName: path.basename(executable),
     installerName: scan.name,
     sha256: scan.sha256,
@@ -576,6 +653,7 @@ function communityLauncherStatus(providerId, root) {
   return {
     providerId: id,
     installed: Boolean(executable),
+    portable: record?.portable === true,
     executableName: executable ? path.basename(executable) : '',
     installerName: record?.installerName || '',
     sha256: record?.sha256 || '',
@@ -604,10 +682,12 @@ module.exports = {
   communityLauncherExecutable,
   communityLauncherRecord,
   communityLauncherStatus,
+  detectInstallerKind,
   downloadsDirectory,
   findNewExecutable,
   forgetCommunityLauncher,
   importCommunityLauncher,
+  inspectExecutableForLocalBackend,
   installerType,
   listDownloadedLaunchers,
   scanCommunityLauncher,

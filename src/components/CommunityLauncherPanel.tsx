@@ -96,9 +96,13 @@ export function CommunityLauncherPanel({ gate, verified, onImported }: Community
         if (!mounted.current) return
         setPhase('done')
         setNotice(
-          `${result.executableName || 'Launcher'} installed and verified${
-            result.defender === 'clean' ? ' (Windows Defender: no threats)' : ''
-          }.`,
+          result.portable
+            ? `${result.executableName || 'Launcher'} verified where it is — a portable launcher is linked, not reinstalled${
+                result.defender === 'clean' ? ' (Windows Defender: no threats)' : ''
+              }.`
+            : `${result.executableName || 'Launcher'} installed and verified${
+                result.defender === 'clean' ? ' (Windows Defender: no threats)' : ''
+              }.`,
         )
         await refresh()
         onImported(gate.providerId)
@@ -136,7 +140,7 @@ export function CommunityLauncherPanel({ gate, verified, onImported }: Community
           </p>
           <p className="mt-1 text-[11px] leading-relaxed text-fog">
             {verified
-              ? 'Drop the launcher you downloaded from the community Discord (or pick it). VAULTED scans it with the same installer gate and Windows Defender before anything installs.'
+              ? 'Drop the launcher you downloaded from the community Discord (or pick it). VAULTED scans it with the same installer gate and Windows Defender first; a portable launcher is linked where it is, a setup file is installed.'
               : 'Verify the community above first. Then bring back the launcher file from its Discord.'}
           </p>
         </div>
@@ -198,7 +202,9 @@ export function CommunityLauncherPanel({ gate, verified, onImported }: Community
               <>
                 <Upload className="h-5 w-5 text-fog" />
                 <p className="text-[11.5px] font-semibold text-mist">Drop the launcher file here</p>
-                <p className="text-[10.5px] text-fog">.exe, .msi or .zip — scanned before install</p>
+                <p className="text-[10.5px] text-fog">
+                  .exe, .msi or .zip — scanned first; a portable .exe is used where it is
+                </p>
               </>
             )}
           </div>
