@@ -20,6 +20,7 @@ const fs = require('node:fs')
 const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
+const { spawnSync } = require('node:child_process')
 
 const root = path.join(__dirname, '..')
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8')
@@ -33,6 +34,7 @@ const {
   shouldCloseCompanionLauncher,
 } = require('../electron/companionLifecycle.cjs')
 const { mergeSavedBuild } = require('../electron/rebootLauncher.cjs')
+const { probeProviderStatus } = require('../electron/providerStatus.cjs')
 const {
   BANNED_PROVIDER_IDS,
   isBannedProvider,
@@ -1006,6 +1008,68 @@ function testCardStates() {
   assert.match(card, /onlineIsUnavailable/)
 }
 
+async function testDiscordOnlyNeverCountsOnline() {
+  // The exact Ch1 S3 regression: SunSet is a live Discord community with no
+  // public game-server endpoint and no companion launcher. Its invite must not
+  // be fetched as a health endpoint and must never produce an online sample.
+  let fetched = 0
+  const sunset = providerCatalog().find((entry) => entry.id === 'sunset')
+  assert.ok(sunset, 'SunSet must remain in the catalog for the unavailable card')
+  const status = await probeProviderStatus(sunset, {
+    fetchImpl: async () => {
+      fetched += 1
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
+    },
+  })
+  assert.equal(fetched, 0, 'a Discord-only route must not be probed as a game server')
+  assert.equal(status.online, false, 'a Discord invite is not a live game server')
+  assert.match(status.reason || '', /Discord\/website gate/i)
+
+  const playMode = read('src/lib/playMode.ts')
+  assert.equal(
+    /discordOnline|hasDiscord/.test(playMode),
+    false,
+    'a Discord gate must never synthesize an online play mode',
+  )
+  assert.match(
+    playMode,
+    /return Boolean\(mode\.online \|\| mode\.globalOnline \|\| mode\.externalAvailable\)/,
+    'online availability must require a live backend or launcher-backed external route',
+  )
+  assert.match(
+    read('src/components/BuildList.tsx'),
+    /discordGate && onlineIsPlayable\(playMode\)/,
+    'the sidebar may only show ONLINE · DISCORD on a playable route',
+  )
+  const card = read('src/components/ActiveBuildCard.tsx')
+  assert.match(
+    card,
+    /discordGate && onlineIsPlayable\(playMode\)/,
+    'the hero may only show ONLINE · DISCORD on a playable route',
+  )
+  assert.match(
+    read('src/App.tsx'),
+    /provider\.live\?\.online === true/,
+    'Auto may only download/launch a launcher with an explicit live sample',
+  )
+
+  // The full-library audit must always cover all 43 seasons, and offline mode
+  // (deterministic CI) must classify every route as unavailable rather than
+  // inventing a live server from a Discord gate.
+  const audit = spawnSync(process.execPath, ['scripts/audit-seasons.cjs', '--offline', '--json'], {
+    cwd: root,
+    encoding: 'utf8',
+  })
+  assert.equal(audit.status, 0, audit.stderr || audit.stdout)
+  const report = JSON.parse(audit.stdout)
+  assert.equal(report.expectedSeasons, 43)
+  assert.equal(report.seasons.length, 43, 'the audit must sweep every bundled season')
+  assert.equal(report.counts.LAUNCHER, 0, 'offline mode must not report a launcher as verified')
+  const ch1s3 = report.seasons.find((row) => row.id === 'ch1-s3')
+  assert.equal(ch1s3?.state, 'UNAVAILABLE', 'Ch1 S3 must be locked without live evidence')
+  assert.equal(ch1s3?.wired, false)
+}
+
 function testOnlineBadgeColors() {
   const card = read('src/components/ActiveBuildCard.tsx')
   const list = read('src/components/BuildList.tsx')
@@ -1213,6 +1277,7 @@ async function run() {
   testSessionStability()
   testProviderIsolation()
   testCardStates()
+  await testDiscordOnlyNeverCountsOnline()
   testOnlineBadgeColors()
   testAutoFixWiring()
     testRebootAutoLaunch()

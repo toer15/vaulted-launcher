@@ -6,6 +6,7 @@ import { formatDownloadSize, formatEtaMinutes } from '../lib/downloadSize'
 import {
   DEFAULT_PLAY_MODE,
   ONLINE_UNAVAILABLE_MESSAGE,
+  onlineIsPlayable,
   onlineIsUnavailable,
   onlinePlayerCount,
   seasonStatusLabel,
@@ -100,12 +101,11 @@ export function BuildList({
                     ? 'Verifying…'
                     : null
           : null
-        // ONLINE, ONLINE · DISCORD and LAUNCHER are green routes. Only a
-        // season with no online route at all (ONLINE UNAVAILABLE) stays red.
+        // ONLINE and launcher-backed LAUNCHER are green routes. A Discord
+        // invite alone is not a live route: ONLINE UNAVAILABLE stays red.
         const isLive =
           playMode.online === true ||
           playMode.globalOnline === true ||
-          playMode.discordOnline === true ||
           playMode.externalAvailable === true
         const isChecking =
           !isLive && playMode.availability === 'global' && playMode.globalOffline !== true
@@ -237,7 +237,7 @@ export function BuildList({
                       />
                       {onlineStatus}
                     </span>
-                    {discordGate && (
+                    {discordGate && onlineIsPlayable(playMode) && (
                       <span
                         title={
                           discordGate.statusOnly

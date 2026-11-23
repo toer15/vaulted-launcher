@@ -163,9 +163,6 @@ function statusToneFor(
   // stays red.
   if (label === 'LAUNCHER') return 'up'
   if (label.startsWith('ONLINE UNAVAILABLE')) return 'down'
-  // An ONLINE · DISCORD community is an online route, even when a relay or
-  // directory probe for the same season is down.
-  if (playMode?.discordOnline === true) return 'up'
   if (health?.state === 'down') return 'down'
   if (health?.state === 'checking') return 'checking'
   // ONLINE and ONLINE · DISCORD cards get the green treatment.
@@ -430,7 +427,10 @@ export function ActiveBuildCard({
       runtime?.phase === 'installing')
   const discordProjectLabel = discordGate?.label?.replace(/ Discord$/i, '') || 'Project'
   const discordSetupEligible = Boolean(
-    discordGate && discordGate.statusOnly !== true && !runtimeRequired,
+    discordGate &&
+      discordGate.statusOnly !== true &&
+      !runtimeRequired &&
+      onlineIsPlayable(playMode),
   )
   const discordSetupLocked = Boolean(
     !archived &&
@@ -482,7 +482,7 @@ export function ActiveBuildCard({
   const serverBadge =
     liveServers > 0
       ? `ONLINE · ${liveServers} ${liveServers === 1 ? 'SERVER' : 'SERVERS'}`
-      : externalHero || playMode?.externalAvailable || playMode?.discordOnline
+      : externalHero || playMode?.externalAvailable
         ? 'LAUNCHER'
         : 'ONLINE UNAVAILABLE'
   // A LAUNCHER pill is a playable online route; ONLINE UNAVAILABLE is not.
@@ -501,20 +501,15 @@ export function ActiveBuildCard({
       : ''
   const activePopulationLabel = livePlayers > 0 ? playerCountLabel(livePlayers) : ''
   const activePopulationDetail = activePopulationLabel ? ` · ${activePopulationLabel}` : ''
-  const onlineStatus =
-    playMode?.discordOnline === true
-      ? heroHealth?.state === 'up'
-        ? onlineStatusLabel(onlinePlayers, onlineServers)
-        : 'LAUNCHER'
-      : heroHealth
-        ? heroHealth.state === 'up'
-          ? onlineStatusLabel(onlinePlayers, onlineServers)
-          : heroHealth.state === 'down'
-            ? 'ONLINE UNAVAILABLE'
-            : heroHealth.state === 'link'
-              ? heroHealth.linkLabel || 'LAUNCHER'
-              : 'CHECKING'
-        : seasonStatusLabel(playMode)
+  const onlineStatus = heroHealth
+    ? heroHealth.state === 'up'
+      ? onlineStatusLabel(onlinePlayers, onlineServers)
+      : heroHealth.state === 'down'
+        ? 'ONLINE UNAVAILABLE'
+        : heroHealth.state === 'link'
+          ? heroHealth.linkLabel || 'LAUNCHER'
+          : 'CHECKING'
+    : seasonStatusLabel(playMode)
   const onlineUnavailable = onlineIsUnavailable(playMode)
   const onlineUnavailableForPlay =
     onlineUnavailable && isInstalled && !busy && state !== 'running'
@@ -829,7 +824,7 @@ export function ActiveBuildCard({
                 Community · {heroCommunity}
               </span>
             )}
-            {discordGate && onlineStatus !== 'ONLINE · DISCORD' && (
+            {discordGate && onlineIsPlayable(playMode) && onlineStatus !== 'ONLINE · DISCORD' && (
               <span
                 title={
                   discordGate.statusOnly

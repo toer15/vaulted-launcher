@@ -39,6 +39,18 @@ function safeHttpUrl(value) {
   }
 }
 
+function isDiscordHost(url) {
+  return Boolean(url && /(^|\.)discord(?:app)?\.(?:com|gg)$/i.test(url.hostname))
+}
+
+function hasCompanionLauncher(provider) {
+  // Direct launch is the opposite of a companion launcher: it joins a live
+  // server through VAULTED. A `launcher` block is detection metadata only and
+  // may exist for a Discord-only project with no installable runtime, so only a
+  // real runtime proves there is a launcher to open.
+  return Boolean(provider?.runtime)
+}
+
 function finiteCount(value, { positive = false } = {}) {
   const number = Number(value)
   if (!Number.isFinite(number) || number < (positive ? 1 : 0)) return undefined
@@ -165,11 +177,17 @@ async function readPayload(response) {
  */
 async function probeProviderStatus(provider, options = {}) {
   const providerId = typeof provider?.id === 'string' ? provider.id.trim() : ''
-  // Discord-only communities have no game-server health endpoint. Their
-  // Discord gate is the availability signal; probing discord.com would turn
-  // every listing into a fake online server.
-  const discordOnly = provider?.mode === 'external' && !provider?.statusUrl
-  const url = discordOnly ? null : safeHttpUrl(provider?.statusUrl || provider?.backendUrl)
+  // A Discord invite or website is not a game-server health endpoint. An
+  // external project may only show LAUNCHER when it ships its own companion
+  // launcher and that launcher has a real status/liveness signal. A
+  // Discord-only community without a launcher stays UNAVAILABLE instead of
+  // pretending its invite proves a live server.
+  const configuredStatus = safeHttpUrl(provider?.statusUrl || provider?.backendUrl)
+  const discordOnly =
+    provider?.mode === 'external' &&
+    !hasCompanionLauncher(provider) &&
+    (!configuredStatus || isDiscordHost(configuredStatus) || provider?.launchKind === 'discord')
+  const url = discordOnly ? null : configuredStatus
   const checkedAt = new Date().toISOString()
   if (!providerId || !url) {
     return {
@@ -178,7 +196,7 @@ async function probeProviderStatus(provider, options = {}) {
       servers: 0,
       serverData: false,
       reason: discordOnly
-        ? 'This community exposes a Discord gate rather than a game-server health endpoint.'
+        ? 'This community exposes only a Discord/website gate; no live game-server endpoint and no companion launcher were verified.'
         : 'No health endpoint is configured.',
       checkedAt,
     }

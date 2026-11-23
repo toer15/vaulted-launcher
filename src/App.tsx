@@ -2627,6 +2627,17 @@ export default function App() {
         pushToast({ tone: 'error', title: 'Downloads need the desktop app', description: 'Run "npm run app".' })
         return
       }
+      // A launch-after-download may only start for a season whose route has
+      // passed live verification. Repairs without a launch stay allowed, but a
+      // Discord invite or dead launcher must never fetch a 10–30 GB build.
+      if (launchAfter && !onlineIsPlayable(playModes[build.id])) {
+        pushToast({
+          tone: 'info',
+          title: 'Online not available yet',
+          description: ONLINE_UNAVAILABLE_MESSAGE,
+        })
+        return
+      }
 
       // Continue must use the source that produced the bytes already on disk,
       // even when the manifest has since changed.
@@ -2686,7 +2697,7 @@ export default function App() {
         description: 'Add its archive to builds.json, then Refresh sources in Settings.',
       })
     },
-    [beginDownload, beginProviderSync, downloads, pushToast, seasonManifest],
+    [beginDownload, beginProviderSync, downloads, playModes, pushToast, seasonManifest],
   )
 
   /** One-click repair to the exact live provider build, then Play. */
@@ -3327,8 +3338,11 @@ export default function App() {
             // direct launch (see the live-server path below).
             provider.directLaunch !== true &&
             provider.id !== 'retrac-official' &&
+            provider.runtime &&
             provider.supportedSeasons.includes(seasonKey) &&
-            provider.live?.online !== false,
+            // A Discord-only listing or an unprobed launcher is not a verified
+            // route. Only an explicit live sample may trigger a build download.
+            provider.live?.online === true,
         )
         if (candidates.length === 0) return null
         const hostedLive = seasonProviders.some(

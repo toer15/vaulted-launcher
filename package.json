@@ -2,7 +2,7 @@
   "name": "vaulted-launcher",
   "productName": "VAULTED Launcher",
   "private": true,
-  "version": "1.0.179",
+  "version": "1.0.180",
   "description": "VAULTED — Fortnite build launcher",
   "author": "VAULTED",
   "type": "module",
@@ -36,7 +36,7 @@
     "check:providers:packaged": "node scripts/verify-provider-dlls.cjs --providers-dir=release/win-unpacked/resources/providers",
     "version:bump": "npm version patch --no-git-tag-version",
     "dist": "npm run version:bump && npm run build && npm run test:range-download && npm run test:cleanup && npm run test:auto-fix && npm run test:redirect-runtime && npm run test:discord-gates && npm run test:bot-fill && npm run test:provider-repair && npm run test:provider-launch && npm run test:provider-verification && npm run check:runtime && npm run check:providers && electron-builder --win nsis --publish never && npm run check:runtime:packaged && npm run check:providers:packaged && npm run test:packaged-dlls",
-    "audit:seasons": "node scripts/audit-online-seasons.cjs",
+    "audit:seasons": "node scripts/audit-seasons.cjs",
     "test:regression": "node scripts/test-season-regressions.cjs"
   },
   "dependencies": {
