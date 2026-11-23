@@ -62,6 +62,8 @@ import {
   stopProviderLauncher,
   syncProviderBuild,
   subscribeBuildExit,
+  subscribeCompanionGameStarted,
+  subscribeCompanionGameTimeout,
   subscribeDownloadProgress,
   subscribeJoinFailed,
   subscribeProviderLauncherExit,
@@ -1722,6 +1724,39 @@ export default function App() {
     }, toast.ttlMs ?? TOAST_TTL)
   }, [])
 
+  // A companion launcher starts its own game after VAULTED presses Play. The
+  // card stays on "Starting…" until main observes the real client process, so
+  // a launcher window alone is never reported as a running Fortnite session.
+  useEffect(() => {
+    if (!native) return
+    const offStarted = subscribeCompanionGameStarted((payload) => {
+      const active = externalLauncherRef.current
+      if (!active || active.providerId !== payload.providerId) return
+      setPhase('running')
+      setLaunchStage(null)
+      setLaunchFailure((current) => (current?.id === active.buildId ? null : current))
+      pushToast({
+        tone: 'success',
+        title: 'Fortnite is running',
+        description: 'Fortnite is running. Have fun.',
+      })
+    })
+    const offTimeout = subscribeCompanionGameTimeout((payload) => {
+      const active = externalLauncherRef.current
+      if (!active || active.providerId !== payload.providerId) return
+      setExternalLauncher(null)
+      setRunningId((current) => (current === active.buildId ? null : current))
+      setPhase('error')
+      setLaunchStage(null)
+      setLaunchFailure({ id: active.buildId, message: payload.message })
+      pushToast({ tone: 'error', title: 'Fortnite did not start', description: payload.message })
+    })
+    return () => {
+      offStarted()
+      offTimeout()
+    }
+  }, [native, pushToast])
+
   // Older VAULTED versions kept the downloaded archive and a second complete
   // client tree beside the active install. Reclaim that space once at startup;
   // main only removes data when a complete selected client still exists.
@@ -2850,11 +2885,21 @@ export default function App() {
           })
           return false
         }
+        setPhase('launching')
+        setLaunchStage('Starting launcher & Fortnite…')
+        setLaunchFailure((current) => (current?.id === build.id ? null : current))
+        setHostedLobby(null)
         try {
           const result = await window.arc.openProviderLauncher(
             provider.id,
             build.executable && build.path
-              ? { version: build.version, folder: build.path, executable: build.executable }
+              ? {
+                  version: build.version,
+                  gameVersion: build.version,
+                  name: build.season.label,
+                  folder: build.path,
+                  executable: build.executable,
+                }
               : undefined,
           )
           if (result?.community) {
@@ -2895,10 +2940,23 @@ export default function App() {
           if (result.tracked && result.pid) {
             setExternalLauncher({ providerId: provider.id, buildId: build.id, pid: result.pid })
             setRunningId(build.id)
-            setPhase('running')
-            setLaunchStage(null)
             setHostedLobby(null)
             shop.sets.recordLaunch(build.id)
+            if (result.waitingForGame === true) {
+              // The launcher is open but Fortnite is not running yet. Stay on
+              // "Starting…" until main observes the real client process.
+              setPhase('launching')
+              setLaunchStage('Starting launcher & Fortnite…')
+              pushToast({
+                tone: 'info',
+                title: `Starting ${provider.label} & Fortnite`,
+                description:
+                  'The launcher stays open while Fortnite runs. If Windows asks about firewall access, choose Allow.',
+              })
+              return true
+            }
+            setPhase('running')
+            setLaunchStage(null)
           }
           pushToast({
             tone: 'success',
@@ -2911,10 +2969,14 @@ export default function App() {
           })
           return true
         } catch (error) {
+          const message = error instanceof Error ? error.message : 'Unknown launcher error.'
+          setPhase('error')
+          setLaunchStage(null)
+          setLaunchFailure({ id: build.id, message })
           pushToast({
             tone: 'error',
             title: `${provider.label} could not be opened`,
-            description: error instanceof Error ? error.message : 'Unknown launcher error.',
+            description: message,
           })
           return false
         }

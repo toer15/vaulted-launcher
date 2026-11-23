@@ -38,6 +38,8 @@ const {
 const { createEraBridge } = require('./eraBridge.cjs')
 const { cleanupManagedBuild: cleanupBuildFolder } = require('./buildCleanup.cjs')
 const { isOptionalVerifyIssue, removeLooseFiles, scanLooseFiles } = require('./autoFix.cjs')
+const { writeSavedBuild } = require('./rebootLauncher.cjs')
+const { clickCompanionPlayButton, dismissCompanionServerPrompt } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
@@ -2580,6 +2582,93 @@ function registerProviderLauncher(providerId, child) {
  *   - Stop: closeCompanionLauncherForProvider() closes it directly.
  * No exit listener, idle timer or startup health check may close it earlier.
  */
+const COMPANION_GAME_TIMEOUT_MS = 150_000
+/** One pending game-start watch per provider; Stop/relaunch replaces it. */
+const companionGameWaits = new Map()
+
+/**
+ * Wait for the companion launcher's real game process after its window opens.
+ *
+ * The launcher may already be starting the game, so a running client is never
+ * clicked again. Otherwise VAULTED presses the launcher's own Play button and
+ * then waits for FortniteClient-Win64-Shipping.exe. `running` is announced only
+ * after that process exists; a timeout is reported instead of a fake success.
+ */
+function beginCompanionGameWatch({ providerId, launcherPid, launcherNames = [], gameExecutable }) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id || !launcherPid) return null
+  const token = Symbol(id)
+  companionGameWaits.set(id, token)
+  void (async () => {
+    try {
+      await delay(1_200)
+      let launcher = launcherPid
+      let running = await processPidsByImage([CLIENT_EXE])
+      if (running.length === 0) {
+        // Re-check after the launcher's own auto-start window so VAULTED never
+        // clicks Stop on a game the launcher just opened by itself.
+        await delay(800)
+        running = await processPidsByImage([CLIENT_EXE])
+        if (running.length === 0) {
+          const play = await clickCompanionPlayButton(launcher)
+          if (!play.clicked) {
+            // A bootstrapper can hand off to a second launcher process.
+            const current = await processPidsByImage(launcherNames)
+            if (current.length > 0) {
+              launcher = current[0]
+              await clickCompanionPlayButton(launcher)
+            }
+          }
+          // Reboot then asks whether to start its local game server. Ignore
+          // starts the client immediately; Start server would open a large
+          // server download. Only the prompt's real Ignore button is clicked,
+          // verified by the teal primary button that appears with it.
+          const dialogDeadline = Date.now() + 20_000
+          while (Date.now() < dialogDeadline) {
+            if ((await processPidsByImage([CLIENT_EXE])).length > 0) break
+            const dismissed = await dismissCompanionServerPrompt(launcher)
+            if (dismissed.clicked) break
+            await delay(1_500)
+          }
+        }
+      }
+      const deadline = Date.now() + COMPANION_GAME_TIMEOUT_MS
+      let gamePid = null
+      while (Date.now() < deadline) {
+        if (companionGameWaits.get(id) !== token) return
+        const pids = await processPidsByImage([CLIENT_EXE])
+        if (pids.length > 0) {
+          const owned = gameExecutable ? await executablePids(gameExecutable) : []
+          gamePid = owned[0] || pids[0]
+          break
+        }
+        await delay(1_500)
+      }
+      if (companionGameWaits.get(id) !== token) return
+      companionGameWaits.delete(id)
+      if (gamePid) {
+        attachCompanionGameProcess(id, gamePid)
+        send('arc:companion-game-started', { providerId: id, pid: gamePid })
+        return
+      }
+      send('arc:companion-game-timeout', {
+        providerId: id,
+        message:
+          'The launcher opened but Fortnite did not start. If Windows asked to allow the launcher through the firewall, choose Allow, then press Start again.',
+      })
+    } catch (error) {
+      if (companionGameWaits.get(id) === token) {
+        companionGameWaits.delete(id)
+        send('arc:companion-game-timeout', {
+          providerId: id,
+          message: error instanceof Error ? error.message : 'Fortnite did not start.',
+        })
+      }
+    }
+  })()
+  return { waiting: true }
+}
+
 function startCompanionSessionMonitor(providerId, executable) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return null
@@ -2717,6 +2806,7 @@ function attachCompanionGameProcess(providerId, pid) {
 async function closeCompanionLauncherForProvider(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return false
+  companionGameWaits.delete(id)
   let closed = false
   const monitor = companionMonitors.get(id)
   if (monitor) {
@@ -5533,6 +5623,9 @@ async function openProviderLauncherEntry(providerId, options = {}) {
     const runtimeRoot = path.join(app.getPath('userData'), 'provider-runtimes')
     const launchOptions =
       options && typeof options === 'object' && !Array.isArray(options) ? options : {}
+    const buildFolder = typeof launchOptions.folder === 'string' ? launchOptions.folder : ''
+    const buildExecutable =
+      typeof launchOptions.executable === 'string' ? launchOptions.executable : ''
     if (runtimeMetadata) {
       const requestedVersion =
         typeof launchOptions.version === 'string' ? launchOptions.version.trim() : ''
@@ -5563,7 +5656,27 @@ async function openProviderLauncherEntry(providerId, options = {}) {
           error: `${profile.label} is not installed yet. Use the launcher install step on the season card once.`,
         }
       }
-      const args = launchArguments(runtimeMetadata, version)
+      // Reboot reads its saved builds from `settings/v3_game_storage.gs` at
+      // startup. Pre-wire the VAULTED install and select it so the launcher's
+      // own Play button starts this season without adding a folder by hand.
+      let savedBuild = null
+      if (id === 'reboot-official' && buildFolder) {
+        const requestedGameVersion =
+          typeof launchOptions.gameVersion === 'string' && launchOptions.gameVersion.trim()
+            ? launchOptions.gameVersion.trim()
+            : requestedVersion
+        const savedName =
+          typeof launchOptions.name === 'string' && launchOptions.name.trim()
+            ? launchOptions.name.trim()
+            : `${profile.label} ${requestedGameVersion}`.trim()
+        savedBuild = writeSavedBuild({
+          executable,
+          name: savedName,
+          gameVersion: requestedGameVersion,
+          location: buildFolder,
+        })
+      }
+      const args = launchArguments(runtimeMetadata, version) || []
       const repairRuntime = async () => {
         const repaired = await ensureProviderRuntime(id, runtimeMetadata, {
           root: runtimeRoot,
@@ -5574,19 +5687,25 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       const launcherNames = providerWindowNames(runtimeMetadata)
       const launcherCandidates = installedExecutables(runtimeMetadata)
       if (!launcherCandidates.includes(executable)) launcherCandidates.unshift(executable)
-      if (args) {
-        try {
-          const started = await startVisibleLauncher(launcherCandidates, args, repairRuntime, launcherNames)
-          return started.opened ? { ...started, args, version } : started
-        } catch (error) {
-          return {
-            opened: false,
-            error: error instanceof Error ? error.message : 'The provider launcher could not be started.',
-          }
+      const finishLaunch = (started) => {
+        if (!started?.opened) return started
+        const result = { ...started, args, version, savedBuild }
+        if (id === 'reboot-official' && started.pid) {
+          const gameExecutable =
+            buildExecutable || (buildFolder ? findPrimaryExecutable(buildFolder) : '') || ''
+          beginCompanionGameWatch({
+            providerId: id,
+            launcherPid: started.pid,
+            launcherNames,
+            gameExecutable,
+          })
+          result.waitingForGame = true
         }
+        return result
       }
       try {
-        return await startVisibleLauncher(launcherCandidates, [], repairRuntime, launcherNames)
+        const started = await startVisibleLauncher(launcherCandidates, args, repairRuntime, launcherNames)
+        return finishLaunch(started)
       } catch (error) {
         return {
           opened: false,

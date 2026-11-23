@@ -267,6 +267,10 @@ export interface LauncherBridge {
   onDownloadProgress?(callback: (progress: DownloadProgress) => void): () => void
   onBuildExited?(callback: (payload: BuildExitInfo) => void): () => void
   onProviderLauncherExited?(callback: (payload: ProviderLauncherExit) => void): () => void
+  /** main observed the season launcher's real game process */
+  onCompanionGameStarted?(callback: (payload: { providerId: string; pid: number }) => void): () => void
+  /** the launcher opened but Fortnite never started (firewall prompt, closed, …) */
+  onCompanionGameTimeout?(callback: (payload: { providerId: string; message: string }) => void): () => void
   /** main's in-session heartbeat could not keep the account session alive */
   onProviderSessionExpired?(callback: (payload: {
     providerId: string
@@ -398,7 +402,13 @@ export interface LauncherBridge {
   /** open a signed third-party launcher that owns its own anticheat/runtime */
   openProviderLauncher?(
     providerId: string,
-    options?: { version?: string; folder?: string; executable?: string },
+    options?: {
+      version?: string
+      gameVersion?: string
+      name?: string
+      folder?: string
+      executable?: string
+    },
   ): Promise<{
     opened: boolean
     path?: string
@@ -408,6 +418,8 @@ export interface LauncherBridge {
     version?: string
     pid?: number | null
     tracked?: boolean
+    /** main is starting the launcher's own game and will report the real PID */
+    waitingForGame?: boolean
     /** the community step is required because no launcher is installed */
     community?: boolean
     /** invite the in-app community dialog can show; never opened by VAULTED */
@@ -736,6 +748,18 @@ export function subscribeProviderLauncherExit(
   callback: (payload: ProviderLauncherExit) => void,
 ): () => void {
   return window.arc?.onProviderLauncherExited?.(callback) ?? (() => {})
+}
+
+export function subscribeCompanionGameStarted(
+  callback: (payload: { providerId: string; pid: number }) => void,
+): () => void {
+  return window.arc?.onCompanionGameStarted?.(callback) ?? (() => {})
+}
+
+export function subscribeCompanionGameTimeout(
+  callback: (payload: { providerId: string; message: string }) => void,
+): () => void {
+  return window.arc?.onCompanionGameTimeout?.(callback) ?? (() => {})
 }
 
 export async function stopProviderLauncher(providerId: string): Promise<boolean> {

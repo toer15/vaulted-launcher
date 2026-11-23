@@ -30,6 +30,7 @@ const {
   observeCompanionSession,
   shouldCloseCompanionLauncher,
 } = require('../electron/companionLifecycle.cjs')
+const { mergeSavedBuild } = require('../electron/rebootLauncher.cjs')
 const {
   providerCatalog,
   providerProfile,
@@ -899,6 +900,72 @@ function testOnlineBadgeColors() {
   assert.match(playMode, /ONLINE_UNAVAILABLE_LABEL = 'ONLINE UNAVAILABLE'/)
 }
 
+function testRebootAutoLaunch() {
+  const existing = { name: 'My own build', gameVersion: '7.30', location: 'D:\\games\\other' }
+  const storage = {
+    versions: JSON.stringify([existing]),
+    version: existing.name,
+    username: 'Tommy',
+    password: '',
+    custom_launch_args: '-epicapp=Fortnite',
+  }
+  const build = {
+    name: 'Chapter 1 Season 6',
+    gameVersion: '6.21',
+    location: path.join('C:\\Users\\tommy\\AppData\\Roaming\\VAULTED Launcher\\builds\\ch1-s6'),
+  }
+  const merged = mergeSavedBuild(storage, build)
+  const versions = JSON.parse(merged.storage.versions)
+  assert.equal(versions.length, 2, 'the player\'s saved build must be kept')
+  assert.equal(versions[0].name, existing.name)
+  assert.equal(versions[1].name, build.name)
+  assert.equal(versions[1].gameVersion, '6.21')
+  assert.equal(merged.storage.version, build.name, 'the VAULTED build must be selected')
+  assert.equal(merged.storage.username, 'Tommy')
+  assert.equal(merged.storage.custom_launch_args, '-epicapp=Fortnite')
+
+  const again = mergeSavedBuild(merged.storage, build)
+  assert.equal(JSON.parse(again.storage.versions).length, 2, 're-wiring must not duplicate the build')
+  const renamed = mergeSavedBuild(merged.storage, { ...build, name: 'C1S6' })
+  assert.equal(JSON.parse(renamed.storage.versions).length, 2, 'same folder updates in place')
+  assert.equal(renamed.storage.version, 'C1S6')
+
+  // A corrupt storage file must not discard the player's name/args.
+  const recovered = mergeSavedBuild({ versions: 'not json', username: 'Tommy' }, build)
+  assert.equal(JSON.parse(recovered.storage.versions).length, 1)
+  assert.equal(recovered.storage.username, 'Tommy')
+
+  // Main wires the build before spawning the launcher, then clicks its own
+  // Play action and reports the real client PID (never the launcher PID).
+  assert.match(MAIN, /writeSavedBuild\(\{/, 'the launcher config must be written before start')
+  assert.match(MAIN, /beginCompanionGameWatch/, 'main must watch for the real game process')
+  assert.match(MAIN, /clickCompanionPlayButton/, 'main must trigger the launcher Play action')
+  assert.match(MAIN, /arc:companion-game-started/)
+  assert.match(MAIN, /arc:companion-game-timeout/)
+  assert.match(read('electron/preload.cjs'), /arc:companion-game-started/)
+
+  const app = read('src/App.tsx')
+  assert.match(app, /Starting launcher & Fortnite…/, 'the waiting status must be shown')
+  assert.match(app, /result\.waitingForGame === true/)
+  assert.match(app, /subscribeCompanionGameStarted/)
+  assert.match(app, /subscribeCompanionGameTimeout/)
+  // Only the observed-process event may flip the card to Running: the waiting
+  // branch returns before the immediate `running` assignment.
+  const waitingStart = app.indexOf('result.waitingForGame === true')
+  assert.ok(waitingStart > 0)
+  const waitingLaunching = app.indexOf("setPhase('launching')", waitingStart)
+  const waitingReturn = app.indexOf('return true', waitingStart)
+  const waitingRunning = app.indexOf("setPhase('running')", waitingStart)
+  assert.ok(
+    waitingLaunching > waitingStart && waitingLaunching < waitingReturn,
+    'the launcher wait must stay on the launching phase',
+  )
+  assert.ok(
+    waitingRunning > waitingReturn,
+    'running must only be set after the game-start event',
+  )
+}
+
 try {
   testLifecycleRule()
   testLauncherOutlivesBootstrapper()
@@ -911,6 +978,7 @@ try {
   testCardStates()
   testOnlineBadgeColors()
   testAutoFixWiring()
+  testRebootAutoLaunch()
   console.log(
     'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route), and online badge colors (LAUNCHER green on the hero, sidebar and dropdown pills; ONLINE UNAVAILABLE red)',
   )
