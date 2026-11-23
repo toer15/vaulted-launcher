@@ -32,6 +32,7 @@ import { lobbyPlayers } from '../lib/friends'
 import {
   ONLINE_UNAVAILABLE_MESSAGE,
   onlineIsLive,
+  onlineIsPlayable,
   onlineIsUnavailable,
   onlinePlayerCount,
   onlineStatusLabel,
@@ -450,7 +451,7 @@ export function ActiveBuildCard({
     !busy &&
     !archived &&
     !discordSetupLocked &&
-    onlineIsLive(playMode)
+    onlineIsPlayable(playMode)
   // Every online season shows the Step 1/2/3 sequence until its real Fortnite
   // build is installed, including seasons an external launcher runs afterwards.
   const setupSequence = !archived && state === 'missing'
@@ -604,7 +605,7 @@ export function ActiveBuildCard({
     background: 'linear-gradient(120deg, #64748b, #334155)',
     glow: 'rgba(100,116,139,0.35)',
   }
-  const downloadPausedOffline = state === 'paused' && !onlineIsLive(playMode)
+  const downloadPausedOffline = state === 'paused' && !onlineIsPlayable(playMode)
   const statePrimary = archived
     ? {
         label: 'Archive only',
@@ -1322,8 +1323,8 @@ export function ActiveBuildCard({
                             title={
                               discordSetupLocked
                                 ? `Join and verify ${discordGate?.label || 'the community Discord'} first.`
-                                : !onlineIsLive(playMode)
-                                ? 'Download unlocks when this season has a live online server.'
+                                : !onlineIsPlayable(playMode)
+                                ? 'Download unlocks when this season has a real online launcher or live server.'
                                 : !hasDownloadSource
                                 ? 'No download source is available for this season.'
                                 : !runtimeReady

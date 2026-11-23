@@ -572,14 +572,74 @@ function testOnlineRoutes() {
     'the launcher download card must show the DLL staging step',
   )
 
-  // EZFN Hybrid is a lobby-only cosmetic tool, not a match server. Seasons that
-  // only have that profile must keep saying online is unavailable instead of
-  // pretending a local profile is multiplayer.
-  const hybrid = season('ch5-s1')
-  assert.equal(hybrid.onlineProvider?.id, 'ezfn-hybrid')
+  // Hub rule: a local profile is never a season destination. EZFN Hybrid is a
+  // lobby-only cosmetic tool, so its former seasons are Online Unavailable: the
+  // archive stays known, but the card greys and locks Download/Play.
   const hybridCatalog = providerCatalog().find((entry) => entry.id === 'ezfn-hybrid')
   assert.equal(hybridCatalog?.mode, 'download', 'ezfn-hybrid must stay a local profile')
   assert.equal(hybridCatalog?.auth, 'none')
+  const localOnlySeasons = [
+    'ch5-s1',
+    'ch5-s2',
+    'ch5-s3',
+    'ch5-s4',
+    'ch5-remix',
+    'ch6-s1',
+    'ch6-s2',
+    'ch6-s3',
+    'ch6-s4',
+    'ch6-mini1',
+    'ch6-mini2',
+    'ch7-s1',
+    'ch7-s2',
+    'ch7-s3',
+    'ch7-s4',
+    'ch7-mini1',
+  ]
+  for (const id of localOnlySeasons) {
+    const value = season(id)
+    assert.equal(value.onlineProvider, undefined, `${id} must not route to a local profile`)
+    assert.equal(value.onlineProviders, undefined, `${id} must not route to a local profile`)
+    assert.ok(value.downloadUrl, `${id} must keep its archive for a future real launcher`)
+  }
+
+  // No season may route through a local/download engine at all. Every route is
+  // a real remote project: a live backend or an official launcher.
+  for (const value of Object.values(builds.seasons)) {
+    for (const id of routeIds(value)) {
+      const provider = providerCatalog().find((entry) => entry.id === id)
+      assert.ok(provider, `${value.id} routes to ${id}, which is not a bundled provider`)
+      assert.notEqual(provider.mode, 'download', `${value.id} routes through the local ${id} profile`)
+      assert.equal(provider.global, true, `${value.id} routes through a non-global ${id} profile`)
+    }
+  }
+
+  // Hub availability: a verified launcher-backed season is playable (and its
+  // download unlocks) even though its badge stays LAUNCHER rather than ONLINE.
+  const appHub = read('src/App.tsx')
+  const playModeSource = read('src/lib/playMode.ts')
+  assert.match(playModeSource, /export function onlineIsPlayable\(/)
+  assert.match(playModeSource, /onlineIsLive\(mode\) \|\| mode\.externalAvailable === true/)
+  const card = read('src/components/ActiveBuildCard.tsx')
+  assert.match(card, /onlineIsPlayable\(playMode\)/, 'a launcher-backed season must unlock its download')
+  assert.match(
+    appHub,
+    /onlineIsPlayable\(playModes\[build\.id\]\)/,
+    'Start must treat a real launcher route as a playable online season',
+  )
+  // Picking a launcher-backed season prepares that launcher automatically.
+  assert.match(appHub, /const autoRuntimePrep = useRef<Set<string>>\(new Set\(\)\)/)
+  assert.match(
+    appHub,
+    /autoRuntimePrep\.current\.add\(activeCompanionProviderId\)[\s\S]{0,80}void handleInstallRuntime\(\)/,
+    'selecting a launcher-backed season must install its real launcher',
+  )
+  // Launcher downloads retry transient failures with the same headers.
+  const runtimeSource = read('electron/providerRuntime.cjs')
+  assert.match(runtimeSource, /const DOWNLOAD_ATTEMPTS = 3/)
+  assert.match(runtimeSource, /for \(let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt \+= 1\)/)
+  assert.match(runtimeSource, /async function downloadInstallerOnce\(/)
+  assert.match(runtimeSource, /'user-agent': 'VAULTED-Launcher'/, 'launcher downloads keep their identity header')
 }
 
 function testProviderIsolation() {
@@ -784,7 +844,7 @@ try {
   testProviderIsolation()
   testCardStates()
   console.log(
-    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, and per-provider isolation, plus the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging)',
+    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), visible external launchers, Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), and the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging)',
   )
 } catch (error) {
   console.error(error)

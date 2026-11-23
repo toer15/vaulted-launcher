@@ -27,6 +27,8 @@ const VERSION_TIMEOUT_MS = 15_000
 const DOWNLOAD_TIMEOUT_MS = 10 * 60_000
 const INSTALL_TIMEOUT_MS = 10 * 60_000
 const MIN_INSTALLER_BYTES = 64 * 1024
+const DOWNLOAD_ATTEMPTS = 3
+const DOWNLOAD_RETRY_DELAY_MS = 900
 const MAX_INSTALLER_BYTES = 900 * 1024 * 1024
 const MAX_EXE_SEARCH_ENTRIES = 3_000
 // A vendor launcher can finish its own bootstrap (a script or a SFX that then
@@ -305,7 +307,7 @@ async function sha256File(file) {
   return hash.digest('hex')
 }
 
-async function downloadInstaller(release, metadata, options) {
+async function downloadInstallerOnce(release, metadata, options) {
   const fetchImpl = options.fetchImpl || fetch
   const target = options.target
   const controller = new AbortController()
@@ -324,7 +326,12 @@ async function downloadInstaller(release, metadata, options) {
       signal: controller.signal,
     })
     if (!response.ok || !response.body) {
-      throw new Error(`The provider runtime download returned HTTP ${response.status}.`)
+      const status = Number(response.status) || 0
+      const error = new Error(`The provider runtime download returned HTTP ${status}.`)
+      // A permanent rejection is reported immediately; a transient answer is
+      // retried by downloadInstaller below.
+      error.permanent = status >= 400 && status < 500 && status !== 408 && status !== 429
+      throw error
     }
     total = Number(response.headers.get('content-length')) || 0
     if (total > 0 && (total < MIN_INSTALLER_BYTES || total > MAX_INSTALLER_BYTES)) {
@@ -397,6 +404,33 @@ async function downloadInstaller(release, metadata, options) {
     options.signal?.removeEventListener('abort', abort)
     await fs.promises.rm(part, { force: true }).catch(() => {})
   }
+}
+
+/**
+ * Download a launcher installer with retries. A dropped connection, DNS blip
+ * or transient 5xx must never leave a season stuck on "launcher not
+ * installed"; permanent 4xx answers, cancelled downloads and unsafe payloads
+ * still fail immediately. Every attempt sends the same validated HTTPS URL
+ * and VAULTED/identity headers.
+ */
+async function downloadInstaller(release, metadata, options) {
+  let lastError = null
+  for (let attempt = 1; attempt <= DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      return await downloadInstallerOnce(release, metadata, options)
+    } catch (error) {
+      lastError = error
+      const permanent =
+        options.signal?.aborted === true ||
+        error?.permanent === true ||
+        /unsafe size|exceeded the safe size|not from a trusted/i.test(
+          error instanceof Error ? error.message : '',
+        )
+      if (permanent || attempt === DOWNLOAD_ATTEMPTS) throw error
+      await new Promise((resolve) => setTimeout(resolve, DOWNLOAD_RETRY_DELAY_MS * attempt))
+    }
+  }
+  throw lastError || new Error('The provider runtime download failed.')
 }
 
 function installMsi(file) {

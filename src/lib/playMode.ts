@@ -92,6 +92,17 @@ export function onlineIsLive(mode: SeasonPlayMode | null | undefined): boolean {
   )
 }
 
+/**
+ * True when the player can actually enter this season: a live online backend,
+ * a live community server, or a real external project whose own launcher hosts
+ * the season. A launcher-backed season keeps its LAUNCHER badge, but it is a
+ * real online route and must unlock Download/Start exactly like a backend.
+ */
+export function onlineIsPlayable(mode: SeasonPlayMode | null | undefined): boolean {
+  if (!mode || mode.archived) return false
+  return onlineIsLive(mode) || mode.externalAvailable === true
+}
+
 /** True when the probe has finished and no online route was found. */
 export function onlineIsUnavailable(mode: SeasonPlayMode | null | undefined): boolean {
   if (!mode || mode.archived || onlineIsAvailable(mode)) return false

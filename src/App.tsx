@@ -16,7 +16,7 @@ import { fetchFriends, type LobbyInfo } from './lib/friends'
 import {
   mergeLobbies,
   ONLINE_UNAVAILABLE_MESSAGE,
-  onlineIsLive,
+  onlineIsPlayable,
   playModesForBuilds,
   providerCanAutoRoute,
   routeExternalServer,
@@ -1812,6 +1812,32 @@ export default function App() {
     }
   }, [activeCompanionProviderId, pushToast, runtimeProgress])
 
+  // Hub contract: picking a launcher-backed season prepares its real launcher
+  // right away. Main reports the installed state safely; a missing launcher is
+  // downloaded (with retries), installed and its DLLs staged by the same
+  // handler the card's Install button uses, so the player never has to find or
+  // download the project's launcher themselves.
+  const autoRuntimePrep = useRef<Set<string>>(new Set())
+  const activeRuntimeStatus = activeCompanionProviderId
+    ? runtimeStatuses[activeCompanionProviderId]
+    : undefined
+  useEffect(() => {
+    if (!native || !activeCompanionProviderId) return
+    if (!activeRuntime?.required || activeRuntime.installed) return
+    // Wait for main's installed-state probe so an already-installed launcher is
+    // never downloaded again just because a card was selected.
+    if (!activeRuntimeStatus || activeRuntimeStatus.installed) return
+    if (autoRuntimePrep.current.has(activeCompanionProviderId)) return
+    autoRuntimePrep.current.add(activeCompanionProviderId)
+    void handleInstallRuntime()
+  }, [
+    activeCompanionProviderId,
+    activeRuntime,
+    activeRuntimeStatus,
+    handleInstallRuntime,
+    native,
+  ])
+
   // The in-session heartbeat could not keep the account session alive. Tell the
   // player right away instead of letting locker saves and matchmaking tickets
   // fail silently later in the match.
@@ -3291,10 +3317,9 @@ export default function App() {
 
       // Downloaded seasons launch directly through their provider. Uninstalled
       // cards stay on the existing Download → Play path.
-      // Download and Play are online-only. A season with no live ONLINE status
-      // cannot be downloaded or launched, including a launcher-only route that
-      // does not show an ONLINE status.
-      if (!onlineIsLive(playModes[build.id])) {
+      // Download and Play need a real online route: a live backend/server or a
+      // verified project launcher. A season with neither stays locked.
+      if (!onlineIsPlayable(playModes[build.id])) {
         setPhase('error')
         setLaunchStage(null)
         setLaunchFailure({ id: build.id, message: ONLINE_UNAVAILABLE_MESSAGE })
