@@ -251,6 +251,8 @@ export interface LauncherBridge {
     changelist: number | null
     source: string
   }>
+  /** open a verified community Discord invite through the OS */
+  openDiscordInvite?(url: string): Promise<{ opened: boolean; url: string }>
   downloadBuild?(payload: {
     id: string
     key: string
@@ -535,6 +537,26 @@ export function sameBuildVersion(
   const right = versionKeyOf(expected)
   if (!left || !right) return true
   return left === right
+}
+
+/**
+ * Open a community's verified Discord invite. Main re-checks the host allowlist;
+ * the plain-browser build falls back to a new tab so the button still works.
+ */
+export async function openDiscordInvite(url: string): Promise<boolean> {
+  const invite = String(url || '').trim()
+  if (!/^https:\/\/discord\.(?:gg|com)\//i.test(invite)) return false
+  if (typeof window === 'undefined') return false
+  if (typeof window.arc?.openDiscordInvite === 'function') {
+    try {
+      const result = await window.arc.openDiscordInvite(invite)
+      return result?.opened === true
+    } catch {
+      return false
+    }
+  }
+  window.open(invite, '_blank', 'noopener,noreferrer')
+  return true
 }
 
 export function hasNativeBridge(): boolean {

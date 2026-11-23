@@ -47,6 +47,7 @@ const {
 } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { detectBuildVersion } = require('./buildVersion.cjs')
+const { openDiscordInvite } = require('./externalLinks.cjs')
 const {
   communityLauncherExecutable,
   communityLauncherRecord,
@@ -6401,6 +6402,13 @@ function registerIpc() {
   // the folder's own markers so a stale 3.0 install cannot pass as 3.6.
   ipcMain.handle('arc:detect-build-version', (_event, folder) =>
     detectBuildVersion(typeof folder === 'string' ? folder : ''),
+  )
+
+  // The verified community invite is the single external link VAULTED opens:
+  // main re-validates it against the Discord host allowlist before the OS sees
+  // it, so the renderer cannot hand the shell an arbitrary URL.
+  ipcMain.handle('arc:open-discord-invite', (_event, url) =>
+    openDiscordInvite(typeof url === 'string' ? url : '', { shell }),
   )
 
   ipcMain.handle('arc:download-build', (_event, payload) => downloadBuild(payload))

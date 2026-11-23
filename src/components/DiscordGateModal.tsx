@@ -1,7 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, Copy, Loader2, MessageCircle, ShieldCheck, X } from 'lucide-react'
+import { Check, Copy, ExternalLink, Loader2, MessageCircle, ShieldCheck, X } from 'lucide-react'
 import { cx } from '../lib/cx'
+import { hasDiscordGateBeenOpened, markDiscordGateOpened } from '../lib/discordGates'
+import { openDiscordInvite } from '../lib/launch'
 import type { DiscordGate } from '../types'
 import { CommunityLauncherPanel } from './CommunityLauncherPanel'
 
@@ -21,7 +23,10 @@ interface DiscordGateModalProps {
 /**
  * Native VAULTED gate for a community Discord. Sign-in, verification state,
  * redirect-DLL preparation and the game launch all stay inside VAULTED. The
- * invite is shown in-app and can be copied; VAULTED never opens a browser.
+ * invite can be opened in the player's Discord app or copied by hand.
+ *
+ * The primary button is a two-state flow: Open Discord Server first, then
+ * Verify once the player has been handed to the server.
  */
 export function DiscordGateModal({
   gate,
@@ -33,6 +38,18 @@ export function DiscordGateModal({
   onVerify,
   onLauncherImported,
 }: DiscordGateModalProps) {
+  const [serverOpened, setServerOpened] = useState(false)
+  const [opening, setOpening] = useState(false)
+  const [openError, setOpenError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!gate) return
+    // A community the player already opened keeps the Verify state across
+    // modal opens, so Step 1 never asks them to join twice.
+    setServerOpened(hasDiscordGateBeenOpened(gate))
+    setOpenError(null)
+  }, [gate])
+
   useEffect(() => {
     if (!gate) return
     const onKeyDown = (event: KeyboardEvent) => {
@@ -48,6 +65,31 @@ export function DiscordGateModal({
   }, [busy, gate, onClose])
 
   if (!gate) return null
+
+  const projectLabel = gate.label.replace(/ Discord$/i, '')
+
+  const handleOpenServer = async () => {
+    setOpening(true)
+    setOpenError(null)
+    try {
+      const opened = await openDiscordInvite(gate.inviteUrl)
+      if (!opened) {
+        throw new Error(
+          'VAULTED could not open Discord on this PC. Copy the invite below and paste it into Discord.',
+        )
+      }
+      markDiscordGateOpened(gate)
+      setServerOpened(true)
+    } catch (openFailure) {
+      setOpenError(
+        openFailure instanceof Error
+          ? openFailure.message
+          : 'Discord could not be opened. Copy the invite below instead.',
+      )
+    } finally {
+      setOpening(false)
+    }
+  }
 
   return createPortal(
     <div
@@ -115,8 +157,9 @@ export function DiscordGateModal({
                   No third-party launcher opens
                 </p>
                 <p className="mt-1 text-[11px] leading-relaxed text-fog">
-                  VAULTED verifies the official invite and keeps the handoff inside this app. Your
-                  Discord password is never requested by VAULTED.
+                  VAULTED opens the verified invite in your Discord app, then checks the server's own
+                  guild before it unlocks the season. Your Discord password is never requested by
+                  VAULTED.
                 </p>
               </div>
             </div>
@@ -127,46 +170,61 @@ export function DiscordGateModal({
               <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold text-mist">
                 1
               </span>
-              Copy the invite below and join {gate.label.replace(/ Discord$/i, '')} in Discord.
+              Press <span className="font-semibold text-mist">Open Discord Server</span> to join{' '}
+              {projectLabel}, or copy the invite below as a fallback.
             </li>
             <li className="flex items-center gap-2">
               <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold text-mist">
                 2
               </span>
-              Come back here and verify. VAULTED remembers the unlock on this PC.
+              Come back here and press <span className="font-semibold text-mist">Verify</span>. VAULTED
+              remembers the unlock on this PC.
             </li>
           </ol>
 
-          {error && (
+          {(openError || error) && (
             <p
               role="alert"
               className="mt-3 rounded-xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-[12px] leading-relaxed text-rose-200"
             >
-              {error}
+              {openError || error}
             </p>
           )}
 
           <button
             type="button"
-            onClick={onVerify}
-            disabled={busy}
+            onClick={() => {
+              if (busy || opening) return
+              if (!verified && !serverOpened) {
+                void handleOpenServer()
+                return
+              }
+              onVerify()
+            }}
+            disabled={busy || opening}
             className={cx(
               'mt-4 flex w-full items-center justify-center gap-2 rounded-2xl px-4 py-3 text-[13px] font-bold text-white transition-all duration-200',
-              busy
+              busy || opening
                 ? 'cursor-wait bg-[#5865F2]/70 opacity-80'
                 : 'bg-[#5865F2] shadow-[0_16px_34px_-18px_rgba(88,101,242,0.95)] hover:brightness-110 active:scale-[0.99]',
             )}
           >
-            {busy ? (
+            {busy || opening ? (
               <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
+            ) : verified || serverOpened ? (
               <Check className="h-4 w-4" />
+            ) : (
+              <ExternalLink className="h-4 w-4" />
             )}
             {busy
               ? 'Verifying community…'
-              : verified
-                ? 'Community verified'
-                : "I've Joined — Verify Community"}
+              : opening
+                ? 'Opening Discord…'
+                : verified
+                  ? 'Community verified'
+                  : serverOpened
+                    ? 'Verify'
+                    : `Open ${projectLabel} Discord Server`}
           </button>
 
           {verified && onLauncherImported && (
@@ -192,8 +250,8 @@ export function DiscordGateModal({
           </div>
 
           <p className="mt-3 text-center text-[10px] leading-relaxed text-fog/70">
-            The invite stays inside VAULTED — paste it into your Discord app. Close this panel to
-            cancel the launch.
+            VAULTED opens this invite in your Discord app, and the copy box stays available. Close
+            this panel to cancel the launch.
           </p>
         </div>
       </div>

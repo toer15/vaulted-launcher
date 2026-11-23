@@ -3085,9 +3085,9 @@ export default function App() {
               : undefined,
           )
           if (result?.community) {
-            // No launcher is installed, so the whole handoff stays inside
-            // VAULTED: the in-app community step shows the invite and copies
-            // it. VAULTED never opens a website or invite in a browser.
+            // No launcher is installed, so the in-app community step opens
+            // the verified Discord invite (or copies it). VAULTED opens no
+            // website and no third-party launcher here.
             const gate = provider.discordGate ?? null
             const message =
               result.error ||
@@ -3392,8 +3392,8 @@ export default function App() {
     accountPromptRef.current = false
   }, [accountBusy])
 
-  // VAULTED never opens a website in a browser. The community step keeps the
-  // invite inside the app: the player copies it into their own Discord.
+  // VAULTED opens no website in a browser: the community step's invite box is
+  // the copy fallback beside the Open Discord Server button.
   const handleCopyDiscordInvite = useCallback(async () => {
     const pending = discordPrompt
     if (!pending) return

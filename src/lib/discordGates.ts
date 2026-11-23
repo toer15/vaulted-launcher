@@ -54,6 +54,56 @@ export function isDiscordGateVerified(
   return !(gate.guildId && verified.guildId && gate.guildId !== verified.guildId)
 }
 
+/**
+ * Step 1 remembers that the player opened a community's Discord server, so the
+ * primary button becomes Verify the next time the modal opens instead of
+ * asking them to open it again. Keyed by provider + guild: a rotated invite or
+ * a different community never inherits the flag.
+ */
+const OPENED_KEY = 'vaulted.discordGateOpened.v1'
+
+export function loadDiscordGateOpened(): Record<string, number> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(localStorage.getItem(OPENED_KEY) || '{}')
+  } catch {
+    return {}
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+  const result: Record<string, number> = {}
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!key || typeof value !== 'number' || !Number.isFinite(value)) continue
+    result[key] = value
+  }
+  return result
+}
+
+function openedKeyFor(gate: Pick<DiscordGate, 'providerId' | 'guildId'>): string {
+  return `${gate.providerId}:${gate.guildId || ''}`
+}
+
+/** True once the player pressed Open Discord Server for this community. */
+export function hasDiscordGateBeenOpened(
+  gate: Pick<DiscordGate, 'providerId' | 'guildId'> | null | undefined,
+): boolean {
+  if (!gate?.providerId) return false
+  const opened = loadDiscordGateOpened()
+  return typeof opened[openedKeyFor(gate)] === 'number'
+}
+
+export function markDiscordGateOpened(
+  gate: Pick<DiscordGate, 'providerId' | 'guildId'> | null | undefined,
+): void {
+  if (!gate?.providerId) return
+  try {
+    const opened = loadDiscordGateOpened()
+    opened[openedKeyFor(gate)] = Date.now()
+    localStorage.setItem(OPENED_KEY, JSON.stringify(opened))
+  } catch {
+    /* a full/sandboxed localStorage must not block the open flow */
+  }
+}
+
 /** Prefer the first community that has not been unlocked yet. */
 export function nextDiscordGate(
   gates: DiscordGate[] | undefined,
