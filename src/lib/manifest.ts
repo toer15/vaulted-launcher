@@ -2,6 +2,7 @@ import { artKeyFor } from './art'
 import type { BuildManifest } from './network'
 import { SEASON_CATALOGUE } from './seasons'
 import type { OnlineProviderConfig } from '../types'
+import { isBannedOnlineProvider } from './onlinePolicy'
 
 /** Bundled runtime selected for a build without asking the player anything. */
 export type RuntimeProfile = 'legacy' | 'modern'
@@ -78,6 +79,7 @@ function providerList(
   for (const provider of [primary, ...(Array.isArray(all) ? all : [])]) {
     if (!provider || typeof provider.id !== 'string' || !provider.id.trim()) continue
     const id = provider.id.trim()
+    if (isBannedOnlineProvider(id)) continue
     if (seen.has(id)) continue
     seen.add(id)
     providers.push(provider)
@@ -127,6 +129,8 @@ export function buildSeasonManifest(
       source.runtimeProfile === 'legacy' || source.runtimeProfile === 'modern'
         ? source.runtimeProfile
         : runtimeProfileFor(chapter, buildVersion)
+    // Never let a stale or remote manifest reintroduce a banned launcher.
+    const onlineProviders = providerList(source.onlineProvider, source.onlineProviders)
 
     result[key] = {
       id,
@@ -143,8 +147,8 @@ export function buildSeasonManifest(
       defaultInstallDir: `${root}\\${key}`,
       sha256: source.sha256,
       servers: Array.isArray(source.servers) ? source.servers : undefined,
-      onlineProvider: source.onlineProvider,
-      onlineProviders: providerList(source.onlineProvider, source.onlineProviders),
+      onlineProvider: onlineProviders?.[0],
+      onlineProviders,
       archived: source.archived === true,
     }
   }

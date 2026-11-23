@@ -102,9 +102,17 @@ function main() {
   // catalog permanently, so the guard names the profiles instead of counting
   // them: a truncated package can never pass because one id disappeared.
   const managedIds = new Set(providers.map((provider) => provider.id))
-  for (const id of ['era', 'stellar', 'ezfn', 'ezfn-hybrid', 'reboot']) {
+  for (const id of ['era', 'stellar', 'ezfn', 'ezfn-hybrid']) {
     assert.ok(managedIds.has(id), `packaged provider catalog is missing ${id}`)
   }
+  // Reboot is banned as an online route because it always starts LawinServer,
+  // but its signed DLLs stay packaged as a repair source only.
+  assert.equal(managedIds.has('reboot'), false, 'banned Reboot must not be an online catalog entry')
+  const repairOnlyReboot = providerProfile('reboot')
+  const repairModern = providerRuntime(repairOnlyReboot)
+  const repairLegacy = providerRuntime(repairOnlyReboot, { legacy: true })
+  assert.equal(redirectDllMatchesProfile(repairModern.dll, repairModern.profile), true, 'Reboot repair Tellurium is missing')
+  assert.equal(redirectDllMatchesProfile(repairLegacy.dll, repairLegacy.profile), true, 'Reboot repair Cobalt is missing')
   for (const id of managedIds) {
     assert.ok(!/neo/i.test(id), `${id} must not ship a local Neo route`)
   }

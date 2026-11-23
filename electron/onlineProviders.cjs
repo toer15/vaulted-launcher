@@ -19,6 +19,18 @@ const crypto = require('node:crypto')
  */
 const BUNDLED_MANIFEST = require('../src/assets/builds.json')
 const SAFE_PROVIDER_ID = /^[a-z0-9][a-z0-9-]*$/i
+/**
+ * Reboot Launcher always starts an embedded LawinServer (127.0.0.1), a local
+ * single-user backend. It is never a public online route, so it is excluded
+ * from the UI catalog and every launch entry point rejects it.
+ */
+const BANNED_PROVIDER_IDS = new Set(['reboot-official', 'reboot'])
+const BANNED_PROVIDER_REASON =
+  'Reboot Launcher always starts its embedded LawinServer on 127.0.0.1, which is a private local backend, not public matchmaking. VAULTED will not launch it.'
+
+function isBannedProvider(id) {
+  return typeof id === 'string' && BANNED_PROVIDER_IDS.has(id.trim().toLowerCase())
+}
 const SAFE_DLL_NAME = /^[^\\/:*?"<>|]+\.dll$/i
 const SAFE_EXE_NAME = /^[^\\/:*?"<>|]+\.exe$/i
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -701,7 +713,7 @@ function providerCatalog() {
     global: entry.global,
     dynamicSeasons: entry.dynamicSeasons,
     supportedSeasons: entry.seasons,
-  })), ...localProviderCatalog()]
+  })), ...localProviderCatalog()].filter((entry) => !isBannedProvider(entry.id))
 }
 
 /**
@@ -1200,6 +1212,9 @@ function providerRuntime(profile, options = {}) {
 }
 
 module.exports = {
+  BANNED_PROVIDER_IDS,
+  BANNED_PROVIDER_REASON,
+  isBannedProvider,
   providerRuntimeMetadata,
   ensureProviderRedirects,
   stageProviderDlls,

@@ -19,6 +19,8 @@ const {
   legacyRedirectDllPath,
   providerForId,
   providerProfile,
+  isBannedProvider,
+  BANNED_PROVIDER_REASON,
   providerRuntime,
   providerRuntimeMetadata,
   providerUsesLegacyRedirect,
@@ -2791,6 +2793,9 @@ function companionLauncherMetadata(providerId) {
 async function startCompanionLauncher(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return null
+  // Reboot always starts its embedded LawinServer, so it must never be
+  // spawned as a background companion either.
+  if (isBannedProvider(id)) return null
   const metadata = companionLauncherMetadata(id)
   const executable = metadata ? installedExecutable(metadata) : ''
   const existing = providerLaunchers.get(id)
@@ -5562,6 +5567,7 @@ function spawnExternalLauncher(executable, args) {
 
 async function openProviderLauncherEntry(providerId, options = {}) {
     const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
+    if (isBannedProvider(id)) return { opened: false, error: BANNED_PROVIDER_REASON }
     const profile = id && providerForId(id) ? providerProfile(id) : null
     if (!profile || profile.external !== true || profile.mode !== 'external') {
       return { opened: false, error: 'That provider does not use an official launcher.' }
@@ -5824,6 +5830,7 @@ async function launchOnlineProvider(payload) {
       : ''
   if (!id || !providerId) throw new Error('Invalid online provider launch request.')
   if (running.has(id)) throw new Error('This season is already running.')
+  if (isBannedProvider(providerId)) throw new Error(BANNED_PROVIDER_REASON)
 
   const provider = providerForId(providerId)
   if (!provider) throw new Error('That online provider is not in the bundled catalog.')

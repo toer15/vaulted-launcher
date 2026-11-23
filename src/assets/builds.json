@@ -24,19 +24,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 6591289197,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 6591289197
     },
     "ch1-s2": {
       "id": "ch1-s2",
@@ -62,16 +50,11 @@
       ],
       "sizeBytes": 6976364737,
       "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
+        "id": "sunset",
+        "name": "SunSet Studios",
+        "label": "SunSet"
       },
       "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        },
         {
           "id": "sunset",
           "name": "SunSet Studios",
@@ -185,16 +168,11 @@
       ],
       "sizeBytes": 13283153744,
       "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
+        "id": "sunset",
+        "name": "SunSet Studios",
+        "label": "SunSet"
       },
       "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        },
         {
           "id": "sunset",
           "name": "SunSet Studios",
@@ -225,19 +203,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 10830177578,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 10830177578
     },
     "ch1-s7": {
       "id": "ch1-s7",
@@ -285,19 +251,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 23087753024,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 23087753024
     },
     "ch1-s9": {
       "id": "ch1-s9",
@@ -321,19 +275,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 18553831172,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 18553831172
     },
     "ch1-s10": {
       "id": "ch1-s10",
@@ -383,16 +325,11 @@
       ],
       "sizeBytes": 25244361073,
       "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
+        "id": "ambient",
+        "name": "Ambient",
+        "label": "Ambient"
       },
       "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        },
         {
           "id": "ambient",
           "name": "Ambient",
@@ -488,19 +425,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 85051868529,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 85051868529
     },
     "ch2-s4": {
       "id": "ch2-s4",
@@ -566,16 +491,11 @@
       ],
       "sizeBytes": 30293312103,
       "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
+        "id": "hydro",
+        "name": "Hydro",
+        "label": "Hydro"
       },
       "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        },
         {
           "id": "hydro",
           "name": "Hydro",
@@ -610,19 +530,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 32285717194,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 32285717194
     },
     "ch2-s7": {
       "id": "ch2-s7",
@@ -648,16 +556,11 @@
       ],
       "sizeBytes": 30893875564,
       "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
+        "id": "eon",
+        "name": "Project Eon",
+        "label": "Eon"
       },
       "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        },
         {
           "id": "eon",
           "name": "Project Eon",
@@ -687,19 +590,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 36818767206,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 36818767206
     },
     "ch3-s1": {
       "id": "ch3-s1",
@@ -725,16 +616,11 @@
       ],
       "sizeBytes": 20890688413,
       "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
+        "id": "blue-og",
+        "name": "BlueOG",
+        "label": "BlueOG"
       },
       "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        },
         {
           "id": "blue-og",
           "name": "BlueOG",
@@ -764,19 +650,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 30449531352,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 30449531352
     },
     "ch3-s3": {
       "id": "ch3-s3",
@@ -800,19 +674,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 22624469153,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 22624469153
     },
     "ch3-s4": {
       "id": "ch3-s4",
@@ -836,19 +698,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 20268856467,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 20268856467
     },
     "ch4-s1": {
       "id": "ch4-s1",
@@ -872,19 +722,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 33544852956,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 33544852956
     },
     "ch4-s2": {
       "id": "ch4-s2",
@@ -908,19 +746,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 33412713556,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 33412713556
     },
     "ch4-s3": {
       "id": "ch4-s3",
@@ -944,19 +770,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 58602866850,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 58602866850
     },
     "ch4-s4": {
       "id": "ch4-s4",
@@ -982,16 +796,11 @@
       ],
       "sizeBytes": 74419514811,
       "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
+        "id": "glow",
+        "name": "Glow",
+        "label": "Glow"
       },
       "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        },
         {
           "id": "glow",
           "name": "Glow",
@@ -1021,19 +830,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 21191740399,
-      "onlineProvider": {
-        "id": "reboot-official",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      },
-      "onlineProviders": [
-        {
-          "id": "reboot-official",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        }
-      ]
+      "sizeBytes": 21191740399
     },
     "ch5-s1": {
       "id": "ch5-s1",

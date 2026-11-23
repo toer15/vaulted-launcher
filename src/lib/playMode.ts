@@ -1,5 +1,6 @@
 import { artKeyFor } from './art'
 import { lobbyIsFresh, lobbyPlayers, type LobbyInfo } from './friends'
+import { isBannedOnlineProvider } from './onlinePolicy'
 import type { CommunityDirectoryEntry, CommunityProviderStatus, CommunityServer } from './network'
 import type { Build, GlobalBackend, ProviderLiveStatus } from '../types'
 
@@ -346,7 +347,7 @@ export function routeExternalServer(
   const providerIds = [
     build.onlineProvider?.id,
     ...(build.onlineProviders ?? []).map((provider) => provider.id),
-  ].filter((id): id is string => Boolean(id))
+  ].filter((id): id is string => Boolean(id) && !isBannedOnlineProvider(id))
   const matchesBuildProvider = (serverProviderId: string | undefined) =>
     providerIds.length === 0 || providerIds.some((id) => providerMatches(serverProviderId, id))
   const allLive = rankLobbies((servers || []).filter(isLiveLobby)) as CommunityServer[]
@@ -574,6 +575,14 @@ export function playModesForBuilds(
     const hasGlobal = !archived && Boolean(seasonKey && globalBySeason.has(seasonKey))
     const external = !archived && seasonKey ? externalBySeason.get(seasonKey) ?? [] : []
     const hasExternal = external.length > 0
+    const configuredProviders = [
+      build.onlineProvider,
+      ...(build.onlineProviders ?? []),
+    ].filter(
+      (provider): provider is NonNullable<typeof provider> =>
+        Boolean(provider?.id) && !isBannedOnlineProvider(provider?.id),
+    )
+    const hasProvider = configuredProviders.length > 0
     // A provider Discord gate is an online community route and produces the
     // card's ONLINE · DISCORD badge. It is online even when no relay/backend
     // health probe exists for the season.
@@ -582,7 +591,7 @@ export function playModesForBuilds(
       ? 'unsupported'
       : hasGlobal
         ? 'global'
-        : hasExternal || hasDiscord || build.onlineProvider
+        : hasExternal || hasDiscord || hasProvider
           ? 'launcher'
           : 'unsupported'
     modes[build.id] = {
@@ -596,8 +605,11 @@ export function playModesForBuilds(
             : ONLINE_UNAVAILABLE_LABEL,
       lobbyCount: 0,
       playerCount: 0,
-      ...(build.onlineProvider
-        ? { providerLabel: build.onlineProvider.label || build.onlineProvider.name }
+      ...(hasProvider
+        ? {
+            providerLabel:
+              configuredProviders[0]?.label || configuredProviders[0]?.name,
+          }
         : {}),
       availability,
       ...(hasExternal

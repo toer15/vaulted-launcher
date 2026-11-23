@@ -30,6 +30,9 @@ const catalog = JSON.parse(
 const { fetchProviderLiveStatuses } = require(path.join(root, 'electron', 'providerStatus.cjs'))
 
 const REMOVED_PROVIDERS = new Set(['neo', 'neo-official', 'neonite'])
+// Reboot always starts its embedded LawinServer on loopback; it is not a
+// public online route even when it joins a community game server.
+const BANNED_PROVIDERS = new Set(['reboot', 'reboot-official'])
 const LOOPBACK = /(?:^|[/:@])(?:127\.0\.0\.1|localhost|\[::1\])(?:[/:]|$)/i
 const MANAGED_MODES = new Set(['local', 'global_live'])
 
@@ -48,6 +51,9 @@ async function main() {
     for (const route of routesFor(season)) {
       if (REMOVED_PROVIDERS.has(route.id.trim().toLowerCase())) {
         problems.push(`${season.id} still routes through the removed ${route.label || route.id} provider`)
+      }
+      if (BANNED_PROVIDERS.has(route.id.trim().toLowerCase())) {
+        problems.push(`${season.id} still routes through banned LawinServer launcher ${route.label || route.id}`)
       }
       const catalogEntry = catalog.providers.find((provider) => provider.id === route.id)
       for (const key of ['backendUrl', 'statusUrl']) {

@@ -32,6 +32,8 @@ const {
 } = require('../electron/companionLifecycle.cjs')
 const { mergeSavedBuild } = require('../electron/rebootLauncher.cjs')
 const {
+  BANNED_PROVIDER_IDS,
+  isBannedProvider,
   providerCatalog,
   providerProfile,
   providerRuntime,
@@ -275,38 +277,25 @@ function testLauncherOutlivesBootstrapper() {
 }
 
 function testWorkingSeasons() {
-  // Chapter 1 Season 6 runs on Project Reboot's online launcher. Era's own
-  // binary closed itself mid-session on 6.21, which broke skin saving and
-  // matchmaking, so this season never routes through Era again.
+  // Chapter 1 Season 6 has no verified public backend. Reboot only offers its
+  // embedded LawinServer, so the season must stay unavailable rather than
+  // silently starting a private local lobby.
   const ch1s6 = season('ch1-s6')
   assert.equal(ch1s6.version, '6.21')
-  assert.equal(ch1s6.onlineProvider?.id, 'reboot-official')
-  assert.deepEqual(
-    [...new Set(routeIds(ch1s6))],
-    ['reboot-official'],
-    'ch1-s6 must only route to Project Reboot',
-  )
+  assert.equal(ch1s6.onlineProvider, undefined, 'ch1-s6 must not route to Reboot')
+  assert.equal(ch1s6.onlineProviders, undefined, 'ch1-s6 must not route to any launcher')
+  assert.deepEqual(routeIds(ch1s6), [], 'ch1-s6 has no public online route')
   assert.equal(ch1s6.providerBuild, undefined, "ch1-s6 must not keep Era's live build id")
   assert.ok(ch1s6.downloadUrl, 'ch1-s6 must keep its real 6.21 season build download')
   assert.equal(ch1s6.runtimeProfile, 'legacy')
   const rebootOnline = providerCatalog().find((entry) => entry.id === 'reboot-official')
-  assert.equal(rebootOnline?.mode, 'external', 'Project Reboot is the online launcher route')
-  assert.ok(
-    rebootOnline.supportedSeasons.includes('ch1-s6'),
-    'reboot-official must advertise ch1-s6',
-  )
+  assert.equal(rebootOnline, undefined, 'Reboot must not be exposed as an online provider')
+  assert.equal(isBannedProvider('reboot-official'), true, 'Reboot must be banned')
+  assert.equal(isBannedProvider('reboot'), true, 'the local Reboot profile must be banned')
   assert.match(
     providerRuntimeMetadata('reboot-official')?.label || '',
     /Reboot Launcher/,
-    'the Season 6 companion launcher must stay installable',
-  )
-  // Real online multiplayer only: the replacement route is never loopback.
-  const rebootProfile = providerProfile('reboot-official')
-  assert.match(rebootProfile.backendUrl, /^https:\/\//, 'the Season 6 route must be online')
-  assert.equal(
-    /127\.0\.0\.1|localhost|\[::1\]|\b10\.\d+\.\d+\.\d+/.test(rebootProfile.backendUrl),
-    false,
-    'the Season 6 route must never be a local/loopback backend',
+    'the old Reboot runtime stays only as a repair source',
   )
   // Era keeps its launcher runtime for DLL staging and repair, but owns no
   // season and may not re-claim one from its live build list.
@@ -350,8 +339,25 @@ function testWorkingSeasons() {
     assert.ok(routeIds(season(seasonId)).includes(id), `${seasonId} lost ${id}`)
   }
 
-  // Unavailable seasons stay unavailable instead of gaining a local route.
-  for (const id of ['ch1-s7', 'ch1-s10']) {
+  // Reboot-only seasons and seasons without any public backend stay unavailable.
+  for (const id of [
+    'ch1-s1',
+    'ch1-s6',
+    'ch1-s7',
+    'ch1-s8',
+    'ch1-s9',
+    'ch1-s10',
+    'ch2-s3',
+    'ch2-s6',
+    'ch2-s8',
+    'ch3-s2',
+    'ch3-s3',
+    'ch3-s4',
+    'ch4-s1',
+    'ch4-s2',
+    'ch4-s3',
+    'ch4-s5',
+  ]) {
     const value = season(id)
     assert.equal(value.onlineProvider, undefined, `${id} must stay unavailable`)
     assert.equal(value.onlineProviders, undefined, `${id} must stay unavailable`)
@@ -367,41 +373,87 @@ function testWorkingSeasons() {
   assert.match(providerRuntime(providerProfile('reboot'), { legacy: true }).dll, /Cobalt\.dll$/)
 }
 
-function testOnlineRoutes() {
-  // Every season that has a Project Reboot build must also be routable to
-  // Project Reboot's real online launcher. A local-only `reboot` profile can
-  // never put a player in a match, so it must not be the primary route.
-  const rebootSeasons = Object.values(builds.seasons).filter((value) =>
-    routeIds(value).includes('reboot-official'),
+function testLawinServerBan() {
+  // Reboot always starts an embedded LawinServer on loopback, even when its
+  // server browser points a match at someone else's game server. No season may
+  // offer it as an online route, and no launch entry point may start it.
+  assert.equal(BANNED_PROVIDER_IDS.has('reboot-official'), true)
+  assert.equal(BANNED_PROVIDER_IDS.has('reboot'), true)
+  assert.equal(
+    providerCatalog().some((provider) => isBannedProvider(provider.id)),
+    false,
+    'the UI catalog must not expose a banned provider',
   )
-  assert.ok(rebootSeasons.length >= 20, 'the Project Reboot seasons disappeared')
-  const rebootOfficial = providerCatalog().find((entry) => entry.id === 'reboot-official')
-  assert.equal(rebootOfficial?.mode, 'external', 'reboot-official must stay an online launcher route')
-  assert.equal(rebootOfficial?.external, true)
-  assert.match(
-    providerRuntimeMetadata('reboot-official')?.label || '',
-    /Reboot Launcher/,
-    'the Project Reboot launcher runtime must stay installable',
+  assert.equal(
+    providerCatalog().some((provider) =>
+      /(?:^|[/:@])(?:127\.0\.0\.1|localhost|\[::1\])(?:[/:]|$)/i.test(provider.backendUrl || ''),
+    ),
+    false,
+    'no online provider may point at a loopback backend',
   )
-  for (const value of rebootSeasons) {
-    assert.equal(
-      value.onlineProvider?.id,
-      'reboot-official',
-      `${value.id} must route Play to Project Reboot's online launcher`,
-    )
-    assert.ok(
-      rebootOfficial.supportedSeasons.includes(value.id),
-      `reboot-official no longer advertises ${value.id}`,
-    )
-    // The local profile stays bundled as the repair source for its DLLs, but it
-    // must never be offered as the Play route for a season.
-    assert.equal(
-      routeIds(value).includes('reboot'),
-      false,
-      `${value.id} must not offer the local-only reboot profile as a route`,
-    )
-    assert.equal(providerProfile('reboot').mode, 'download')
+
+  for (const value of Object.values(builds.seasons)) {
+    for (const id of routeIds(value)) {
+      assert.equal(isBannedProvider(id), false, `${value.id} still routes through banned ${id}`)
+    }
   }
+  const serverBuilds = JSON.parse(read('server/assets/builds.json')).seasons || {}
+  for (const value of Object.values(serverBuilds)) {
+    for (const id of routeIds(value)) {
+      assert.equal(isBannedProvider(id), false, `${value.id} still routes through banned ${id}`)
+    }
+  }
+
+  const catalog = JSON.parse(read('resources/providers/provider.json')).providers || []
+  const reboot = catalog.find((entry) => entry.id === 'reboot-official')
+  assert.equal(reboot?.banned, true, 'Reboot must be marked banned in the catalog')
+  assert.deepEqual(reboot?.seasons, [], 'Reboot must not advertise any season')
+  assert.match(reboot?.bannedReason || '', /LawinServer/i)
+  for (const entry of catalog) {
+    assert.equal(
+      /(?:^|[/:@])(?:127\.0\.0\.1|localhost|\[::1\])(?:[/:]|$)/i.test(entry.backendUrl || ''),
+      false,
+      `${entry.id} points at a loopback backend`,
+    )
+  }
+
+  assert.match(
+    MAIN,
+    /if \(isBannedProvider\(id\)\) return \{ opened: false, error: BANNED_PROVIDER_REASON \}/,
+    'the external launcher handoff must reject banned providers',
+  )
+  assert.match(
+    MAIN,
+    /if \(isBannedProvider\(providerId\)\) throw new Error\(BANNED_PROVIDER_REASON\)/,
+    'the managed provider launch must reject banned providers',
+  )
+  assert.match(
+    MAIN,
+    /if \(isBannedProvider\(id\)\) return null/,
+    'the companion launcher must reject banned providers',
+  )
+  assert.equal(/lawinserver\.exe/i.test(MAIN), false, 'main must never spawn LawinServer')
+  const automation = read('electron/companionAutomation.cjs')
+  assert.equal(
+    /lawinserver|127\.0\.0\.1|localhost/i.test(automation),
+    false,
+    'companion automation must never interact with a local backend',
+  )
+  assert.match(
+    read('src/lib/onlinePolicy.ts'),
+    /'reboot-official', 'reboot'/,
+    'the renderer must keep the same ban list',
+  )
+}
+
+function testOnlineRoutes() {
+  // Reboot is not an online route any more: every season keeps only its live
+  // public provider (EZFN, Stellar, Retrac, or a Discord community), never the
+  // embedded LawinServer launcher.
+  const rebootSeasons = Object.values(builds.seasons).filter((value) =>
+    routeIds(value).some((id) => isBannedProvider(id)),
+  )
+  assert.equal(rebootSeasons.length, 0, 'a season still routes through Reboot/LawinServer')
 
   // EZFN and Stellar both exchange a real one-time game code, so a stale
   // pre-auth handshake gate must never block their online launch again.
@@ -417,7 +469,6 @@ function testOnlineRoutes() {
   }
   // Every online season downloads its real Fortnite season build inside
   // VAULTED. No launcher "owns" its builds and skips that archive any more.
-  assert.equal('ownsBuild' in (rebootOfficial.runtime || {}), false)
   const retracCatalog = providerCatalog().find((entry) => entry.id === 'retrac-official')
   assert.equal('ownsBuild' in (retracCatalog?.runtime || {}), false)
   assert.ok(
@@ -715,7 +766,6 @@ function testDiscordOnlyDirectLaunch() {
     'interloop',
     'echo',
     'retrac-official',
-    'reboot-official',
     'era',
     'ezfn',
     'stellar',
@@ -985,6 +1035,7 @@ try {
   testLauncherOutlivesBootstrapper()
   testLaunchWiring()
   testWorkingSeasons()
+  testLawinServerBan()
   testOnlineRoutes()
   testDiscordOnlyDirectLaunch()
   testSessionStability()
@@ -994,7 +1045,7 @@ try {
   testAutoFixWiring()
   testRebootAutoLaunch()
   console.log(
-    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), fully hidden companion launchers (off-screen SW_HIDE windows, Flutter message clicks, zero cursor/foreground input), Project Reboot online routing, Chapter 1 Season 6 on Project Reboot (no Era, no loopback), 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route), and online badge colors (LAUNCHER green on the hero, sidebar and dropdown pills; ONLINE UNAVAILABLE red)',
+    'season regressions passed: launcher lifecycle (start-before-game, alive for the session, survives bootstrapper exit and single missed polls, close only after the client really exits/Stop), fully hidden companion launchers (off-screen SW_HIDE windows, Flutter message clicks, zero cursor/foreground input), a complete LawinServer/loopback ban (Reboot removed from every season route and every launch entry point), no Reboot-only season presented as online, 12.41 Stellar/EZFN, 14.60 Retrac, Discord gates, unavailable seasons, per-provider isolation, hub routing (launcher-backed seasons unlock Download/Start, no season routes through a local profile, real launcher auto-installs on selection, launcher downloads retry), the session stability layer (pre-launch helper cleanup, launch-time token rotation with a one-shot 401 retry, in-game heartbeat, and WebSocket close-code logging), the Auto-Fix tab (scan/repair IPC, runtime and DLL staging, launcher repair, pre-launch health check, no local route), and online badge colors (LAUNCHER green on the hero, sidebar and dropdown pills; ONLINE UNAVAILABLE red)',
   )
 } catch (error) {
   console.error(error)

@@ -2,6 +2,8 @@
   "id": "reboot",
   "name": "Project Reboot",
   "label": "Reboot",
+  "banned": true,
+  "bannedReason": "Reboot always starts its embedded LawinServer (127.0.0.1), a private local backend. No launch is allowed.",
   "backendUrl": "https://rebootfn.org/",
   "redirectDllName": "Tellurium.dll",
   "redirectDllSha256": "16b97054fb1128595300a22a6b79343baf33d6d37b04eea8c9f1af650ba8c766",

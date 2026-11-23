@@ -24,12 +24,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 6591289197,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 6591289197
     },
     "ch1-s2": {
       "id": "ch1-s2",
@@ -53,12 +48,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 6976364737,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 6976364737
     },
     "ch1-s3": {
       "id": "ch1-s3",
@@ -130,12 +120,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 13283153744,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 13283153744
     },
     "ch1-s6": {
       "id": "ch1-s6",
@@ -212,12 +197,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 23087753024,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 23087753024
     },
     "ch1-s9": {
       "id": "ch1-s9",
@@ -241,12 +221,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 18553831172,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 18553831172
     },
     "ch1-s10": {
       "id": "ch1-s10",
@@ -294,12 +269,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 25244361073,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 25244361073
     },
     "ch2-s2": {
       "id": "ch2-s2",
@@ -364,12 +334,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 85051868529,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 85051868529
     },
     "ch2-s4": {
       "id": "ch2-s4",
@@ -395,16 +360,11 @@
       ],
       "sizeBytes": 28769341535,
       "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
+        "id": "retrac",
+        "name": "Retrac",
+        "label": "Retrac"
       },
       "onlineProviders": [
-        {
-          "id": "reboot",
-          "name": "Project Reboot",
-          "label": "Reboot"
-        },
         {
           "id": "retrac",
           "name": "Retrac",
@@ -434,12 +394,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 30293312103,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 30293312103
     },
     "ch2-s6": {
       "id": "ch2-s6",
@@ -463,12 +418,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 32285717194,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 32285717194
     },
     "ch2-s7": {
       "id": "ch2-s7",
@@ -492,12 +442,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 30893875564,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 30893875564
     },
     "ch2-s8": {
       "id": "ch2-s8",
@@ -521,12 +466,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 36818767206,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 36818767206
     },
     "ch3-s1": {
       "id": "ch3-s1",
@@ -550,12 +490,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 20890688413,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 20890688413
     },
     "ch3-s2": {
       "id": "ch3-s2",
@@ -579,12 +514,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 30449531352,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 30449531352
     },
     "ch3-s3": {
       "id": "ch3-s3",
@@ -608,12 +538,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 22624469153,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 22624469153
     },
     "ch3-s4": {
       "id": "ch3-s4",
@@ -637,12 +562,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 20268856467,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 20268856467
     },
     "ch4-s1": {
       "id": "ch4-s1",
@@ -666,12 +586,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 33544852956,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 33544852956
     },
     "ch4-s2": {
       "id": "ch4-s2",
@@ -695,12 +610,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 33412713556,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 33412713556
     },
     "ch4-s3": {
       "id": "ch4-s3",
@@ -724,12 +634,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 58602866850,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 58602866850
     },
     "ch4-s4": {
       "id": "ch4-s4",
@@ -753,12 +658,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 74419514811,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 74419514811
     },
     "ch4-s5": {
       "id": "ch4-s5",
@@ -782,12 +682,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 21191740399,
-      "onlineProvider": {
-        "id": "reboot",
-        "name": "Project Reboot",
-        "label": "Reboot"
-      }
+      "sizeBytes": 21191740399
     },
     "ch5-s1": {
       "id": "ch5-s1",
