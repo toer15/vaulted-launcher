@@ -305,31 +305,202 @@ async function sha256File(file) {
   return hash.digest('hex')
 }
 
-function installMsi(file) {
-  return new Promise((resolve, reject) => {
-    if (process.platform !== 'win32') {
-      reject(new Error('The provider runtime MSI can only be installed on Windows.'))
-      return
-    }
+// A per-machine MSI (Retrac's setup is one) answers 1925 when the caller is
+// not elevated, and msiexec then exits 1603. 1603 is also the generic "fatal
+// error", so the real reason is always read back from msiexec's own log.
+const MSI_PRIVILEGE_CODES = new Set([1603, 1619, 1625, 1923, 1925])
+// Exit codes vendor EXE setups use when the account is not an administrator.
+const PRIVILEGE_EXIT_CODES = new Set([5, 740, ...MSI_PRIVILEGE_CODES])
+
+function fileSize(file) {
+  try {
+    return fs.statSync(file).size
+  } catch {
+    return 0
+  }
+}
+
+/** msiexec writes its verbose log as UTF-16LE with a BOM. */
+function decodeInstallerLog(buffer) {
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return buffer.toString('utf16le', 2)
+  }
+  return buffer.toString('utf8').replace(/^\uFEFF/, '')
+}
+
+/** The true Windows Installer reason behind an msiexec exit code. */
+function readMsiLog(logPath, fallbackCode = 0) {
+  let text = ''
+  try {
+    text = decodeInstallerLog(fs.readFileSync(logPath))
+  } catch {
+    /* the installer may not have written a log at all */
+  }
+  const statuses = [...text.matchAll(/Installation success or error status:\s*(\d+)/g)]
+  const errors = [...text.matchAll(/Error (\d{4})\.\s*([^\r\n]+)/g)]
+  const lastError = errors[errors.length - 1]
+  const code = statuses.length ? Number(statuses[statuses.length - 1][1]) : fallbackCode
+  const message = lastError ? `Windows Installer error ${lastError[1]}: ${lastError[2].trim()}` : ''
+  return {
+    code,
+    message,
+    needsAdmin: MSI_PRIVILEGE_CODES.has(code) || /privilege|administrator/i.test(message),
+  }
+}
+
+/** Run msiexec directly, or raise the standard Windows admin prompt for it. */
+function runMsi(args, options = {}) {
+  const timeoutMs = options.timeoutMs ?? INSTALL_TIMEOUT_MS
+  const exitCode = (error) => (typeof error?.code === 'number' ? error.code : error ? 1 : 0)
+  if (!options.elevated) {
+    return new Promise((resolve) => {
+      execFile('msiexec.exe', args, { windowsHide: true, timeout: timeoutMs }, (error) =>
+        resolve(exitCode(error)),
+      )
+    })
+  }
+  // ShellExecute with RunAs is the supported way to raise the Windows
+  // Installer prompt from a launcher that runs as the normal player account.
+  const wrapper =
+    `$p = Start-Process -FilePath 'msiexec.exe' -ArgumentList @(${args
+      .map(psLiteral)
+      .join(', ')}) -Verb RunAs -WindowStyle Hidden -PassThru; ` +
+    'if ($null -eq $p) { exit 1 }; $p.WaitForExit(); exit $p.ExitCode'
+  return new Promise((resolve) => {
     execFile(
-      'msiexec.exe',
-      ['/i', file, '/qn', '/norestart'],
-      { windowsHide: true, timeout: INSTALL_TIMEOUT_MS },
-      (error, _stdout, stderr) => {
-        const code = typeof error?.code === 'number' ? error.code : error ? 1 : 0
-        if (code === 0 || code === 3010) {
-          resolve(code)
-          return
-        }
-        reject(
-          new Error(
-            `The signed provider runtime could not be installed automatically (MSI exit ${code}). ` +
-              `The verified installer was kept at ${file}.${stderr ? ` ${String(stderr).trim()}` : ''}`,
-          ),
-        )
-      },
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', wrapper],
+      { windowsHide: true, timeout: timeoutMs + 120_000 },
+      (error) => resolve(exitCode(error)),
     )
   })
+}
+
+/** Executable names an MSI provider documents, including its own process. */
+function msiExecutableNames(metadata) {
+  const names = new Set(
+    (metadata?.executableNames || []).map((name) => String(name).toLowerCase()),
+  )
+  for (const candidate of metadata?.installedExecutables || []) {
+    const base = path.basename(String(candidate))
+    if (/\.exe$/i.test(base)) names.add(base.toLowerCase())
+  }
+  const processName = String(metadata?.processName || '').replace(/\.exe$/i, '')
+  if (processName) names.add(`${processName.toLowerCase()}.exe`)
+  return names
+}
+
+function findExecutableIn(directory, names, depth = 0) {
+  if (depth > 6 || names.size === 0) return ''
+  let entries
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true })
+  } catch {
+    return ''
+  }
+  for (const entry of entries) {
+    if (entry.isFile() && names.has(entry.name.toLowerCase())) {
+      return path.join(directory, entry.name)
+    }
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const found = findExecutableIn(path.join(directory, entry.name), names, depth + 1)
+    if (found) return found
+  }
+  return ''
+}
+
+/** The first documented launcher folder this player can write to themselves. */
+function perUserInstallFolder(metadata, env = process.env) {
+  const localAppData = path.normalize(env.LOCALAPPDATA || '')
+  if (!localAppData) return ''
+  for (const candidate of metadata?.installedExecutables || []) {
+    const resolved = path.normalize(expandEnvironmentPath(candidate, env))
+    if (!path.isAbsolute(resolved)) continue
+    if (!resolved.toLowerCase().startsWith(`${localAppData.toLowerCase()}${path.sep}`)) continue
+    return path.dirname(resolved)
+  }
+  return ''
+}
+
+/**
+ * Last resort when the admin prompt is unavailable: an administrative install
+ * (`msiexec /a`) copies the launcher's files without changing the machine,
+ * and VAULTED keeps that copy in the provider's own per-user folder so the
+ * season still unlocks. Registry-dependent extras may be missing, but the
+ * player gets a real launcher instead of a dead season.
+ */
+async function extractMsiForUser(file, metadata, options = {}) {
+  const target = perUserInstallFolder(metadata, options.env)
+  if (!target) return ''
+  const staging = path.join(os.tmpdir(), `vaulted-msi-${process.pid}-${Date.now()}`)
+  const logPath = `${file}.extract.log`
+  try {
+    await fs.promises.mkdir(staging, { recursive: true })
+    const code = await runMsi(
+      ['/a', file, '/qn', '/norestart', `TARGETDIR=${staging}`, '/l*v', logPath],
+      { timeoutMs: INSTALL_TIMEOUT_MS },
+    )
+    if (code !== 0 && code !== 3010) return ''
+    const executable = findExecutableIn(staging, msiExecutableNames(metadata))
+    if (!executable) return ''
+    await fs.promises.mkdir(target, { recursive: true })
+    await fs.promises.cp(path.dirname(executable), target, { recursive: true, force: true })
+    const placed = path.join(target, path.basename(executable))
+    return fs.existsSync(placed) ? placed : ''
+  } catch {
+    return ''
+  } finally {
+    fs.promises.rm(staging, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+async function installMsi(file, metadata, options = {}) {
+  if (process.platform !== 'win32') {
+    throw new Error('The provider runtime MSI can only be installed on Windows.')
+  }
+  const label = metadata?.label || 'The provider launcher'
+  const logPath = options.logPath || `${file}.install.log`
+  const silentArgs = ['/i', file, '/qn', '/norestart']
+  const timeoutMs = options.timeoutMs ?? INSTALL_TIMEOUT_MS
+
+  let code = await runMsi([...silentArgs, '/l*v', logPath], { timeoutMs })
+  if (code === 0 || code === 3010) return { code, elevated: false, extracted: '' }
+  let diagnostic = readMsiLog(logPath, code)
+
+  if (diagnostic.needsAdmin) {
+    const sizeBefore = fileSize(logPath)
+    code = await runMsi([...silentArgs, '/l*v', logPath], { elevated: true, timeoutMs })
+    if (code === 0 || code === 3010) return { code, elevated: true, extracted: '' }
+    // No new log lines means the Windows prompt was dismissed before the
+    // install started, so the player can simply approve it and retry.
+    if (fileSize(logPath) <= sizeBefore) {
+      throw new Error(
+        `${label} installs for every user on this PC, so Windows needs your administrator approval. ` +
+          'The Windows prompt was closed, so nothing was installed. Press Retry and choose Yes.' +
+          (diagnostic.message ? ` (${diagnostic.message})` : ''),
+      )
+    }
+    diagnostic = readMsiLog(logPath, code)
+  }
+
+  // Some per-machine packages can still install for the current user only,
+  // which never needs administrator rights.
+  code = await runMsi(
+    [...silentArgs, 'ALLUSERS=2', 'MSIINSTALLPERUSER=1', '/l*v', `${logPath}.peruser.log`],
+    { timeoutMs },
+  )
+  if (code === 0 || code === 3010) return { code, elevated: false, extracted: '' }
+
+  const extracted = await extractMsiForUser(file, metadata, options)
+  if (extracted) return { code: 0, elevated: false, extracted }
+
+  throw new Error(
+    `${label} could not be installed (${
+      diagnostic.message || `Windows Installer error ${diagnostic.code || code}`
+    }). The verified installer is kept at ${file}; its install log is at ${logPath}.`,
+  )
 }
 
 function psLiteral(value) {
@@ -534,6 +705,30 @@ function installExe(file, options = {}) {
         finish(resolve, code ?? 0)
         return
       }
+      // A vendor setup can fail its inner per-machine MSI (1603/1925), or
+      // report access denied (5) even though its own manifest never asked for
+      // elevation. Retry once through the Windows admin prompt instead of
+      // leaving the season locked behind an opaque exit code.
+      if (PRIVILEGE_EXIT_CODES.has(code) && options.elevated !== true) {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (probeTimer) clearInterval(probeTimer)
+        const blockedWsh = readWshBlock()
+        if (blockedWsh) {
+          reject(
+            new Error(
+              `The provider installer tried to run Windows Script Host and was blocked (${blockedWsh}).`,
+            ),
+          )
+          return
+        }
+        installExeElevated(file, args, {
+          isInstalled: options.isInstalled,
+          hideNames: options.hideNames,
+        }).then(resolve, reject)
+        return
+      }
       finish(
         reject,
         new Error(
@@ -656,13 +851,34 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
     }
 
     let executable = installedExecutable(metadata, options.env)
+    // A launcher whose own file version does not match the installer is still
+    // current when VAULTED installed exactly this release; without this record
+    // every press of Retry would reinstall it (and re-raise UAC).
+    let installedRecord = null
+    try {
+      installedRecord = JSON.parse(
+        await fs.promises.readFile(path.join(folder, 'installed.json'), 'utf8'),
+      )
+    } catch {
+      installedRecord = null
+    }
+    const recordedExecutable =
+      options.forceInstall !== true &&
+      installedRecord?.version === release.version &&
+      typeof installedRecord.executable === 'string' &&
+      installedRecord.executable &&
+      fs.existsSync(installedRecord.executable)
+        ? installedRecord.executable
+        : ''
+    if (recordedExecutable) executable = recordedExecutable
     // A launcher that is on disk but crashes on startup is not a working
     // install. `forceInstall` runs the vendor's own setup again over it, which
     // is the only repair that restores its bundled Flutter assets.
     const currentInstall =
       options.forceInstall !== true &&
-      executable &&
-      (metadata.kind === 'exe' || (await fileVersion(executable)).startsWith(release.version))
+      (Boolean(recordedExecutable) ||
+        (executable &&
+          (metadata.kind === 'exe' || (await fileVersion(executable)).startsWith(release.version))))
     if (!currentInstall && metadata.autoInstall !== false && options.install !== false) {
       options.report?.({
         received: meta.size,
@@ -674,7 +890,11 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
         url: release.url,
       })
       if (metadata.kind === 'msi') {
-        await installMsi(installer)
+        const result = await installMsi(installer, metadata, {
+          env: options.env,
+          logPath: path.join(folder, `install-${release.version}.log`),
+        })
+        if (result?.extracted) executable = result.extracted
       } else {
         const silentArgs = Array.isArray(metadata.silentArgs) ? metadata.silentArgs : []
         // Squirrel-based setups start the vendor launcher as they finish.
@@ -712,9 +932,10 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
           })
         }
       }
-      executable = await waitForExecutable(metadata, options.env, {
+      const detected = await waitForExecutable(metadata, options.env, {
         signal: options.signal,
       })
+      executable = detected || executable
       if (!executable) {
         throw new Error(
           `The ${metadata.label} installer finished, but ${metadata.processName} was not found in its documented install folders. Press Install again to retry; VAULTED never opens the project website instead.`,
@@ -748,10 +969,16 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
 module.exports = {
   downloadInstaller,
   ensureProviderRuntime,
+  extractMsiForUser,
+  findExecutableIn,
   installExe,
+  installMsi,
   installedExecutable,
   installedExecutables,
   launchArguments,
+  msiExecutableNames,
+  perUserInstallFolder,
+  readMsiLog,
   resolveRelease,
   validateInstaller,
   waitForExecutable,
