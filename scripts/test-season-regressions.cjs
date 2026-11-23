@@ -1006,6 +1006,14 @@ function testCardStates() {
   assert.match(playMode, /availability === 'launcher'/)
   const card = read('src/components/ActiveBuildCard.tsx')
   assert.match(card, /onlineIsUnavailable/)
+
+  // The library can be reduced to only seasons a player can enter right now,
+  // including launcher-backed routes without a player-count sample.
+  const rail = read('src/components/LibraryRail.tsx')
+  assert.match(rail, /type LibraryFilter = 'all' \| 'online' \| 'installed' \| 'active'/)
+  assert.match(rail, /builds\.filter\(\(build\) => onlineIsPlayable\(playModes\[build\.id\]\)\)/)
+  assert.match(rail, /aria-label={`Online available \(\$\{onlineBuilds\.length\}\)`}/)
+  assert.match(rail, /filter === 'online' && visibleBuilds\.length === 0/)
 }
 
 async function testDiscordOnlyNeverCountsOnline() {

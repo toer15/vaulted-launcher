@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
-import { FolderPlus, HardDrive, Plus, Radio } from 'lucide-react'
+import { FolderPlus, HardDrive, Plus, Radio, Wifi } from 'lucide-react'
 import { BuildList } from './BuildList'
 import { cx } from '../lib/cx'
-import { onlinePlayerCount, type SeasonPlayMode } from '../lib/playMode'
+import { onlineIsPlayable, onlinePlayerCount, type SeasonPlayMode } from '../lib/playMode'
 import type { Build, DownloadState } from '../types'
 
-type LibraryFilter = 'all' | 'installed' | 'active'
+type LibraryFilter = 'all' | 'online' | 'installed' | 'active'
 
 interface LibraryRailProps {
   builds: Build[]
@@ -45,6 +45,14 @@ export function LibraryRail({
     () => builds.filter((build) => installed[build.id] === true),
     [builds, installed],
   )
+  // Every season a player can actually enter right now: a live backend, a
+  // joinable directory lobby, or a verified launcher-backed external route.
+  // This is deliberately broader than Active Players, which needs a reported
+  // player count and hides a working launcher with no player sample.
+  const onlineBuilds = useMemo(
+    () => builds.filter((build) => onlineIsPlayable(playModes[build.id])),
+    [builds, playModes],
+  )
   const activeBuilds = useMemo(
     () =>
       builds.filter(
@@ -58,7 +66,13 @@ export function LibraryRail({
     [activeBuilds, playModes],
   )
   const visibleBuilds =
-    filter === 'installed' ? installedBuilds : filter === 'active' ? activeBuilds : builds
+    filter === 'online'
+      ? onlineBuilds
+      : filter === 'installed'
+        ? installedBuilds
+        : filter === 'active'
+          ? activeBuilds
+          : builds
 
   const tabClass = (selected: boolean, activeTone = false) =>
     cx(
@@ -92,7 +106,7 @@ export function LibraryRail({
       <div
         role="group"
         aria-label="Library filter"
-        className="mt-3 grid grid-cols-3 gap-1 rounded-xl border border-line/70 bg-black/20 p-1"
+        className="mt-3 grid grid-cols-2 gap-1 rounded-xl border border-line/70 bg-black/20 p-1"
       >
         <button
           type="button"
@@ -103,6 +117,19 @@ export function LibraryRail({
         >
           <span>All Seasons</span>
           <span className="font-mono text-[8.5px] opacity-70">({builds.length})</span>
+        </button>
+        <button
+          type="button"
+          aria-pressed={filter === 'online'}
+          aria-label={`Online available (${onlineBuilds.length})`}
+          onClick={() => setFilter('online')}
+          className={tabClass(filter === 'online', true)}
+        >
+          <span className="flex items-center gap-1">
+            <Wifi className="h-2.5 w-2.5" />
+            Online
+          </span>
+          <span className="font-mono text-[8.5px] opacity-70">({onlineBuilds.length})</span>
         </button>
         <button
           type="button"
@@ -162,6 +189,22 @@ export function LibraryRail({
               Link Existing Folder
             </button>
           </div>
+        ) : filter === 'online' && visibleBuilds.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-line px-4 py-10 text-center">
+            <Wifi className="mx-auto h-5 w-5 text-emerald-300/80" />
+            <p className="mt-3 text-[13px] font-medium text-mist">No online seasons available</p>
+            <p className="mt-1 text-[12px] leading-relaxed text-fog">
+              No season has a live server or verified launcher right now. VAULTED will unlock a season as
+              soon as its route comes online.
+            </p>
+            <button
+              type="button"
+              onClick={() => setFilter('all')}
+              className="mt-4 rounded-lg border border-line bg-white/[0.04] px-3.5 py-2 text-[12px] font-semibold text-mist transition-colors duration-200 hover:border-arc/45 hover:bg-arc/10 hover:text-white"
+            >
+              Show all seasons
+            </button>
+          </div>
         ) : filter === 'active' && visibleBuilds.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-line px-4 py-10 text-center">
             <Radio className="mx-auto h-5 w-5 text-emerald-300/80" />
@@ -200,8 +243,9 @@ export function LibraryRail({
         <p className="flex items-start gap-2">
           <HardDrive className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
-            Every chapter and season. <span className="text-emerald-300">Installed</span> = on this PC and ready to
-            play. <span className="text-emerald-300">ONLINE</span> = live servers are reporting.{" "}
+            Every chapter and season. <span className="text-emerald-300">Online tab</span> = live server or verified
+            launcher. <span className="text-emerald-300">Installed</span> = on this PC and ready to play.{" "}
+            <span className="text-emerald-300">ONLINE</span> = live servers are reporting.{" "}
             <span className="text-sky-200">CHECKING</span> = verifying server status;{" "}
             <span className="text-[#c7ccff]">ONLINE · DISCORD</span> = join the community to unlock;{" "}
             <span className="text-rose-200">ONLINE UNAVAILABLE</span> = online isn't available yet; the owner is
