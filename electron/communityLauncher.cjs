@@ -484,16 +484,90 @@ const SILENT_ARGUMENTS = {
 }
 
 /**
- * Copy a verified portable launcher into VAULTED's own provider folder and
- * re-hash the copy, so the recorded sha256 describes the file that will run
- * and the season keeps working after the player empties Downloads.
+ * A portable launcher usually loads DLLs, fonts or data from the folder it
+ * ships in, so the copy has to keep that folder together. Whole folders are
+ * copied when they are a launcher's own directory; a file sitting directly in
+ * a shell folder (Downloads, Desktop, ...) would drag the entire folder along,
+ * so there only its companion files are copied next to it.
  */
+const PORTABLE_COMPANION = /\.(?:dll|pak|dat|bin|json|ini|cfg|conf|toml|yml|yaml|xml|txt|sig|cat|db|sqlite|pdb|assets|uasset|uexp|ubulk|png|jpg|jpeg|ico|bmp|gif|svg|ttf|otf|woff2?|csv)$/i
+const SHELL_FOLDER = /^(?:downloads|desktop|documents|pictures|music|videos|onedrive)$/i
+const MAX_PORTABLE_FILES = 400
+const MAX_PORTABLE_BYTES = 3 * 1024 * 1024 * 1024
+
+function portableTreeBudget(directory, budget = { files: 0, bytes: 0 }, depth = 0) {
+  if (depth > 6 || budget.files > MAX_PORTABLE_FILES || budget.bytes > MAX_PORTABLE_BYTES) {
+    return budget
+  }
+  let entries
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true })
+  } catch {
+    return budget
+  }
+  for (const entry of entries) {
+    const full = path.join(directory, entry.name)
+    if (entry.isDirectory()) {
+      if (/^(?:node_modules|\.git|__macosx|cache)$/i.test(entry.name)) continue
+      portableTreeBudget(full, budget, depth + 1)
+      if (budget.files > MAX_PORTABLE_FILES || budget.bytes > MAX_PORTABLE_BYTES) return budget
+      continue
+    }
+    if (!entry.isFile()) continue
+    budget.files += 1
+    try {
+      budget.bytes += fs.statSync(full).size
+    } catch {
+      /* a vanished file cannot be copied either */
+    }
+    if (budget.files > MAX_PORTABLE_FILES || budget.bytes > MAX_PORTABLE_BYTES) return budget
+  }
+  return budget
+}
+
+function copyPortableCompanions(sourceDirectory, destination) {
+  let entries
+  try {
+    entries = fs.readdirSync(sourceDirectory, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !PORTABLE_COMPANION.test(entry.name)) continue
+    try {
+      fs.copyFileSync(path.join(sourceDirectory, entry.name), path.join(destination, entry.name))
+    } catch {
+      /* a locked companion is reported by the launcher, not silently dropped from the record */
+    }
+  }
+}
+
 async function stagePortableLauncher(scan, root, providerId) {
-  const directory = path.join(rootFor(root), providerId)
-  fs.mkdirSync(directory, { recursive: true })
-  const target = path.join(directory, path.basename(scan.path))
-  if (path.normalize(target) !== path.normalize(scan.path)) {
-    fs.copyFileSync(scan.path, target)
+  const destination = path.join(rootFor(root), providerId)
+  fs.mkdirSync(destination, { recursive: true })
+  const sourceDirectory = path.dirname(scan.path)
+  const alreadyStaged = path
+    .resolve(sourceDirectory)
+    .startsWith(`${path.resolve(destination)}${path.sep}`)
+  let target
+  if (alreadyStaged) {
+    // Re-importing a launcher VAULTED already staged must not copy it onto itself.
+    target = scan.path
+  } else {
+    const budget = portableTreeBudget(sourceDirectory)
+    const wholeFolder =
+      !SHELL_FOLDER.test(path.basename(sourceDirectory)) &&
+      budget.files <= MAX_PORTABLE_FILES &&
+      budget.bytes <= MAX_PORTABLE_BYTES
+    if (wholeFolder) {
+      const folder = path.join(destination, path.basename(sourceDirectory) || 'launcher')
+      fs.cpSync(sourceDirectory, folder, { recursive: true, force: true })
+      target = path.join(folder, path.basename(scan.path))
+    } else {
+      target = path.join(destination, path.basename(scan.path))
+      fs.copyFileSync(scan.path, target)
+      copyPortableCompanions(sourceDirectory, destination)
+    }
   }
   const sha256 = await sha256File(target)
   if (scan.sha256 && sha256 !== scan.sha256) {
@@ -708,7 +782,9 @@ module.exports = {
   communityLauncherExecutable,
   communityLauncherRecord,
   communityLauncherStatus,
+  copyPortableCompanions,
   detectInstallerKind,
+  portableTreeBudget,
   stagePortableLauncher,
   downloadsDirectory,
   findNewExecutable,

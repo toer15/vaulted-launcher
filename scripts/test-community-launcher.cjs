@@ -190,10 +190,14 @@ async function checkPortableLauncher() {
   assert.ok(sevenZip, 'the bundled 7-Zip helper is available')
   assert.equal(await launcher.detectInstallerKind(sevenZip), 'portable', 'a bare .exe is portable')
 
-  const portableDir = path.join(tempRoot, 'portable')
-  fs.mkdirSync(portableDir, { recursive: true })
+  const portableDir = path.join(tempRoot, 'portable', 'OriginsLauncher')
+  fs.mkdirSync(path.join(portableDir, 'data'), { recursive: true })
   const portable = path.join(portableDir, 'OriginsLauncher.exe')
   fs.copyFileSync(sevenZip, portable)
+  // A portable launcher loads these from the folder it ships in.
+  fs.writeFileSync(path.join(portableDir, 'OriginsLauncher.dll'), Buffer.alloc(2048, 7))
+  fs.writeFileSync(path.join(portableDir, 'data', 'settings.json'), '{"region":"eu"}')
+  fs.writeFileSync(path.join(portableDir, 'unrelated.zip'), Buffer.alloc(1024, 1))
 
   assert.equal(
     await launcher.inspectExecutableForLocalBackend(portable),
@@ -245,11 +249,27 @@ async function checkPortableLauncher() {
     false,
     'nothing is unpacked or installed for a portable launcher',
   )
-  const staged = path.join(store, 'origins', 'OriginsLauncher.exe')
+  const stagedFolder = path.join(store, 'origins', 'OriginsLauncher')
+  const staged = path.join(stagedFolder, 'OriginsLauncher.exe')
   assert.equal(
     fs.existsSync(staged),
     true,
     'the verified portable launcher is copied into that provider folder',
+  )
+  assert.equal(
+    fs.existsSync(path.join(stagedFolder, 'OriginsLauncher.dll')),
+    true,
+    'a portable launcher keeps the DLL that ships beside it',
+  )
+  assert.equal(
+    fs.readFileSync(path.join(stagedFolder, 'data', 'settings.json'), 'utf8'),
+    '{"region":"eu"}',
+    'a portable launcher keeps its data subfolders',
+  )
+  assert.equal(
+    fs.existsSync(path.join(stagedFolder, 'unrelated.zip')),
+    true,
+    'the launcher folder is copied as a whole, exactly as the player received it',
   )
   assert.equal(
     launcher.communityLauncherExecutable('origins', store),
@@ -259,6 +279,41 @@ async function checkPortableLauncher() {
   assert.equal(result.sha256, await (require('node:crypto').createHash('sha256').update(fs.readFileSync(staged)).digest('hex')), 'the recorded sha256 is the staged copy')
   assert.equal(launcher.communityLauncherStatus('origins', store).portable, true)
   assert.equal(launcher.communityLauncherStatus('origins', store).executableName, 'OriginsLauncher.exe')
+
+  // A launcher dropped straight into a shell folder is not copied with the
+  // whole Downloads folder: only it and its companion files move.
+  const flatName = 'VynxLauncher.exe'
+  const flat = path.join(downloads, flatName)
+  fs.copyFileSync(sevenZip, flat)
+  fs.writeFileSync(path.join(downloads, 'VynxLauncher.dll'), Buffer.alloc(1024, 3))
+  fs.writeFileSync(path.join(downloads, 'notes.txt'), Buffer.alloc(512, 4))
+  fs.writeFileSync(path.join(downloads, 'other-installer.exe'), Buffer.alloc(700_000, 5))
+  const flatResult = await launcher.importCommunityLauncher({
+    providerId: 'vynx',
+    label: 'Vynx',
+    file: flat,
+    root: store,
+    env: portableEnv,
+    report: () => {},
+  })
+  const flatStaged = path.join(store, 'vynx', flatName)
+  assert.equal(flatResult.portable, true)
+  assert.equal(fs.existsSync(flatStaged), true, 'a Downloads launcher is copied flat into its provider folder')
+  assert.equal(
+    fs.existsSync(path.join(store, 'vynx', 'VynxLauncher.dll')),
+    true,
+    'its companion DLL comes with it',
+  )
+  assert.equal(
+    fs.existsSync(path.join(store, 'vynx', 'other-installer.exe')),
+    false,
+    'an unrelated installer in Downloads is never copied',
+  )
+  assert.equal(
+    fs.existsSync(path.join(store, 'vynx', 'VynxLauncher', 'VynxLauncher.exe')),
+    false,
+    'a shell folder is never copied as if it were the launcher folder',
+  )
 
   await assert.rejects(
     launcher.importCommunityLauncher({
@@ -277,7 +332,7 @@ async function checkPortableLauncher() {
 checkPortableLauncher()
   .then(() => {
     console.log(
-      'community launcher checks passed: LawinServer/127.0.0.1 refusal, Downloads detection, silent switches, portable .exe copied into its provider folder without reinstalling, Start handing the season folder to the hidden launcher, provider-scoped executable record, two-step Discord UI, and an unchanged installer/local-server ban',
+      'community launcher checks passed: LawinServer/127.0.0.1 refusal, Downloads detection, silent switches, portable .exe copied with the folder and companions it ships with, without reinstalling, Start handing the season folder to the hidden launcher, provider-scoped executable record, two-step Discord UI, and an unchanged installer/local-server ban',
     )
   })
   .catch((error) => {

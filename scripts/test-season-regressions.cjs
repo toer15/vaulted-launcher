@@ -1674,6 +1674,16 @@ function testCommunityLauncherUnlock() {
   )
   assert.match(
     launcher,
+    /fs\.cpSync\(sourceDirectory, folder/,
+    'a portable launcher keeps the folder and files it ships with',
+  )
+  assert.match(
+    launcher,
+    /copyPortableCompanions/,
+    'a launcher dropped in Downloads still brings its DLLs and data',
+  )
+  assert.match(
+    launcher,
     /inspectExecutableForLocalBackend/,
     'a portable .exe image is checked for a bundled local backend',
   )
