@@ -62,11 +62,16 @@
       ],
       "sizeBytes": 6976364737,
       "onlineProvider": {
-        "id": "sunset",
-        "name": "SunSet Studios",
-        "label": "SunSet"
+        "id": "hestia-official",
+        "name": "Project Hestia",
+        "label": "Hestia"
       },
       "onlineProviders": [
+        {
+          "id": "hestia-official",
+          "name": "Project Hestia",
+          "label": "Hestia"
+        },
         {
           "id": "sunset",
           "name": "SunSet Studios",

@@ -34,7 +34,7 @@ const globalProviderIds = ['stellar']
 const externalProviderIds = [
   'eon', 'hydro', 'interloop', 'crystal', 'arc', 'retrac-official',
   'slurp', 'ambient', 'reef', 'legacy-mp', 'horizon', 'sunset', 'blue-og', 'glow',
-  'reboot-official', 'neo', 'era-official',
+  'reboot-official', 'neo', 'era-official', 'hestia-official',
 ]
 const dllProviderIds = [...localProviderIds, ...globalProviderIds]
 const bannedProviderIds = new Set(['reboot', 'reboot-official', 'echo'])

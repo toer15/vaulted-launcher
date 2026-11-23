@@ -833,6 +833,51 @@
       }
     },
     {
+      "id": "hestia-official",
+      "name": "Project Hestia",
+      "label": "Hestia",
+      "mode": "external",
+      "launchKind": "official",
+      "backendUrl": "https://ogfn.org/",
+      "website": "https://ogfn.org/",
+      "launchUrl": "https://ogfn.org/",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch1-s2"
+      ],
+      "statusUrl": "https://ogfn.org/",
+      "runtime": {
+        "kind": "exe",
+        "label": "Hestia Launcher",
+        "version": "0.1.7",
+        "downloadUrl": "https://ogfn.org/download",
+        "downloadHosts": [
+          "ogfn.org",
+          "content-delivery-network.ogfn.org"
+        ],
+        "installerName": "Hestia_0.1.7_x64-setup.exe",
+        "silentArgs": [
+          "/S"
+        ],
+        "allowUnsigned": true,
+        "interactive": true,
+        "autoInstall": true,
+        "installedExecutables": [
+          "%LOCALAPPDATA%/Hestia/hestia-launcher.exe"
+        ],
+        "executableNames": [
+          "hestia-launcher.exe"
+        ],
+        "installRoots": [
+          "%LOCALAPPDATA%"
+        ],
+        "launchArgs": [],
+        "processName": "hestia-launcher.exe"
+      }
+    },
+    {
       "id": "legacy-official",
       "name": "Project Legacy",
       "label": "Project Legacy",

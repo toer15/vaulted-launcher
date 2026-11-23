@@ -325,7 +325,9 @@ function testWorkingSeasons() {
   // A dedicated community's route must stay the primary one; Era is attached
   // behind it so following a rotation never demotes SunSet or ARC.
   for (const [seasonId, primaryId] of Object.entries({
-    'ch1-s2': 'sunset',
+    // Project Hestia hosts 1.11 from its own launcher, so it leads Season 2;
+    // SunSet stays attached as the community route behind it.
+    'ch1-s2': 'hestia-official',
     'ch1-s3': 'sunset',
     'ch1-s4': 'arc',
     'ch1-s5': 'sunset',
@@ -1181,6 +1183,32 @@ function testCardStates() {
   assert.match(rail, /filter === 'online' && visibleBuilds\.length === 0/)
 }
 
+function testHestiaAddsChapter1Season2Route() {
+  // Project Hestia hosts Chapter 1 Season 2 (1.11) from its own launcher. It is
+  // an extra option next to SunSet, whose dedicated primary stays untouched.
+  const builds = JSON.parse(read('src/assets/builds.json'))
+  const season = builds.seasons['ch1-s2']
+  assert.equal(season.version, '1.11')
+  const ids = (season.onlineProviders || []).map((provider) => provider.id)
+  assert.ok(ids.includes('hestia-official'), 'ch1-s2 must offer Project Hestia')
+  assert.ok(ids.includes('sunset'), 'ch1-s2 must keep the SunSet community route')
+  assert.equal(
+    season.onlineProvider.id,
+    'hestia-official',
+    'the verified Hestia launcher is the playable Chapter 1 Season 2 route',
+  )
+  const providers = JSON.parse(read('resources/providers/provider.json')).providers
+  const hestia = providers.find((provider) => provider.id === 'hestia-official')
+  assert.ok(hestia, 'Project Hestia must be in the provider catalog')
+  assert.equal(hestia.mode, 'external')
+  assert.deepEqual(hestia.seasons, ['ch1-s2'])
+  assert.equal(hestia.runtime.downloadUrl, 'https://ogfn.org/download')
+  assert.ok(
+    hestia.runtime.installedExecutables.includes('%LOCALAPPDATA%/Hestia/hestia-launcher.exe'),
+    'the verified Hestia install path must be detected',
+  )
+}
+
 function testInstallSeasonRequiresExplicitClick() {
   // A season is 6-30 GB: selecting a card, pressing Start or resuming a launch
   // must never start that download. Only the Install Season button may.
@@ -1537,6 +1565,7 @@ async function run() {
   testSessionStability()
   testProviderIsolation()
   testCardStates()
+  testHestiaAddsChapter1Season2Route()
   testInstallSeasonRequiresExplicitClick()
   await testSeasonRotationGuard()
   await testDiscordOnlyNeverCountsOnline()
