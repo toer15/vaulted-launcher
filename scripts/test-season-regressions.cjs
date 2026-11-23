@@ -328,7 +328,7 @@ function testWorkingSeasons() {
     // Project Hestia hosts 1.11 from its own launcher, so it leads Season 2;
     // SunSet stays attached as the community route behind it.
     'ch1-s2': 'hestia-official',
-    'ch1-s3': 'sunset',
+    'ch1-s3': 'omen-official',
     'ch1-s4': 'arc',
     'ch1-s5': 'sunset',
   })) {
@@ -442,6 +442,37 @@ function testWorkingSeasons() {
   const origins = providerCatalog().find((entry) => entry.id === 'origins-official')
   assert.equal(origins?.discordGate?.guildId, '1500960775743733942', 'Origins guild must stay pinned')
   assert.equal(origins?.runtime, undefined, 'Origins ships no installer VAULTED runs')
+
+  // Project Omen hosts Chapter 1 Season 3 (12.5k members, 2.7k online) and ARC
+  // hosts Chapter 1 Season 4 v4.5 (11.2k members). VYNX hosts Chapter 2
+  // Season 1 (26.6k members). Each guild id was read back from Discord's API,
+  // so a renamed or replaced invite fails here instead of shipping silently.
+  for (const [seasonId, providerId, guildId, invite] of [
+    ['ch1-s3', 'omen-official', '1510765844404109332', 'https://discord.gg/omenmp'],
+    ['ch1-s4', 'arc', '1538872114537562163', 'https://discord.gg/arcogfn'],
+    ['ch2-s1', 'vynx-official', '1366960510699831306', 'https://discord.gg/vynxzy'],
+  ]) {
+    const value = season(seasonId)
+    assert.equal(value.onlineProvider?.id, providerId, `${seasonId} must lead with ${providerId}`)
+    assert.equal(value.onlineProviders?.[0]?.id, providerId)
+    const provider = providerCatalog().find((entry) => entry.id === providerId)
+    assert.equal(provider?.discordGate?.guildId, guildId, `${providerId} guild must stay pinned`)
+    assert.equal(provider?.discordGate?.inviteUrl, invite, `${providerId} invite must stay pinned`)
+    assert.equal(provider?.communityVerified, true, `${providerId} is a verified hosted community`)
+    assert.equal(provider?.directLaunch, true, `${providerId} unlocks through the community launcher`)
+    assert.equal(provider?.runtime, undefined, `${providerId} ships no installer VAULTED runs`)
+  }
+
+  // Rewind runs Chapter 5 Season 1 (28.30) as well as 24.20: its invite states
+  // Chapter 5 Season 1 and a 2026 Rewind tutorial walks through that build.
+  const ch5s1 = season('ch5-s1')
+  assert.equal(ch5s1.version, '28.30')
+  assert.equal(ch5s1.onlineProvider?.id, 'rewind-official', 'ch5-s1 must route through Rewind')
+  assert.deepEqual([...new Set(routeIds(ch5s1))], ['rewind-official'])
+  assert.ok(
+    rewind.supportedSeasons.includes('ch5-s1') && rewind.supportedSeasons.includes('ch4-s2'),
+    'Rewind must cover both 24.20 and 28.30',
+  )
 
   // Chapter 1 Season X runs on Project Neo's verified launcher. The launcher
   // installs to %LOCALAPPDATA%\NeoLauncher\current\NeoLauncher.exe (confirmed on
@@ -580,8 +611,8 @@ function testLawinServerBan() {
   assert.match(echoCatalog?.bannedReason || '', /WinRAR SFX|malicious|SYSTEM scheduled task/i)
   assert.deepEqual(
     [...new Set(routeIds(season('ch1-s3')))],
-    ['sunset', 'era-official'],
-    'ch1-s3 keeps SunSet as its dedicated route and adds Era behind it',
+    ['omen-official', 'era-official'],
+    'ch1-s3 routes through Omen and keeps Era behind it',
   )
   const sunset = providerCatalog().find((entry) => entry.id === 'sunset')
   assert.ok(sunset, 'the SunSet replacement is missing from the provider catalog')
@@ -908,7 +939,6 @@ function testOnlineRoutes() {
   assert.equal(hybridCatalog?.mode, 'download', 'ezfn-hybrid must stay a local profile')
   assert.equal(hybridCatalog?.auth, 'none')
   const localOnlySeasons = [
-    'ch5-s1',
     'ch5-s2',
     'ch5-s3',
     'ch5-s4',
@@ -1020,6 +1050,8 @@ function testDiscordOnlyDirectLaunch() {
     'glow',
     'rewind-official',
     'origins-official',
+    'omen-official',
+    'vynx-official',
   ]
   for (const id of directIds) {
     const entry = catalog.find((provider) => provider.id === id)
@@ -1401,8 +1433,8 @@ async function testDiscordOnlyNeverCountsOnline() {
   assert.equal(report.expectedSeasons, 43)
   assert.equal(report.seasons.length, 43, 'the audit must sweep every bundled season')
   assert.equal(report.counts.LAUNCHER, 0, 'offline mode must not report a launcher as verified')
-  assert.equal(report.counts.COMMUNITY, 3, 'only the three verified communities are community routes')
-  for (const id of ['ch4-s2', 'ch4-s4', 'ch3-s1']) {
+  assert.equal(report.counts.COMMUNITY, 7, 'only the seven verified community seasons are playable')
+  for (const id of ['ch4-s2', 'ch4-s4', 'ch3-s1', 'ch1-s3', 'ch1-s4', 'ch2-s1', 'ch5-s1']) {
     assert.equal(
       report.seasons.find((row) => row.id === id)?.state,
       'COMMUNITY',
@@ -1410,8 +1442,13 @@ async function testDiscordOnlyNeverCountsOnline() {
     )
   }
   const ch1s3 = report.seasons.find((row) => row.id === 'ch1-s3')
-  assert.equal(ch1s3?.state, 'UNAVAILABLE', 'Ch1 S3 must be locked without live evidence')
-  assert.equal(ch1s3?.wired, false)
+  assert.equal(ch1s3?.state, 'COMMUNITY', 'Ch1 S3 runs on Omen')
+  assert.equal(ch1s3?.wired, true)
+  for (const id of ['ch2-s6', 'ch3-s2']) {
+    const row = report.seasons.find((entry) => entry.id === id)
+    assert.equal(row?.state, 'UNAVAILABLE', `${id} has no verified community yet`)
+    assert.equal(row?.wired, false)
+  }
 }
 
 function testOnlineBadgeColors() {

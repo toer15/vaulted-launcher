@@ -7,6 +7,8 @@ const builds = require('../src/assets/builds.json')
 
 const expected = {
   'rewind-official': 'ch4-s2',
+  'omen-official': 'ch1-s3',
+  'vynx-official': 'ch2-s1',
   'origins-official': 'ch3-s1',
   crystal: 'ch2-s5',
   arc: 'ch1-s4',

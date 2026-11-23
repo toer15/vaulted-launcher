@@ -388,10 +388,16 @@
         "label": "ARC Discord"
       },
       "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "arcogfn",
+        "label": "Discord"
+      },
       "seasons": [
         "ch1-s4"
       ],
-      "statusUrl": "https://discord.gg/arcogfn"
+      "statusUrl": "https://discord.gg/arcogfn",
+      "communityVerified": true
     },
     {
       "id": "retrac-official",
@@ -917,7 +923,8 @@
         "label": "Rewind Discord"
       },
       "seasons": [
-        "ch4-s2"
+        "ch4-s2",
+        "ch5-s1"
       ],
       "statusUrl": "https://www.rewindmp.com/",
       "communityVerified": true
@@ -948,6 +955,62 @@
         "ch3-s1"
       ],
       "statusUrl": "https://discord.gg/PHfHHukX3",
+      "communityVerified": true
+    },
+    {
+      "id": "omen-official",
+      "name": "Project Omen",
+      "label": "Omen",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/omenmp",
+      "launchUrl": "https://discord.gg/omenmp",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "omenmp",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/omenmp",
+        "guildId": "1510765844404109332",
+        "label": "Omen Discord"
+      },
+      "seasons": [
+        "ch1-s3"
+      ],
+      "statusUrl": "https://discord.gg/omenmp",
+      "communityVerified": true
+    },
+    {
+      "id": "vynx-official",
+      "name": "Project VYNX",
+      "label": "Vynx",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/vynxzy",
+      "launchUrl": "https://discord.gg/vynxzy",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "vynxzy",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/vynxzy",
+        "guildId": "1366960510699831306",
+        "label": "VYNX Discord"
+      },
+      "seasons": [
+        "ch2-s1"
+      ],
+      "statusUrl": "https://discord.gg/vynxzy",
       "communityVerified": true
     }
   ]

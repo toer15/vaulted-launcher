@@ -146,7 +146,7 @@ function testLiveProviderMappings() {
   assert.deepEqual(official?.supportedSeasons, ['ch2-s4'])
   assert.equal(official?.discordGate?.statusOnly, true)
   assert.equal(official?.discordGate?.inviteUrl, 'https://discord.gg/retrac')
-  for (const id of ['slurp', 'ambient', 'reef', 'legacy-mp', 'horizon', 'sunset', 'blue-og', 'glow', 'rewind-official', 'origins-official']) {
+  for (const id of ['slurp', 'ambient', 'reef', 'legacy-mp', 'horizon', 'sunset', 'blue-og', 'glow', 'rewind-official', 'origins-official', 'omen-official', 'vynx-official']) {
     const provider = providerCatalog().find((entry) => entry.id === id)
     assert.equal(provider?.mode, 'external', `${id} must stay an external community route`)
     assert.equal(provider?.auth, 'none', `${id} must not fake a VAULTED account login`)

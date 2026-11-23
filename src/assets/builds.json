@@ -108,15 +108,15 @@
       ],
       "sizeBytes": 7384406276,
       "onlineProvider": {
-        "id": "sunset",
-        "name": "SunSet Studios",
-        "label": "SunSet"
+        "id": "omen-official",
+        "name": "Project Omen",
+        "label": "Omen"
       },
       "onlineProviders": [
         {
-          "id": "sunset",
-          "name": "SunSet Studios",
-          "label": "SunSet"
+          "id": "omen-official",
+          "name": "Project Omen",
+          "label": "Omen"
         },
         {
           "id": "era-official",
@@ -163,11 +163,6 @@
           "id": "era-official",
           "name": "Project Era",
           "label": "Era"
-        },
-        {
-          "id": "sunset",
-          "name": "SunSet Studios",
-          "label": "SunSet"
         }
       ]
     },
@@ -417,11 +412,16 @@
       ],
       "sizeBytes": 25244361073,
       "onlineProvider": {
-        "id": "ambient",
-        "name": "Ambient",
-        "label": "Ambient"
+        "id": "vynx-official",
+        "name": "Project VYNX",
+        "label": "Vynx"
       },
       "onlineProviders": [
+        {
+          "id": "vynx-official",
+          "name": "Project VYNX",
+          "label": "Vynx"
+        },
         {
           "id": "ambient",
           "name": "Ambient",
@@ -963,7 +963,19 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 46055666663
+      "sizeBytes": 46055666663,
+      "onlineProvider": {
+        "id": "rewind-official",
+        "name": "Project Rewind",
+        "label": "Rewind"
+      },
+      "onlineProviders": [
+        {
+          "id": "rewind-official",
+          "name": "Project Rewind",
+          "label": "Rewind"
+        }
+      ]
     },
     "ch5-s2": {
       "id": "ch5-s2",
