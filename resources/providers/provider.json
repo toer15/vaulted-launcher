@@ -397,7 +397,7 @@
         "ch1-s4"
       ],
       "statusUrl": "https://discord.gg/arcogfn",
-      "communityVerified": true
+      "communityVerified": false
     },
     {
       "id": "retrac-official",
@@ -983,7 +983,7 @@
         "ch1-s3"
       ],
       "statusUrl": "https://discord.gg/omenmp",
-      "communityVerified": true
+      "communityVerified": false
     },
     {
       "id": "vynx-official",
@@ -1011,7 +1011,7 @@
         "ch2-s1"
       ],
       "statusUrl": "https://discord.gg/vynxzy",
-      "communityVerified": true
+      "communityVerified": false
     }
   ]
 }
