@@ -2900,16 +2900,80 @@ export default function App() {
         // played on the community's live public servers, which VAULTED joins
         // with its own direct launch — there is no launcher to hand off to.
         if (provider.directLaunch === true) {
-          const message = `No live ${build.season.label} server is online right now. Try again shortly.`
-          setLaunchFailure({ id: build.id, message })
-          setPhase('error')
-          setLaunchStage(null)
-          pushToast({
-            tone: 'error',
-            title: 'No live server available',
-            description: message,
-          })
-          return false
+          // The community launcher the player imported from Discord is what
+          // authenticates this season's hosted session. It runs hidden, so the
+          // only windows on screen stay VAULTED and the game it starts.
+          if (!window.arc?.openProviderLauncher) {
+            pushToast({
+              tone: 'error',
+              title: 'This community needs the desktop app',
+              description: 'Run "npm run app" to open community handoffs.',
+            })
+            return false
+          }
+          setPhase('launching')
+          setLaunchStage('Starting community launcher…')
+          setLaunchFailure((current) => (current?.id === build.id ? null : current))
+          try {
+            const result = await window.arc.openProviderLauncher(
+              provider.id,
+              build.executable && build.path
+                ? {
+                    version: build.version,
+                    gameVersion: build.version,
+                    name: build.season.label,
+                    folder: build.path,
+                    executable: build.executable,
+                  }
+                : undefined,
+            )
+            if (result?.opened) {
+              setExternalLauncher({
+                providerId: provider.id,
+                buildId: build.id,
+                pid: result.pid ?? null,
+              })
+              setRunningId(build.id)
+              setHostedLobby(null)
+              shop.sets.recordLaunch(build.id)
+              setPhase('running')
+              setLaunchStage(null)
+              pushToast({
+                tone: 'success',
+                title: `${provider.label} is starting ${build.version}`,
+                description:
+                  'The community launcher stays hidden off-screen while Fortnite runs.',
+              })
+              return true
+            }
+            const gate = provider.discordGate ?? null
+            const message =
+              result?.error || `${provider.label} needs its community launcher once.`
+            setPhase('idle')
+            setLaunchStage(null)
+            if (gate) {
+              discordResumeRef.current = null
+              setDiscordError(message)
+              setDiscordPrompt({ build, gate })
+            } else {
+              setLaunchFailure({ id: build.id, message })
+            }
+            pushToast({
+              tone: 'info',
+              title: `${provider.label} setup`,
+              description: message,
+            })
+            return false
+          } catch (error) {
+            const message = nativeMessage(
+              error instanceof Error ? error.message : 'The community launcher could not start.',
+            )
+            setPhase('error')
+            setLaunchStage(null)
+            setLaunchFailure({ id: build.id, message })
+            pushToast({ tone: 'error', title: `${provider.label} could not start`, description: message })
+            return false
+          }
         }
         // External communities own their backend and their sign-in. VAULTED
         // never substitutes a local game server for them: it opens the
@@ -3292,7 +3356,11 @@ export default function App() {
       }
       setDiscordGateVerifications(next)
       saveDiscordGateVerifications(next)
-      setDiscordPrompt(null)
+      // Keep the panel open: Step 2 is the community launcher import. The
+      // launch that opened this gate resumes when the player presses Start
+      // after the launcher is installed, never on a timer.
+      discordResumeRef.current = null
+      setDiscordError(null)
     } catch (error) {
       setDiscordError(
         nativeMessage(error instanceof Error ? error.message : 'Discord verification failed.'),
@@ -3301,6 +3369,25 @@ export default function App() {
       setDiscordBusy(false)
     }
   }, [discordBusy, discordGateVerifications, discordPrompt])
+
+  /** Step 2 finished: the imported launcher now unlocks Install Season. */
+  const handleCommunityLauncherImported = useCallback(
+    (providerId: string) => {
+      void detectProviderLauncher(providerId)
+        .then((status) => {
+          if (!status) return
+          setLauncherDetections((prev) => ({ ...prev, [status.providerId]: status }))
+        })
+        .catch(() => {})
+      pushToast({
+        tone: 'success',
+        title: 'Community launcher ready',
+        description:
+          'Install Season is unlocked. The launcher starts hidden off-screen when you press Start.',
+      })
+    },
+    [pushToast],
+  )
 
   const handleDiscordCancel = useCallback(() => {
     if (discordBusy) return
@@ -3444,7 +3531,21 @@ export default function App() {
       // cards stay on the existing Download → Play path.
       // Download and Play need a real online route: a live backend/server or a
       // verified project launcher. A season with neither stays locked.
-      if (!onlineIsPlayable(playModes[build.id])) {
+      //
+      // A Discord community is a real route once its invite is verified: Steps
+      // 1-2 bring the community's own launcher in, and that launcher opens the
+      // season's hosted servers. Until then the card keeps ONLINE UNAVAILABLE.
+      const communityProvider = providerCatalog.find(
+        (entry) => entry.id === build.onlineProvider?.id,
+      )
+      const communityGate = communityProvider?.discordGate ?? null
+      const communityUnlocked = Boolean(
+        communityProvider?.directLaunch === true &&
+          communityGate &&
+          (isDiscordGateVerified(discordGateVerifications, communityGate) ||
+            launcherDetections[communityProvider.id]?.installed === true),
+      )
+      if (!onlineIsPlayable(playModes[build.id]) && !communityUnlocked) {
         setPhase('error')
         setLaunchStage(null)
         setLaunchFailure({ id: build.id, message: ONLINE_UNAVAILABLE_MESSAGE })
@@ -5391,6 +5492,12 @@ export default function App() {
         onClose={handleDiscordCancel}
         onCopyInvite={() => void handleCopyDiscordInvite()}
         onVerify={() => void handleDiscordVerify()}
+        verified={
+          discordPrompt
+            ? isDiscordGateVerified(discordGateVerifications, discordPrompt.gate)
+            : false
+        }
+        onLauncherImported={handleCommunityLauncherImported}
       />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />

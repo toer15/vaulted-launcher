@@ -3,14 +3,19 @@ import { createPortal } from 'react-dom'
 import { Check, Copy, Loader2, MessageCircle, ShieldCheck, X } from 'lucide-react'
 import { cx } from '../lib/cx'
 import type { DiscordGate } from '../types'
+import { CommunityLauncherPanel } from './CommunityLauncherPanel'
 
 interface DiscordGateModalProps {
   gate: DiscordGate | null
   busy: boolean
   error?: string | null
+  /** the community invite is already verified, so Step 2 is unlocked */
+  verified?: boolean
   onClose: () => void
   onCopyInvite: () => void
   onVerify: () => void
+  /** a launcher was scanned, installed and recorded for this community */
+  onLauncherImported?: (providerId: string) => void
 }
 
 /**
@@ -22,9 +27,11 @@ export function DiscordGateModal({
   gate,
   busy,
   error,
+  verified = false,
   onClose,
   onCopyInvite,
   onVerify,
+  onLauncherImported,
 }: DiscordGateModalProps) {
   useEffect(() => {
     if (!gate) return
@@ -75,12 +82,15 @@ export function DiscordGateModal({
               id="discord-gate-title"
               className="mt-2 font-display text-2xl font-black uppercase tracking-[0.03em] text-mist"
             >
-              Join Community Discord to Unlock Install Season
+              {verified
+                ? 'Step 2 — Add the Community Launcher'
+                : 'Step 1 — Join Discord & Download Their Launcher'}
             </h2>
             <p className="mt-2 text-[12.5px] leading-relaxed text-fog">
-              <span className="font-semibold text-mist">{gate.label}</span> unlocks this season
-              on the big card. Join the community once, verify it here, and VAULTED will unlock
-              Install Season for this PC.
+              <span className="font-semibold text-mist">{gate.label}</span>{' '}
+              {verified
+                ? 'is verified. Drop the launcher you downloaded from its Discord and VAULTED will scan it before installing.'
+                : 'hosts this season on its own servers. Join the community, download its launcher, then bring that file back here.'}
             </p>
           </div>
           <button
@@ -147,9 +157,25 @@ export function DiscordGateModal({
                 : 'bg-[#5865F2] shadow-[0_16px_34px_-18px_rgba(88,101,242,0.95)] hover:brightness-110 active:scale-[0.99]',
             )}
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            {busy ? 'Verifying community…' : "I've Joined — Verify Community"}
+            {busy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Check className="h-4 w-4" />
+            )}
+            {busy
+              ? 'Verifying community…'
+              : verified
+                ? 'Community verified'
+                : "I've Joined — Verify Community"}
           </button>
+
+          {verified && onLauncherImported && (
+            <CommunityLauncherPanel
+              gate={gate}
+              verified={verified}
+              onImported={onLauncherImported}
+            />
+          )}
 
           <div className="mt-3 flex items-center gap-2 rounded-xl border border-white/10 bg-black/25 px-3 py-2">
             <code className="min-w-0 flex-1 truncate text-[11px] text-fog">{gate.inviteUrl}</code>

@@ -2,7 +2,7 @@
   "name": "vaulted-launcher",
   "productName": "VAULTED Launcher",
   "private": true,
-  "version": "1.0.194",
+  "version": "1.0.195",
   "description": "VAULTED — Fortnite build launcher",
   "author": "VAULTED",
   "type": "module",
@@ -38,7 +38,8 @@
     "version:bump": "npm version patch --no-git-tag-version",
     "dist": "npm run version:bump && npm run build && npm run test:range-download && npm run test:cleanup && npm run test:auto-fix && npm run test:redirect-runtime && npm run test:discord-gates && npm run test:bot-fill && npm run test:provider-repair && npm run test:provider-launch && npm run test:provider-verification && npm run test:msi-install && npm run check:runtime && npm run check:providers && electron-builder --win nsis --publish never && npm run check:runtime:packaged && npm run check:providers:packaged && npm run test:packaged-dlls",
     "audit:seasons": "node scripts/audit-seasons.cjs",
-    "test:regression": "node scripts/test-season-regressions.cjs"
+    "test:community-launcher": "node scripts/test-community-launcher.cjs",
+    "test:regression": "node scripts/test-season-regressions.cjs && node scripts/test-community-launcher.cjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.11",

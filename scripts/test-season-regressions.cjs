@@ -1552,8 +1552,62 @@ function testRebootAutoLaunch() {
   )
 }
 
+/**
+ * The discord-gated communities stay playable only through the two-step
+ * import: their invite is Step 1, their own launcher is Step 2, and the file
+ * the player brings back is scanned before it can unlock anything.
+ */
+function testCommunityLauncherUnlock() {
+  const launcher = read('electron/communityLauncher.cjs')
+  assert.match(launcher, /assertInstallerSafe\(target/, 'community launchers must pass the SFX gate')
+  assert.match(launcher, /scanWithDefender/, 'community launchers must be scanned by Defender')
+  assert.match(launcher, /LOCAL_HOST/, 'a loopback backend must be detected')
+  assert.match(launcher, /BACKEND_CONTEXT/, 'a loopback backend must be detected in configs')
+  assert.match(launcher, /kind === 'msi'/, 'MSI launchers must install through msiexec')
+  assert.match(launcher, /community-launchers\.json/)
+
+  assert.match(
+    MAIN,
+    /arc:community-launcher-import/,
+    'main must expose the community launcher import',
+  )
+  assert.match(MAIN, /startImportedCommunityLauncher/, 'the imported launcher must have a start path')
+  assert.match(MAIN, /hidden: true/, 'an imported community launcher runs hidden')
+  assert.doesNotMatch(
+    MAIN,
+    /community-launcher-import[\s\S]{0,400}shell:\s*true/,
+    'an imported community launcher must never run through a shell',
+  )
+
+  const modal = read('src/components/DiscordGateModal.tsx')
+  assert.match(modal, /Step 1 — Join Discord & Download Their Launcher/)
+  assert.match(modal, /CommunityLauncherPanel/)
+  const panel = read('src/components/CommunityLauncherPanel.tsx')
+  assert.match(panel, /Step 2 — Select \/ Drop Downloaded Launcher/)
+  assert.match(panel, /importCommunityLauncherFile/)
+
+  const app = read('src/App.tsx')
+  assert.match(
+    app,
+    /communityProvider\?\.directLaunch === true &&/,
+    'Play must unlock a Discord season once its launcher is verified',
+  )
+  assert.match(app, /const communityUnlocked = Boolean\(/, 'the unlock must stay explicit')
+
+  // The safety gate itself is untouched by this feature.
+  const safety = read('electron/installerSafety.cjs')
+  assert.ok(safety.includes('Add-MpPreference'), 'the Defender-tampering block must stay')
+  assert.ok(safety.includes('assertInstallerSafe'), 'the shared installer gate must stay exported')
+  assert.match(
+    read('src/lib/onlinePolicy.ts'),
+    /'reboot-official', 'reboot', 'echo'/,
+    'the renderer ban list must not change',
+  )
+}
+
 async function run() {
   try {
+    testCommunityLauncherUnlock()
     testLifecycleRule()
   testLauncherOutlivesBootstrapper()
   testLaunchWiring()
@@ -1570,7 +1624,7 @@ async function run() {
   await testSeasonRotationGuard()
   await testDiscordOnlyNeverCountsOnline()
   testOnlineBadgeColors()
-  testAutoFixWiring()
+      testAutoFixWiring()
     testRebootAutoLaunch()
     await testResilientLauncherDownloads()
   console.log(

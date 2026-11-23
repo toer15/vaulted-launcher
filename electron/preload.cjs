@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 function subscribe(channel, callback) {
   const handler = (_event, payload) => callback(payload)
@@ -103,6 +103,27 @@ contextBridge.exposeInMainWorld('arc', {
     const listener = (_event, payload) => callback(payload)
     ipcRenderer.on('arc:runtime-progress', listener)
     return () => ipcRenderer.removeListener('arc:runtime-progress', listener)
+  },
+  /**
+   * Discord communities distribute their launcher through the invite, so the
+   * player brings VAULTED the file. It is scanned in main before install.
+   */
+  communityLauncher: {
+    candidates: () => ipcRenderer.invoke('arc:community-launcher-candidates'),
+    scan: (providerId, file) => ipcRenderer.invoke('arc:community-launcher-scan', providerId, file),
+    import: (providerId, file) => ipcRenderer.invoke('arc:community-launcher-import', providerId, file),
+    status: (providerId) => ipcRenderer.invoke('arc:community-launcher-status', providerId),
+    forget: (providerId) => ipcRenderer.invoke('arc:community-launcher-forget', providerId),
+    pick: () => ipcRenderer.invoke('arc:pick-community-launcher'),
+    onProgress: (callback) => subscribe('arc:community-launcher-progress', callback),
+  },
+  /** Absolute path for a file dragged from Explorer onto VAULTED. */
+  pathForFile: (file) => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
   },
   window: {
     minimize: () => ipcRenderer.invoke('win:minimize'),

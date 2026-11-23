@@ -118,6 +118,34 @@ export interface ProviderRuntimeStatus {
   installed: boolean
 }
 
+/** One installer the player downloaded from a community Discord. */
+export interface CommunityLauncherCandidate {
+  name: string
+  path: string
+  size: number
+  modifiedAt: string
+  kind: string
+}
+
+export interface CommunityLauncherScan {
+  safe: boolean
+  reason?: string
+  name?: string
+  size?: number
+  sha256?: string
+  defender?: 'clean' | 'threats' | 'unavailable'
+}
+
+export interface CommunityLauncherStatus {
+  providerId: string
+  installed: boolean
+  executableName?: string
+  installerName?: string
+  sha256?: string
+  defender?: string
+  installedAt?: string
+}
+
 export interface ProviderLauncherDetection {
   providerId: string
   label: string
@@ -450,6 +478,25 @@ export interface LauncherBridge {
     joinHost?: string
     joinPort?: number
   }): Promise<OnlineProviderLaunchResult>
+  /** Discord-community launchers the player downloads and imports by hand */
+  communityLauncher?: {
+    candidates(): Promise<CommunityLauncherCandidate[]>
+    scan(providerId: string, file: string): Promise<CommunityLauncherScan>
+    import(
+      providerId: string,
+      file: string,
+    ): Promise<{
+      ok: boolean
+      executableName?: string
+      defender?: string
+      sha256?: string
+    }>
+    status(providerId: string): Promise<CommunityLauncherStatus | null>
+    forget(providerId: string): Promise<{ cleared: boolean }>
+    pick(): Promise<string | null>
+  }
+  /** absolute path for a file dropped onto the window (Electron webUtils) */
+  pathForFile?(file: File): string
   window?: WindowControls
 }
 
@@ -836,4 +883,57 @@ export async function pickInstallDir(): Promise<string | null> {
   } catch (error) {
     throw cleanIpcError(error)
   }
+}
+
+/** Installers already sitting in this PC's Downloads folder. */
+export async function listCommunityLauncherCandidates(): Promise<CommunityLauncherCandidate[]> {
+  if (!window.arc?.communityLauncher) return []
+  try {
+    return await window.arc.communityLauncher.candidates()
+  } catch {
+    return []
+  }
+}
+
+export async function fetchCommunityLauncherStatus(
+  providerId: string,
+): Promise<CommunityLauncherStatus | null> {
+  if (!window.arc?.communityLauncher) return null
+  try {
+    return await window.arc.communityLauncher.status(providerId)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Scan + install one community launcher. Main refuses anything that fails the
+ * SFX/dropper, Defender or local-backend gate, so an error here is the block.
+ */
+export async function importCommunityLauncherFile(
+  providerId: string,
+  file: string,
+): Promise<{ ok: boolean; executableName?: string; defender?: string }> {
+  if (!window.arc?.communityLauncher) {
+    throw new Error('Importing a community launcher needs the desktop app.')
+  }
+  try {
+    return await window.arc.communityLauncher.import(providerId, file)
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+export async function pickCommunityLauncherFile(): Promise<string | null> {
+  if (!window.arc?.communityLauncher) return null
+  try {
+    return await window.arc.communityLauncher.pick()
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+/** Absolute path of a file the player dropped onto VAULTED. */
+export function droppedFilePath(file: File): string {
+  return window.arc?.pathForFile?.(file) || ''
 }

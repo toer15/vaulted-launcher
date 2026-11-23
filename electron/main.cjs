@@ -46,6 +46,14 @@ const {
   hideCompanionLauncher,
 } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
+const {
+  communityLauncherExecutable,
+  communityLauncherStatus,
+  forgetCommunityLauncher,
+  importCommunityLauncher,
+  listDownloadedLaunchers,
+  scanCommunityLauncher,
+} = require('./communityLauncher.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
 const { startHiddenWindowWatcher } = require('./hiddenWindows.cjs')
@@ -2795,6 +2803,28 @@ async function startCompanionLauncher(providerId) {
     startCompanionSessionMonitor(id, executable)
     return { pid: existing.pid, executable, alreadyRunning: true }
   }
+  // A community launcher imported from Discord is a hidden companion too: it
+  // authenticates the season while Fortnite stays the only visible window.
+  if (!executable) {
+    const imported = communityLauncherExecutable(id, communityLauncherRoot())
+    if (imported) {
+      startHiddenWindowWatcher([path.basename(imported, path.extname(imported))], {
+        seconds: 21_600,
+        exitWhenGone: true,
+      })
+      const child = spawn(imported, [], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        cwd: path.dirname(imported),
+      })
+      child.unref()
+      registerProviderLauncher(id, child)
+      startCompanionWindowHider(id, child.pid)
+      startCompanionSessionMonitor(id, imported)
+      return { pid: child.pid ?? null, executable: imported }
+    }
+  }
   if (!metadata) return null
   if (!executable) {
     console.warn(
@@ -2893,17 +2923,67 @@ function providerWindowNames(metadata) {
   return [...new Set(names.map((name) => name.trim()))]
 }
 
+/**
+ * Launchers the player brought back from a community Discord live under the
+ * app's own userData folder, one record per provider.
+ */
+function communityLauncherRoot() {
+  return path.join(app.getPath('userData'), 'community-launchers')
+}
+
+/** Only a verified Discord community may import a launcher. */
+function communityLauncherProviderId(providerId) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(id)) throw new Error('Unknown community provider.')
+  if (isBannedProvider(id)) throw new Error(BANNED_PROVIDER_REASON)
+  const profile = providerForId(id) ? providerProfile(id) : null
+  if (!profile || profile.external !== true || profile.launchKind !== 'discord') {
+    throw new Error('That provider is not a Discord community launcher route.')
+  }
+  return id
+}
+
+/**
+ * Start the imported community launcher 100% hidden. It provides the hosted
+ * backend session for the season; VAULTED keeps the only visible window.
+ */
+async function startImportedCommunityLauncher(providerId) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id || isBannedProvider(id)) return null
+  const executable = communityLauncherExecutable(id, communityLauncherRoot())
+  if (!executable) return null
+  const existing = providerLaunchers.get(id)
+  if (existing) return { pid: existing.pid, executable, alreadyRunning: true }
+  const names = [path.basename(executable, path.extname(executable))]
+  startHiddenWindowWatcher(names, { seconds: 21_600, exitWhenGone: true })
+  const child = spawn(executable, [], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    cwd: path.dirname(executable),
+  })
+  child.unref()
+  registerProviderLauncher(id, child)
+  startCompanionWindowHider(id, child.pid)
+  startCompanionSessionMonitor(id, executable)
+  return { pid: child.pid ?? null, executable }
+}
+
 /** Public companion-launcher detection; never returns the filesystem path. */
 function providerLauncherStatus(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return null
   const provider = providerCatalog().find((entry) => entry.id === id)
   const metadata = provider?.launcher
-  if (!metadata) return null
+  if (!provider && !metadata) return null
+  // A launcher imported from the community Discord is a real Step 1 unlock,
+  // exactly like a catalog runtime detected on this PC.
+  const imported = communityLauncherExecutable(id, communityLauncherRoot())
   return {
     providerId: id,
-    label: metadata.label,
-    installed: Boolean(installedExecutable(metadata)),
+    label: metadata?.label || provider?.label || id,
+    installed: Boolean(metadata && installedExecutable(metadata)) || Boolean(imported),
+    source: imported ? 'community' : 'catalog',
   }
 }
 
@@ -5657,10 +5737,24 @@ async function openProviderLauncherEntry(providerId, options = {}) {
     // joins its live public servers with its own direct launch, so never ask
     // the player to install a launcher that does not exist.
     if (profile.directLaunch === true) {
+      // The player can hand VAULTED the launcher they downloaded from the
+      // community Discord. It runs hidden: it only provides the hosted
+      // backend session, while VAULTED keeps the only visible window.
+      const imported = await startImportedCommunityLauncher(id)
+      if (imported?.executable) {
+        return {
+          opened: true,
+          path: imported.executable,
+          pid: imported.pid ?? null,
+          tracked: true,
+          hidden: true,
+        }
+      }
       return {
         opened: false,
         directLaunch: true,
-        error: `${profile.label} is a Discord-only community without a launcher app. VAULTED joins its live servers directly, and none is online right now.`,
+        community: true,
+        error: `${profile.label} needs its own launcher once. Join the Discord, download it, then select or drop that file into VAULTED.`,
       }
     }
 
@@ -6580,6 +6674,48 @@ function registerIpc() {
       })
       throw error
     }
+  })
+
+  // Community launchers come from the player's own Discord download. Every
+  // file goes through the same SFX/Defender gate VAULTED uses for its own
+  // downloads, plus a local-backend check, before anything is installed.
+  ipcMain.handle('arc:community-launcher-candidates', () => listDownloadedLaunchers())
+  ipcMain.handle('arc:community-launcher-scan', (_event, _providerId, file) =>
+    scanCommunityLauncher(file),
+  )
+  ipcMain.handle('arc:community-launcher-import', async (_event, providerId, file) => {
+    const id = communityLauncherProviderId(providerId)
+    const profile = providerProfile(id)
+    return importCommunityLauncher({
+      providerId: id,
+      file,
+      root: communityLauncherRoot(),
+      label: profile.label,
+      report: (progress) =>
+        send('arc:community-launcher-progress', { providerId: id, ...progress }),
+    })
+  })
+  ipcMain.handle('arc:community-launcher-status', (_event, providerId) => {
+    const id = String(providerId || '').trim().toLowerCase()
+    return id ? communityLauncherStatus(id, communityLauncherRoot()) : null
+  })
+  ipcMain.handle('arc:community-launcher-forget', (_event, providerId) =>
+    forgetCommunityLauncher(providerId, communityLauncherRoot()),
+  )
+  ipcMain.handle('arc:pick-community-launcher', async () => {
+    const parent = mainWindow ?? undefined
+    const options = {
+      title: 'Select the community launcher you downloaded',
+      buttonLabel: 'Check this launcher',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Launcher installers', extensions: ['exe', 'msi', 'zip'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    }
+    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
   })
 
   ipcMain.handle('arc:provider-catalog', () => providerCatalog())
