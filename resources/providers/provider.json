@@ -724,6 +724,53 @@
       }
     },
     {
+      "id": "neo",
+      "name": "Project Neo",
+      "label": "Neo",
+      "mode": "external",
+      "launchKind": "official",
+      "backendUrl": "https://projectneofn.dev/",
+      "website": "https://projectneofn.dev/",
+      "launchUrl": "https://projectneofn.dev/",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "seasons": [
+        "ch1-s10"
+      ],
+      "statusUrl": "https://projectneofn.dev/",
+      "runtime": {
+        "kind": "exe",
+        "label": "Neo Launcher",
+        "version": "1.1.7",
+        "downloadUrl": "https://projectneofn.dev/download",
+        "downloadHosts": [
+          "projectneofn.dev"
+        ],
+        "installerName": "NeoLauncher-Setup-1.1.7.exe",
+        "silentArgs": [],
+        "allowUnsigned": true,
+        "interactive": true,
+        "autoInstall": true,
+        "installedExecutables": [
+          "%LOCALAPPDATA%/NeoLauncher/current/NeoLauncher.exe",
+          "%LOCALAPPDATA%/NeoLauncher/NeoLauncher.exe",
+          "%PROGRAMFILES%/NeoLauncher/NeoLauncher.exe"
+        ],
+        "executableNames": [
+          "NeoLauncher.exe",
+          "Neo.exe"
+        ],
+        "installRoots": [
+          "%LOCALAPPDATA%",
+          "%LOCALAPPDATA%/Programs",
+          "%PROGRAMFILES%"
+        ],
+        "launchArgs": [],
+        "processName": "NeoLauncher.exe"
+      }
+    },
+    {
       "id": "legacy-official",
       "name": "Project Legacy",
       "label": "Project Legacy",

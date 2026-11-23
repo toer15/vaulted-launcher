@@ -349,7 +349,6 @@ function testWorkingSeasons() {
     'ch1-s7',
     'ch1-s8',
     'ch1-s9',
-    'ch1-s10',
     'ch2-s3',
     'ch2-s6',
     'ch2-s8',
@@ -366,9 +365,42 @@ function testWorkingSeasons() {
     assert.equal(value.onlineProviders, undefined, `${id} must stay unavailable`)
   }
 
-  // No season may route through the removed Neo/Neonite provider.
+  // Chapter 1 Season X runs on Project Neo's verified launcher. The launcher
+  // installs to %LOCALAPPDATA%\NeoLauncher\current\NeoLauncher.exe (confirmed on
+  // this PC, Neo 1.1.7), and its own log reports the live service build 9380822,
+  // which is exactly this season's 10.40 build.
+  const ch1s10 = season('ch1-s10')
+  assert.equal(ch1s10.version, '10.40')
+  assert.equal(ch1s10.onlineProvider?.id, 'neo', 'ch1-s10 must route through Neo')
+  assert.deepEqual(
+    [...new Set(routeIds(ch1s10))],
+    ['neo'],
+    'ch1-s10 must have exactly one verified launcher route',
+  )
+  assert.match(ch1s10.downloadUrl || '', /10\.40-CL-9380822/, 'Neo runs the 10.40 build')
+  const neo = providerCatalog().find((entry) => entry.id === 'neo')
+  assert.ok(neo?.runtime, 'Neo must ship its launcher runtime')
+  assert.deepEqual(neo.supportedSeasons, ['ch1-s10'])
+  assert.equal(neo.mode, 'external')
+  const neoRuntime = providerRuntimeMetadata('neo')
+  assert.equal(neoRuntime?.processName, 'NeoLauncher.exe')
+  assert.ok(
+    neoRuntime?.installedExecutables?.includes(
+      '%LOCALAPPDATA%/NeoLauncher/current/NeoLauncher.exe',
+    ),
+    'the verified Neo install path must be first-class',
+  )
+  assert.match(neoRuntime?.downloadUrl || '', /^https:\/\/projectneofn\.dev\//)
+  assert.equal(neoRuntime?.silentArgs?.length, 0, 'Neo shows its own setup UI; /S is ignored')
+
+  // The old Neo/Neonite backend routes stay removed; only the verified launcher
+  // may answer to a neo route id.
   for (const value of Object.values(builds.seasons)) {
-    assert.equal(routeIds(value).some((id) => /^neo/i.test(id)), false, `${value.id} routes through Neo`)
+    assert.equal(
+      routeIds(value).some((id) => /^(?:neo-official|neonite)$/i.test(id)),
+      false,
+      `${value.id} routes through the removed Neo backend`,
+    )
   }
 
   // 4.x builds predate Tellurium's hooks and stay on Cobalt.
@@ -412,7 +444,7 @@ function testResearchedLaunchersStayUnwired() {
 
   // Prototypes that only ship a Discord invite, a dead host, or an installer we
   // could not verify stay locked instead of gaining a launcher by accident.
-  for (const id of ['ch1-s3', 'ch1-s4', 'ch1-s10', 'ch3-s1', 'ch4-s4', 'ch2-s1']) {
+  for (const id of ['ch1-s3', 'ch1-s4', 'ch3-s1', 'ch4-s4', 'ch2-s1']) {
     for (const routeId of routeIds(season(id))) {
       const entry = providerCatalog().find((provider) => provider.id === routeId)
       assert.ok(!entry?.runtime, `${id} must not gain an unverified installer through ${routeId}`)
@@ -428,8 +460,8 @@ function testResearchedLaunchersStayUnwired() {
   }
   assert.deepEqual(
     [...runtimeSeasons].sort(),
-    ['ch2-s2', 'ch2-s4', 'ch2-s5', 'ch2-s7'],
-    'only the four verified online seasons may ship a companion launcher',
+    ['ch1-s10', 'ch2-s2', 'ch2-s4', 'ch2-s5', 'ch2-s7'],
+    'only verified online seasons may ship a companion launcher',
   )
 }
 

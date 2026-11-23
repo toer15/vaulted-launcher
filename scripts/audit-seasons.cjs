@@ -36,7 +36,9 @@ const catalog = JSON.parse(
 const { fetchProviderLiveStatuses } = require(path.join(root, 'electron', 'providerStatus.cjs'))
 
 const EXPECTED_SEASONS = 43
-const REMOVED_PROVIDERS = new Set(['neo', 'neo-official', 'neonite'])
+// Project Neo itself is a verified launcher again (2026-11-23); only the old
+// removed Neo/Neonite backend routes stay banned.
+const REMOVED_PROVIDERS = new Set(['neo-official', 'neonite'])
 // Reboot always starts its embedded LawinServer on loopback; it is not a public
 // online route even when it joins a community game server. Echo's installer was
 // confirmed malicious and must never be routed again.

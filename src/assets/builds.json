@@ -281,6 +281,18 @@
       "sizeGB": 26.56,
       "downloadUrl": "https://archive.org/download/Fortnite-10.40-CL-9380822.rar/10.40-CL-9380822.rar",
       "runtimeProfile": "legacy",
+      "onlineProvider": {
+        "id": "neo",
+        "name": "Project Neo",
+        "label": "Neo"
+      },
+      "onlineProviders": [
+        {
+          "id": "neo",
+          "name": "Project Neo",
+          "label": "Neo"
+        }
+      ],
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s10",
       "url": "https://archive.org/download/Fortnite-10.40-CL-9380822.rar/10.40-CL-9380822.rar",
       "version": "10.40",
