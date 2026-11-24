@@ -443,20 +443,23 @@ function testWorkingSeasons() {
   assert.equal(origins?.discordGate?.guildId, '1500960775743733942', 'Origins guild must stay pinned')
   assert.equal(origins?.runtime, undefined, 'Origins ships no installer VAULTED runs')
 
-  // Project Omen hosts Chapter 1 Season 3 on 3.6 (CL-4019403). The card now
-  // installs that exact build — archive.org fn-v3-archive/builds/3.6-CL-4019403
-  // (6,028,410,444 bytes, sha1 5dfb44f5…), the same item and collection it
-  // already served 3.0 from — and a v3.x client hooks through the Cobalt legacy
-  // redirect, so the community is verified instead of route-only.
+  // Project Omen hosts Chapter 1 Season 3 on 3.6 (CL-4019403). The card
+  // installs that exact build from Omen's own archive, the same file its
+  // Discord #download channel links, with the archive.org item kept as the
+  // mirror fallback; a v3.x client hooks through the Cobalt legacy redirect.
   const ch1s3 = season('ch1-s3')
   assert.equal(ch1s3.version, '3.6', 'ch1-s3 must install the build Omen runs')
   assert.equal(ch1s3.buildVersion, '3.6')
   assert.equal(
     ch1s3.downloadUrl,
-    'https://archive.org/download/fn-v3-archive/builds%2F3.6-CL-4019403.7z',
+    'https://cdn.omen.mp/archives/++Fortnite+Release-3.6-CL-4019403.zip',
   )
-  assert.match(ch1s3.url, /3\.6-CL-4019403\.7z$/, 'the fallback URL must serve the same build')
-  assert.equal(ch1s3.sizeBytes, 6028410444, 'the card must state the archive size it fetches')
+  assert.match(
+    ch1s3.fallbackDownloadUrl,
+    /3\.6-CL-4019403\.7z$/,
+    'the fallback URL must serve the same build',
+  )
+  assert.equal(ch1s3.sizeBytes, 7899794896, 'the card must state the archive size it fetches')
   assert.equal(ch1s3.runtimeProfile, 'legacy', 'a v3.x client needs the Cobalt redirect')
   assert.deepEqual(
     [...new Set(routeIds(ch1s3))],
@@ -1374,18 +1377,18 @@ function testInstallSeasonRequiresExplicitClick() {
     /options\.explicit !== true && !installed\[build\.id\] && !downloads\[build\.id\]/,
     'the download request must require an explicit install',
   )
-  // Install Season stays the only explicit download entry point: managed
-  // seasons download their archive, Discord seasons open their own #download
-  // channel and import the file the player downloads there.
+  // Install Season stays the only explicit download entry point, and a
+  // community season downloads its own client archive inside VAULTED instead
+  // of sending the player to a browser.
   assert.match(
     app,
-    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,900}?requestDownload\(build, \{ explicit: true \}\)/,
+    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,400}?requestDownload\(build, \{ explicit: true \}\)/,
     'Install Season must be the only explicit download entry point',
   )
-  assert.match(
-    app,
-    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,1600}?openDiscordInvite\?\.\(gate\.inviteUrl\)/,
-    'a Discord season install must go through that community Discord',
+  assert.equal(
+    /handleInstallSeason[\s\S]{0,600}openDiscordInvite/.test(app),
+    false,
+    'a community season must download inside VAULTED, never in a browser',
   )
   assert.match(app, /onInstallSeason=\{handleInstallSeason\}/)
   assert.equal(

@@ -262,11 +262,12 @@ assert.match(
 )
 
 // --- 7b. Discord seasons are linked end to end, with no verify screen ------
-// Start must never be gated on a Discord verification, a Discord season's
-// Download must go to that project's own #download channel, and the client the
-// player downloads there must be picked up from Downloads automatically.
+// Start must never be gated on a Discord verification, Download must fetch the
+// community's own client archive inside VAULTED (never a browser tab), and an
+// installed launcher must be adopted for the hidden handoff.
 const launchSource = read('src/App.tsx')
 const mainSource = read('electron/main.cjs')
+const builds = JSON.parse(read('src/assets/builds.json'))
 assert.equal(/lockedGate/.test(launchSource), false, 'no verification lock may block Start')
 assert.match(
   launchSource,
@@ -275,39 +276,46 @@ assert.match(
 )
 assert.match(
   launchSource,
-  /if \(gate\) \{\r?\n[\s\S]{0,800}void window\.arc\?\.openDiscordInvite\?\.\(gate\.inviteUrl\)/,
-  'a missing community launcher must send the player to the Discord download channel',
+  /const handleInstallSeason = useCallback\(\(\) => \{\r?\n\s*const build = activeBuild\r?\n\s*if \(!build\) return\r?\n\s*requestDownload\(build, \{ explicit: true \}\)/,
+  'Download must start VAULTED own download, never a browser handoff',
+)
+assert.equal(
+  /handleInstallSeason[\s\S]{0,400}openDiscordInvite/.test(launchSource),
+  false,
+  'Install Season must never open Discord instead of downloading',
+)
+assert.equal(
+  /if \(gate\) \{[\s\S]{0,600}openDiscordInvite/.test(launchSource),
+  false,
+  'a missing community launcher must never open a browser tab',
+)
+const ch1s3Entry = builds.seasons['ch1-s3']
+assert.equal(
+  ch1s3Entry.downloadUrl,
+  'https://cdn.omen.mp/archives/++Fortnite+Release-3.6-CL-4019403.zip',
+  "Chapter 1 Season 3 must download Omen's own client archive",
 )
 assert.match(
-  launchSource,
-  /findSeasonArchives!?\(\{ buildPath: build\.path, version: build\.version \}/,
-  'Download must look for the build the player downloaded in Discord',
-)
-assert.match(
-  launchSource,
-  /window\.arc\?\.openDiscordInvite\?\.\(gate\.inviteUrl\)[\s\S]{0,600}watchDiscordSeasonDownloads\(build\)/,
-  'Download must open the community Discord and then watch for the file',
-)
-assert.match(
-  launchSource,
-  /importSeasonArchive\(\{\r?\n\s*buildId: build\.id,\r?\n\s*buildPath: build\.path,\r?\n\s*version: build\.version,\r?\n\s*archivePath: archive\.path,/,
-  'the downloaded Discord build must be unpacked into the season folder',
+  ch1s3Entry.fallbackDownloadUrl,
+  /^https:\/\/archive\.org\//,
+  'the community archive must keep its mirror fallback',
 )
 assert.match(
   mainSource,
-  /function listSeasonArchives\(buildPath, version\)/,
-  'main must find Discord build archives in Downloads',
+  /function autoDiscoverCommunityLauncher\(providerId\)/,
+  'main must still detect an installed community launcher',
 )
 assert.match(
   mainSource,
-  /function importSeasonArchive\(options = \{\}\)/,
-  'main must unpack a Discord build archive into the season folder',
+  /const profile =\r?\n\s*providerCatalog\(\)\.find\(\(entry\) => entry\.id === id\)/,
+  'discovery must read the full catalog row, not the manifest-only row',
 )
 assert.match(
   read('electron/preload.cjs'),
   /findSeasonArchives: \(payload\) => ipcRenderer\.invoke\('arc:find-season-archives'/,
   'preload must expose the Downloads scan',
 )
+
 assert.match(launchSource, /communityUnlocked/)
 assert.match(launchSource, /openProviderLauncher\(/)
 assert.match(launchSource, /onLauncherImported=\{handleCommunityLauncherImported\}/)

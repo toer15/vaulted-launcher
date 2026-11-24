@@ -90,11 +90,12 @@
       "chapter": 1,
       "season": 3,
       "buildVersion": "3.6",
-      "sizeGB": 6.03,
-      "downloadUrl": "https://archive.org/download/fn-v3-archive/builds%2F3.6-CL-4019403.7z",
+      "sizeGB": 7.36,
+      "downloadUrl": "https://cdn.omen.mp/archives/++Fortnite+Release-3.6-CL-4019403.zip",
+      "fallbackDownloadUrl": "https://archive.org/download/fn-v3-archive/builds%2F3.6-CL-4019403.7z",
       "runtimeProfile": "legacy",
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s3",
-      "url": "https://archive.org/download/fn-v3-archive/builds%2F3.6-CL-4019403.7z",
+      "url": "https://cdn.omen.mp/archives/++Fortnite+Release-3.6-CL-4019403.zip",
       "version": "3.6",
       "servers": [
         {
@@ -106,7 +107,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 6028410444,
+      "sizeBytes": 7899794896,
       "onlineProvider": {
         "id": "omen-official",
         "name": "Project Omen",

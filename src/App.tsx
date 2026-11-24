@@ -2772,128 +2772,17 @@ export default function App() {
     [beginDownload, beginProviderSync, downloads, installed, playModes, pushToast, seasonManifest],
   )
 
-  /** Stops the Downloads watcher that picks up a Discord build download. */
-  const discordDownloadWatchRef = useRef<number | null>(null)
-  const stopDiscordDownloadWatch = useCallback(() => {
-    if (discordDownloadWatchRef.current !== null) {
-      window.clearInterval(discordDownloadWatchRef.current)
-      discordDownloadWatchRef.current = null
-    }
-  }, [])
-
-  /**
-   * Unpacks the client build the player downloaded in the community Discord
-   * into the season's own folder. Nothing is downloaded or hosted here, and the
-   * launcher still opens the project's live servers — never a local backend.
-   */
-  const installDiscordSeasonArchive = useCallback(
-    async (build: Build, archive: { name: string; path: string }) => {
-      stopDiscordDownloadWatch()
-      if (!window.arc?.importSeasonArchive) return false
-      pushToast({
-        tone: 'info',
-        title: `Installing ${archive.name}`,
-        description: 'Unpacking your Discord download into the season folder…',
-      })
-      try {
-        const result = await window.arc.importSeasonArchive({
-          buildId: build.id,
-          buildPath: build.path,
-          version: build.version,
-          archivePath: archive.path,
-        })
-        if (!result?.ok) throw new Error('That download could not be unpacked.')
-        setInstalled((prev) => ({ ...prev, [build.id]: true }))
-        pushToast({
-          tone: 'success',
-          title: `${build.season.label} installed from Discord`,
-          description: `Fortnite ${build.version} is ready — Start hands it to the community launcher.`,
-        })
-        return true
-      } catch (error) {
-        pushToast({
-          tone: 'error',
-          title: 'That download could not be installed',
-          description: nativeMessage(error instanceof Error ? error.message : 'Unpack failed.'),
-        })
-        return false
-      }
-    },
-    [pushToast, stopDiscordDownloadWatch],
-  )
-
-  /**
-   * Discord posts its client as a normal browser download. Watch Downloads and
-   * install the season as soon as that file appears, so the player only has to
-   * download it in Discord and press Start.
-   */
-  const watchDiscordSeasonDownloads = useCallback(
-    (build: Build) => {
-      if (!window.arc?.findSeasonArchives) return
-      stopDiscordDownloadWatch()
-      let busy = false
-      discordDownloadWatchRef.current = window.setInterval(() => {
-        if (busy) return
-        busy = true
-        void window.arc!
-          .findSeasonArchives!({ buildPath: build.path, version: build.version })
-          .then(async (found) => {
-            const next = found?.[0]
-            if (!next) return
-            stopDiscordDownloadWatch()
-            await installDiscordSeasonArchive(build, next)
-          })
-          .catch(() => {})
-          .finally(() => {
-            busy = false
-          })
-      }, 5000)
-    },
-    [installDiscordSeasonArchive, stopDiscordDownloadWatch],
-  )
-
-  useEffect(() => stopDiscordDownloadWatch, [stopDiscordDownloadWatch])
-
   /**
    * The only entry point allowed to start a multi-gigabyte season install.
-   * Discord-hosted seasons come from their own community: Download opens that
-   * project's #download channel and the build is picked up from Downloads.
+   * Discord-hosted seasons download their community's own client archive here,
+   * exactly like every other season: VAULTED never sends the player to a
+   * browser to fetch the build and never runs a local server.
    */
   const handleInstallSeason = useCallback(() => {
     const build = activeBuild
     if (!build) return
-    const provider = providerCatalog.find((entry) => entry.id === build.onlineProvider?.id)
-    const gate = provider?.discordGate
-    if (!provider?.directLaunch || !gate || !window.arc?.findSeasonArchives) {
-      requestDownload(build, { explicit: true })
-      return
-    }
-    void (async () => {
-      let found: Array<{ name: string; path: string; size: number; modifiedAt: string }> = []
-      try {
-        found =
-          (await window.arc!.findSeasonArchives!({ buildPath: build.path, version: build.version })) ??
-          []
-      } catch {
-        found = []
-      }
-      if (found[0] && (await installDiscordSeasonArchive(build, found[0]))) return
-      await window.arc?.openDiscordInvite?.(gate.inviteUrl)
-      pushToast({
-        tone: 'info',
-        title: `${build.season.label} comes from ${provider.label}'s Discord`,
-        description: `Open its #download channel and download Fortnite ${build.version}. VAULTED installs it automatically when it lands in Downloads.`,
-      })
-      watchDiscordSeasonDownloads(build)
-    })()
-  }, [
-    activeBuild,
-    installDiscordSeasonArchive,
-    providerCatalog,
-    pushToast,
-    requestDownload,
-    watchDiscordSeasonDownloads,
-  ])
+    requestDownload(build, { explicit: true })
+  }, [activeBuild, requestDownload])
 
   /** One-click repair to the exact live provider build, then Play. */
   const handleUpdateLiveBuild = useCallback(() => {
@@ -3151,16 +3040,15 @@ export default function App() {
             setPhase('idle')
             setLaunchStage(null)
             if (gate) {
-              // No verification panel: send the player to the project's own
-              // #download channel. The launcher is adopted the moment it is
-              // installed, so the next Start hands the season to it.
+              // Never bounce the player into a browser: the launcher is found
+              // and adopted automatically once it is installed on this PC, so
+              // the next Start hands the season to it.
               discordResumeRef.current = null
               communityLauncherResumeRef.current = null
-              void window.arc?.openDiscordInvite?.(gate.inviteUrl)
               pushToast({
                 tone: 'info',
                 title: `${provider.label} launcher needed`,
-                description: `${gate.label} has its launcher in the #download channel. Install it there; VAULTED detects it and runs the season through it.`,
+                description: `Install ${gate.label}'s launcher once, then press Start — VAULTED finds it and runs the season through it.`,
               })
               setLaunchFailure({ id: build.id, message })
             } else {
