@@ -166,20 +166,40 @@ export function DiscordGateModal({
           </div>
 
           <ol className="mt-4 space-y-2 text-[11.5px] text-fog">
-            <li className="flex items-center gap-2">
-              <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold text-mist">
-                1
-              </span>
-              Press <span className="font-semibold text-mist">Open Discord Server</span> to join{' '}
-              {projectLabel}, or copy the invite below as a fallback.
-            </li>
-            <li className="flex items-center gap-2">
-              <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold text-mist">
-                2
-              </span>
-              Come back here and press <span className="font-semibold text-mist">Verify</span>. VAULTED
-              remembers the unlock on this PC.
-            </li>
+            {verified ? (
+              <>
+                <li className="flex items-center gap-2">
+                  <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold text-mist">
+                    1
+                  </span>
+                  Open {projectLabel} in Discord and download its launcher from the launcher/
+                  download channel.
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold text-mist">
+                    2
+                  </span>
+                  Select that .exe below — VAULTED scans it, then Start runs it hidden.
+                </li>
+              </>
+            ) : (
+              <>
+                <li className="flex items-center gap-2">
+                  <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold text-mist">
+                    1
+                  </span>
+                  Press <span className="font-semibold text-mist">Open Discord Server</span> to join{' '}
+                  {projectLabel}, or copy the invite below as a fallback.
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="grid h-5 w-5 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-[9px] font-bold text-mist">
+                    2
+                  </span>
+                  Come back here and press <span className="font-semibold text-mist">Verify</span>.
+                  VAULTED remembers the unlock on this PC.
+                </li>
+              </>
+            )}
           </ol>
 
           {(openError || error) && (
@@ -191,11 +211,31 @@ export function DiscordGateModal({
             </p>
           )}
 
+          {verified && (
+            <button
+              type="button"
+              onClick={() => void handleOpenServer()}
+              disabled={busy || opening}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-[#5865F2]/50 bg-[#5865F2]/10 px-3 py-2 text-[11.5px] font-semibold text-[#c7ccff] transition-colors duration-200 hover:border-[#5865F2]/80 hover:bg-[#5865F2]/20 hover:text-white disabled:cursor-wait disabled:opacity-50"
+            >
+              {opening ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ExternalLink className="h-3.5 w-3.5" />
+              )}
+              Open {projectLabel} Discord Server
+            </button>
+          )}
+
           <button
             type="button"
             onClick={() => {
               if (busy || opening) return
-              if (!verified && !serverOpened) {
+              if (verified) {
+                onClose()
+                return
+              }
+              if (!serverOpened) {
                 void handleOpenServer()
                 return
               }
@@ -221,7 +261,7 @@ export function DiscordGateModal({
               : opening
                 ? 'Opening Discord…'
                 : verified
-                  ? 'Community verified'
+                  ? 'Done — Back to Season Card'
                   : serverOpened
                     ? 'Verify'
                     : `Open ${projectLabel} Discord Server`}

@@ -225,7 +225,7 @@ assert.match(panel, /droppedFilePath/)
 assert.match(panel, /listCommunityLauncherCandidates/)
 assert.match(
   panel,
-  /Done — Back to Season Card \(Install Season\)/,
+  /Done — Back to Season Card\n/,
   'Step 2 must offer a way straight back to the season card',
 )
 assert.match(panel, /onDone\?.\(\)/, 'the Done button must close the gate')
@@ -236,7 +236,41 @@ assert.match(
 )
 assert.match(modal, /onDone={onClose}/, 'the modal hands its close handler to Step 2')
 
+// Step 2 must never be a dead end: the verified primary closes the gate, there
+// is a direct way to reach the Discord channel that hosts the launcher, and an
+// import resumes the Start that asked for it.
+assert.match(
+  modal,
+  /verified\s*\n?\s*\?\s*'Done — Back to Season Card'/,
+  'a verified Step 2 must not show a dead "Community verified" button',
+)
+assert.match(
+  modal,
+  /Open \{projectLabel\} Discord Server\n/,
+  'Step 2 must offer the Discord server so the launcher can be downloaded',
+)
+assert.match(
+  modal,
+  /Open \{projectLabel\} in Discord and download its launcher from the launcher\/\n\s*download channel/,
+  'Step 2 must say where the launcher file comes from',
+)
+
 const app = read('src/App.tsx')
+assert.match(
+  app,
+  /communityLauncherResumeRef\.current = \{ build, gate \}/,
+  'a missing community launcher must remember the Start it interrupted',
+)
+assert.match(
+  app,
+  /pending\.gate\.providerId === providerId[\s\S]{0,900}startBuildRef\.current\?\.\(pending\.build/,
+  'importing the launcher must resume that launch instead of waiting for Start again',
+)
+assert.match(
+  app,
+  /communityLauncherResumeRef\.current = null[\s\S]{0,160}setDiscordPrompt\(null\)/,
+  'cancelling the gate must clear the pending launcher launch',
+)
 assert.match(app, /communityUnlocked/)
 assert.match(app, /openProviderLauncher\(/)
 assert.match(app, /onLauncherImported=\{handleCommunityLauncherImported\}/)

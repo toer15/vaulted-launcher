@@ -178,7 +178,7 @@ export function CommunityLauncherPanel({
             className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-400/45 bg-emerald-400/15 px-3 py-2.5 text-[12px] font-bold text-emerald-50 shadow-[0_14px_30px_-18px_rgba(16,185,129,0.9)] transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-300/70 hover:bg-emerald-400/20 hover:text-white disabled:cursor-wait disabled:opacity-50"
           >
             <CheckCircle2 className="h-4 w-4" />
-            Done — Back to Season Card (Install Season)
+            Done — Back to Season Card
           </button>
           <p className="mt-1.5 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-fog">
             <ArrowLeft className="mt-0.5 h-3 w-3 shrink-0 text-emerald-300/80" />
@@ -186,7 +186,8 @@ export function CommunityLauncherPanel({
               Step 1 already unlocked{' '}
               {installed ? 'Install Season and Start' : 'Install Season'}. Step 2 below is only
               needed if VAULTED has not imported this community's launcher yet
-              {installed ? ' — yours is already ready.' : '.'}
+              {installed ? ' — yours is already ready.' : '.'} Importing it starts the season
+              immediately.
             </span>
           </p>
 

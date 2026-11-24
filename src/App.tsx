@@ -469,6 +469,10 @@ export default function App() {
   const [discordBusy, setDiscordBusy] = useState(false)
   const [discordError, setDiscordError] = useState<string | null>(null)
   const discordResumeRef = useRef<DiscordPrompt | null>(null)
+  // Holds the Start that stopped because the community launcher is not on this
+  // PC yet. Importing that launcher in Step 2 resumes the same launch instead
+  // of leaving the player to press Start again on a modal that looks stuck.
+  const communityLauncherResumeRef = useRef<DiscordPrompt | null>(null)
   // Holds the Play that opened the account prompt until the provider session
   // has rendered into app state. The resume then re-enters startBuild instead
   // of bypassing VAULTED's sign-in and managed-build preflight gates.
@@ -3033,6 +3037,7 @@ export default function App() {
             setLaunchStage(null)
             if (gate) {
               discordResumeRef.current = null
+              communityLauncherResumeRef.current = { build, gate }
               setDiscordError(message)
               setDiscordPrompt({ build, gate })
             } else {
@@ -3450,15 +3455,34 @@ export default function App() {
     }
   }, [discordBusy, discordGateVerifications, discordPrompt])
 
-  /** Step 2 finished: the imported launcher now unlocks Install Season. */
+  /**
+   * Step 2 finished. Refresh the launcher detection and, when this import came
+   * from a Start that had nothing to launch, continue that launch right away.
+   */
   const handleCommunityLauncherImported = useCallback(
     (providerId: string) => {
+      const pending = communityLauncherResumeRef.current
+      communityLauncherResumeRef.current = null
       void detectProviderLauncher(providerId)
         .then((status) => {
           if (!status) return
           setLauncherDetections((prev) => ({ ...prev, [status.providerId]: status }))
         })
         .catch(() => {})
+      if (pending && pending.gate.providerId === providerId) {
+        setDiscordPrompt(null)
+        setDiscordError(null)
+        pushToast({
+          tone: 'success',
+          title: 'Community launcher ready',
+          description: `${pending.build.season.label} is starting through it, hidden off-screen.`,
+        })
+        // Let the import land before re-entering Play, so it sees the launcher.
+        window.setTimeout(() => {
+          void startBuildRef.current?.(pending.build, pending.join, pending.options)
+        }, 250)
+        return
+      }
       pushToast({
         tone: 'success',
         title: 'Community launcher ready',
@@ -3472,6 +3496,7 @@ export default function App() {
   const handleDiscordCancel = useCallback(() => {
     if (discordBusy) return
     discordResumeRef.current = null
+    communityLauncherResumeRef.current = null
     setDiscordPrompt(null)
     setDiscordError(null)
   }, [discordBusy])
