@@ -754,6 +754,51 @@ async function importCommunityLauncher(payload = {}) {
   }
 }
 
+/**
+ * Adopt a launcher that is already installed at its own documented location
+ * (e.g. %LOCALAPPDATA%\Programs\Omen\Omen.exe). The safety scan still runs on
+ * the real executable — installer safety, local-backend inspection and Windows
+ * Defender — but the install is recorded in place, because copying a single
+ * .exe out of an installed app would leave its support files behind.
+ */
+async function adoptInstalledCommunityLauncher(payload = {}) {
+  const providerId = String(payload.providerId || '')
+    .trim()
+    .toLowerCase()
+  if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(providerId)) {
+    throw new Error('Unknown community provider.')
+  }
+  const root = rootFor(payload.root)
+  const env = payload.env || process.env
+  const scan = await scanCommunityLauncher(payload.file, { env })
+  if (!scan.safe) {
+    const error = new Error(scan.reason)
+    error.scan = scan
+    throw error
+  }
+  const store = readStore(root)
+  store[providerId] = {
+    providerId,
+    executable: scan.path,
+    portable: false,
+    adopted: true,
+    kind: 'installed',
+    installerName: scan.name,
+    sha256: scan.sha256,
+    defender: scan.defender,
+    installedAt: new Date().toISOString(),
+  }
+  writeStore(root, store)
+  return {
+    ok: true,
+    providerId,
+    installed: true,
+    adopted: true,
+    executableName: path.basename(scan.path),
+    defender: scan.defender,
+  }
+}
+
 function communityLauncherRecord(providerId, root) {
   const id = String(providerId || '')
     .trim()
@@ -812,6 +857,7 @@ function forgetCommunityLauncher(providerId, root) {
 module.exports = {
   BACKEND_CONTEXT,
   BLOCKED_CANDIDATE_NAME,
+  adoptInstalledCommunityLauncher,
   LAWIN_MARKER,
   LOCAL_HOST,
   SILENT_ARGUMENTS,

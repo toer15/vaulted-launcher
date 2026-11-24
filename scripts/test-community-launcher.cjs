@@ -168,10 +168,29 @@ assert.match(
 )
 assert.match(
   main,
-  /const imported = await startImportedCommunityLauncher\(id, launchOptions\)/,
+  /let imported = await startImportedCommunityLauncher\(id, launchOptions\)/,
   'Play routes a community season straight to the imported launcher',
 )
 assert.match(main, /startImportedCommunityLauncher/)
+assert.match(
+  main,
+  /async function autoDiscoverCommunityLauncher\(providerId\)/,
+  'Start auto-discovers a launcher the player already installed or downloaded',
+)
+assert.match(main, /installedExecutables\(metadata\)/, 'documented %LOCALAPPDATA% installs are checked')
+assert.match(main, /listDownloadedLaunchers\(\)/, 'the Downloads folder is checked')
+assert.match(main, /await scanCommunityLauncher\(file\)/, 'a discovered launcher is safety-scanned first')
+assert.match(
+  main,
+  /await adoptInstalledCommunityLauncher\(\{ providerId: id, file, root \}\)/,
+  'an already-installed launcher is adopted in place, never copied alone',
+)
+assert.match(main, /await importCommunityLauncher\(\{/, 'a downloaded launcher is imported through Step 2')
+assert.match(
+  main,
+  /const discovered = await autoDiscoverCommunityLauncher\(id\)/,
+  'the direct-launch branch runs auto-discovery before asking for the file',
+)
 assert.match(main, /communityLauncherExecutable\(id, communityLauncherRoot\(\)\)/)
 assert.match(main, /community: true/, 'a Discord season without its launcher opens Steps 1-2')
 assert.match(main, /windowsHide: true/, 'the imported launcher never shows a window')
@@ -369,10 +388,69 @@ async function checkPortableLauncher() {
   )
 }
 
+/**
+ * ONLINE · DISCORD seasons are hosted by their community launcher 24/7 and
+ * must never fall through to the managed live-server gate.
+ */
+async function checkDiscordHostedLaunch() {
+  const app = read('src/App.tsx')
+  const hostedAt = app.indexOf('const discordHostedProvider = providerCatalog.find(')
+  const liveGateAt = app.indexOf('No live ${build.season.label} server is online right now.')
+  assert.ok(hostedAt > 0, 'Play has no direct route for verified Discord-hosted seasons')
+  assert.ok(
+    liveGateAt > hostedAt,
+    'the Discord-hosted route must return before the live-server failure can fire',
+  )
+  assert.match(
+    app.slice(hostedAt, hostedAt + 900),
+    /entry\.directLaunch === true/,
+    'the route must only claim direct-launch communities',
+  )
+  assert.match(
+    app.slice(hostedAt, hostedAt + 900),
+    /Boolean\(entry\.discordGate\)/,
+    'the route must only claim Discord-gated communities',
+  )
+  assert.match(
+    app.slice(hostedAt, hostedAt + 1400),
+    /await startOnlineProvider\(build, discordHostedProvider\)\s*\n\s*return/,
+    'Play must hand the season to its community launcher and stop',
+  )
+  assert.match(
+    app.slice(hostedAt, hostedAt + 900),
+    /isDiscordGateVerified\(discordGateVerifications, discordHostedProvider\.discordGate!\)/,
+    'only a verified Step 1 unlocks the 24/7 route',
+  )
+
+  const store = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-adopt-'))
+  await assert.rejects(
+    launcher.adoptInstalledCommunityLauncher({
+      providerId: 'omen-official',
+      file: path.join(store, 'missing', 'Omen.exe'),
+      root: store,
+    }),
+    /no longer exists|not found|missing|invalid/i,
+    'an adopted launcher must exist on disk',
+  )
+  assert.equal(
+    launcher.communityLauncherExecutable('omen-official', store),
+    '',
+    'a rejected adoption never records a launcher',
+  )
+  // The adopted record is what Start reads; a missing file can never satisfy it.
+  assert.equal(
+    launcher.communityLauncherRecord('omen-official', store),
+    null,
+    'a rejected adoption leaves no executable record behind',
+  )
+  fs.rmSync(store, { recursive: true, force: true })
+}
+
 checkPortableLauncher()
+  .then(checkDiscordHostedLaunch)
   .then(() => {
     console.log(
-      'community launcher checks passed: LawinServer/127.0.0.1 refusal, Downloads detection, silent switches, portable .exe copied with the folder and companions it ships with, without reinstalling, Start handing the season folder to the hidden launcher, provider-scoped executable record, two-step Discord UI, and an unchanged installer/local-server ban',
+      'community launcher checks passed: LawinServer/127.0.0.1 refusal, Downloads detection, silent switches, portable .exe copied with the folder and companions it ships with, without reinstalling, Start handing the season folder to the hidden launcher, auto-discovery of installed/downloaded launchers through the same safety scan, a 24/7 route for verified ONLINE · DISCORD seasons that never reports "No live server available", provider-scoped executable record, two-step Discord UI, and an unchanged installer/local-server ban',
     )
   })
   .catch((error) => {

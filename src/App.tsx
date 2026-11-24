@@ -3688,6 +3688,33 @@ export default function App() {
         return
       }
 
+      // A verified ONLINE · DISCORD season is hosted by its community launcher
+      // around the clock, not by the managed live-server directory. Hand it
+      // straight to that launcher (hidden, for the whole session) so Start can
+      // never fall through to "No live server available". A launcher that is
+      // missing is discovered/scanned in main, and the prompt it returns opens
+      // Step 2 instead of a fake server error.
+      const hostedProviderId = selectedGate?.providerId ?? build.onlineProvider?.id
+      const discordHostedProvider = providerCatalog.find(
+        (entry) =>
+          entry.id === hostedProviderId &&
+          entry.external === true &&
+          entry.directLaunch === true &&
+          Boolean(entry.discordGate),
+      )
+      if (!join && !options.forceProviderId && discordHostedProvider) {
+        const discordUnlocked = Boolean(
+          isDiscordGateVerified(discordGateVerifications, discordHostedProvider.discordGate!) ||
+            launcherDetections[discordHostedProvider.id]?.installed === true,
+        )
+        if (discordUnlocked) {
+          // startOnlineProvider opens Step 2 itself when the community launcher
+          // is not on this PC yet, so nothing after this may show a server error.
+          await startOnlineProvider(build, discordHostedProvider)
+          return
+        }
+      }
+
       localSessionRef.current = null
       setLaunchFailure((current) => (current?.id === build.id ? null : current))
 

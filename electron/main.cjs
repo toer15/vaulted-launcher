@@ -49,6 +49,7 @@ const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { detectBuildVersion } = require('./buildVersion.cjs')
 const { openDiscordInvite } = require('./externalLinks.cjs')
 const {
+  adoptInstalledCommunityLauncher,
   communityLauncherExecutable,
   communityLauncherRecord,
   communityLauncherStatus,
@@ -3003,6 +3004,70 @@ async function startImportedCommunityLauncher(providerId, launchOptions = {}) {
   return { pid: child.pid ?? null, executable }
 }
 
+/**
+ * Find a community launcher the player already has but never imported. Two
+ * sources, both gated by the same safety scan Step 2 runs:
+ *  - a documented install under %LOCALAPPDATA%\Programs, adopted in place;
+ *  - the launcher's own .exe sitting in Downloads, imported like a dropped file.
+ * Returns the executable path, or '' when nothing safe was found.
+ */
+async function autoDiscoverCommunityLauncher(providerId) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id || isBannedProvider(id)) return ''
+  const profile = providerForId(id)
+  const metadata = profile?.launcher
+  if (!metadata || profile.directLaunch !== true) return ''
+  const root = communityLauncherRoot()
+  const known = communityLauncherExecutable(id, root)
+  if (known) return known
+
+  for (const file of installedExecutables(metadata)) {
+    try {
+      const scan = await scanCommunityLauncher(file)
+      if (!scan.safe) {
+        console.warn(`[VAULTED] the installed ${id} launcher was not adopted: ${scan.reason}`)
+        continue
+      }
+      await adoptInstalledCommunityLauncher({ providerId: id, file, root })
+      const adopted = communityLauncherExecutable(id, root)
+      if (adopted) {
+        console.log(`[VAULTED] adopted the installed ${id} launcher for hidden launch.`)
+        return adopted
+      }
+    } catch (error) {
+      console.warn(
+        `[VAULTED] could not adopt the installed ${id} launcher: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
+  const names = new Set(
+    (metadata.executableNames || []).map((name) => String(name || '').trim().toLowerCase()).filter(Boolean),
+  )
+  if (names.size === 0) return ''
+  for (const candidate of listDownloadedLaunchers()) {
+    if (!names.has(candidate.name.toLowerCase())) continue
+    try {
+      await importCommunityLauncher({
+        providerId: id,
+        file: candidate.path,
+        root,
+        label: metadata.label || id,
+      })
+      const imported = communityLauncherExecutable(id, root)
+      if (imported) {
+        console.log(`[VAULTED] auto-imported ${candidate.name} from Downloads for hidden launch.`)
+        return imported
+      }
+    } catch (error) {
+      console.warn(
+        `[VAULTED] ${candidate.name} was not imported: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+  return ''
+}
+
 /** Public companion-launcher detection; never returns the filesystem path. */
 function providerLauncherStatus(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
@@ -5780,7 +5845,14 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       // The player can hand VAULTED the launcher they downloaded from the
       // community Discord. It runs hidden: it only provides the hosted
       // backend session, while VAULTED keeps the only visible window.
-      const imported = await startImportedCommunityLauncher(id, launchOptions)
+      let imported = await startImportedCommunityLauncher(id, launchOptions)
+      if (!imported?.executable) {
+        // Step 2 is not only a manual picker: a launcher the player already
+        // installed under %LOCALAPPDATA%, or downloaded and left in Downloads,
+        // is safety-scanned and adopted before VAULTED asks for the file again.
+        const discovered = await autoDiscoverCommunityLauncher(id)
+        if (discovered) imported = await startImportedCommunityLauncher(id, launchOptions)
+      }
       if (imported?.executable) {
         return {
           opened: true,
@@ -5794,7 +5866,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         opened: false,
         directLaunch: true,
         community: true,
-        error: `${profile.label} needs its own launcher once. Join the Discord, download it, then select or drop that file into VAULTED.`,
+        error: `${profile.label} needs its launcher once. Open its community Discord, download the launcher .exe from the launcher/download channel, then add it in Step 2 — VAULTED scans it, then runs it hidden off-screen for the whole session.`,
       }
     }
 
