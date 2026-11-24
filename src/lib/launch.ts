@@ -253,6 +253,21 @@ export interface LauncherBridge {
   }>
   /** open a verified community Discord invite through the OS */
   openDiscordInvite?(url: string): Promise<{ opened: boolean; url: string }>
+  /**
+   * Discord-hosted seasons are downloaded from the community itself. These
+   * find a client build already sitting in Downloads and unpack it into the
+   * season's existing folder, so the community's own file is what runs.
+   */
+  findSeasonArchives?(payload: {
+    buildPath: string
+    version: string
+  }): Promise<Array<{ name: string; path: string; size: number; modifiedAt: string }>>
+  importSeasonArchive?(payload: {
+    buildId: string
+    buildPath: string
+    version: string
+    archivePath: string
+  }): Promise<{ ok: boolean; executable: string; root: string; archive: string }>
   downloadBuild?(payload: {
     id: string
     key: string

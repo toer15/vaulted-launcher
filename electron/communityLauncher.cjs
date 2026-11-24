@@ -310,6 +310,27 @@ function installerType(listingText) {
  * banned backend module name, or a loopback host held next to backend/API
  * wording. Plain `localhost` debug strings alone do not trip it.
  */
+/**
+ * A hosted launcher embeds loopback addresses for its own web view or dev
+ * tooling, so a bare 127.0.0.1 next to any backend-ish word is not evidence of
+ * a self-hosted lobby. Only a loopback address used as the backend endpoint
+ * counts: assigned to a backend key, or spelled as a URL with backend wording
+ * beside it.
+ */
+function localBackendReference(text) {
+  if (LAWIN_MARKER.test(text)) return 'bundled'
+  const keyed =
+    /(?:backend|api_?url|base_?url|server_?url|game_?server|endpoint|lobby_?url)[A-Za-z0-9_]{0,12}["']?\s*[:=]\s*["']?(?:https?:\/\/)?(?:127\.0\.0\.1|0\.0\.0\.0|\[::1\]|localhost)/i
+  if (keyed.test(text)) return 'keyed'
+  const uri = /(?:https?|wss?):\/\/(?:127\.0\.0\.1|0\.0\.0\.0|\[::1\]|localhost)(?::\d{2,5})?/gi
+  let match
+  while ((match = uri.exec(text))) {
+    const around = text.slice(Math.max(0, match.index - 96), match.index + match[0].length + 96)
+    if (BACKEND_CONTEXT.test(around)) return 'adjacent'
+  }
+  return null
+}
+
 async function inspectExecutableForLocalBackend(file) {
   if (safeExtension(file) !== '.exe') return null
   let handle
@@ -331,7 +352,8 @@ async function inspectExecutableForLocalBackend(file) {
       if (LAWIN_MARKER.test(text)) {
         return 'This launcher is bundled with a local game backend, which VAULTED does not run.'
       }
-      if (LOCAL_HOST.test(text) && BACKEND_CONTEXT.test(text)) {
+      const localBackend = localBackendReference(text)
+      if (localBackend) {
         return 'This launcher points its backend at this PC (127.0.0.1/localhost), so it is a self-hosted lobby, not the hosted community server.'
       }
       carry = Math.min(length, BINARY_OVERLAP_BYTES)

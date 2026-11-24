@@ -28,7 +28,7 @@ export const ONLINE_UNAVAILABLE_MESSAGE =
  */
 export function communityHostedMessage(label?: string | null): string {
   const host = String(label || '').trim() || 'the Discord community'
-  return `Hosted by ${host} (Discord community) — complete Step 1 & Step 2 below to unlock & play online`
+  return `Hosted by ${host} (Discord community) — its launcher comes from the project's Discord #download channel and starts this season online`
 }
 
 /**

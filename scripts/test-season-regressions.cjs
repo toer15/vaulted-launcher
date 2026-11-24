@@ -1374,10 +1374,18 @@ function testInstallSeasonRequiresExplicitClick() {
     /options\.explicit !== true && !installed\[build\.id\] && !downloads\[build\.id\]/,
     'the download request must require an explicit install',
   )
+  // Install Season stays the only explicit download entry point: managed
+  // seasons download their archive, Discord seasons open their own #download
+  // channel and import the file the player downloads there.
   assert.match(
     app,
-    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,200}requestDownload\(build, \{ explicit: true \}\)/,
+    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,900}?requestDownload\(build, \{ explicit: true \}\)/,
     'Install Season must be the only explicit download entry point',
+  )
+  assert.match(
+    app,
+    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,1600}?openDiscordInvite\?\.\(gate\.inviteUrl\)/,
+    'a Discord season install must go through that community Discord',
   )
   assert.match(app, /onInstallSeason=\{handleInstallSeason\}/)
   assert.equal(

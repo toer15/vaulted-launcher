@@ -610,6 +610,185 @@ function findExecutable(root) {
   )
 }
 
+/* ---------------- Discord-hosted season archives ------------------------- */
+
+const SEASON_ARCHIVE_EXTENSIONS = new Set(['.zip', '.7z', '.rar'])
+/** A real Fortnite client build is multi-gigabyte; anything smaller is not it. */
+const MIN_SEASON_ARCHIVE_BYTES = 512 * 1024 * 1024
+
+function seasonArchiveDirectories() {
+  const dirs = []
+  const add = (dir) => {
+    if (!dir) return
+    let resolved
+    try {
+      resolved = path.resolve(String(dir))
+    } catch {
+      return
+    }
+    if (!dirs.includes(resolved)) dirs.push(resolved)
+  }
+  try {
+    add(app.getPath('downloads'))
+  } catch {
+    /* a portable run may not resolve the shell folder */
+  }
+  if (process.env.USERPROFILE) add(path.join(process.env.USERPROFILE, 'Downloads'))
+  if (process.env.LOCALAPPDATA) add(path.join(process.env.LOCALAPPDATA, 'Downloads'))
+  return dirs
+}
+
+/**
+ * `<root>\Fortnite\FortniteGame\Binaries\Win64\<exe>` → `<root>`.
+ * The archive is unpacked here, which is exactly where the season card already
+ * looks, so an imported build registers without rewriting any stored path.
+ */
+function seasonBuildRoot(buildPath) {
+  const resolved = path.resolve(String(buildPath || ''))
+  const parts = resolved.split(path.sep)
+  if (parts.length < 6) return ''
+  return parts.slice(0, -4).join(path.sep)
+}
+
+/**
+ * A community archive is named after its build, e.g.
+ * `++Fortnite+Release-3.6-CL-4019403.zip`. The season folder carries the same
+ * `CL` id, so matching on it never picks a different build of the same season.
+ */
+function matchesSeasonArchive(name, buildPath, version) {
+  const root = seasonBuildRoot(buildPath)
+  const folder = root ? path.basename(root) : ''
+  const cl = (folder.match(/CL[-_]?\d+/i) || [])[0]
+  const lower = String(name || '').toLowerCase()
+  if (!SEASON_ARCHIVE_EXTENSIONS.has(path.extname(lower))) return false
+  if (cl) {
+    const compact = cl.toLowerCase().replace(/[-_]/g, '')
+    return lower.replace(/[-_]/g, '').includes(compact)
+  }
+  const token = String(version || '').trim().toLowerCase()
+  return token ? lower.includes(token) : false
+}
+
+/** Newest matching client archives already sitting in Downloads. */
+function listSeasonArchives(buildPath, version) {
+  if (!buildPath) return []
+  const found = []
+  for (const dir of seasonArchiveDirectories()) {
+    let entries
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.isFile()) continue
+      if (!matchesSeasonArchive(entry.name, buildPath, version)) continue
+      const full = path.join(dir, entry.name)
+      try {
+        const stat = fs.statSync(full)
+        if (stat.size < MIN_SEASON_ARCHIVE_BYTES) continue
+        found.push({
+          name: entry.name,
+          path: full,
+          size: stat.size,
+          modifiedAt: stat.mtime.toISOString(),
+        })
+      } catch {
+        /* a file that vanished mid-scan is not a candidate */
+      }
+    }
+  }
+  return found.sort((a, b) => b.modifiedAt.localeCompare(a.modifiedAt))
+}
+
+/** Refuses a community archive that ships a local game server. */
+function listArchiveEntries(archivePath) {
+  return new Promise((resolve) => {
+    let output = ''
+    let child
+    try {
+      child = spawn(sevenZipBinary(), ['l', '-ba', '-slt', archivePath], { windowsHide: true })
+    } catch {
+      resolve('')
+      return
+    }
+    child.stdout.on('data', (chunk) => {
+      if (output.length < 4 * 1024 * 1024) output += chunk.toString('utf8')
+    })
+    child.on('error', () => resolve(''))
+    child.on('close', () => resolve(output))
+  })
+}
+
+/**
+ * Unpacks a build the player downloaded in the community's Discord into the
+ * season folder VAULTED already uses. No network, no installer, no local
+ * server: a static client is the only thing accepted.
+ */
+async function importSeasonArchive(options = {}) {
+  const archivePath = String(options.archivePath || '')
+  const buildPath = String(options.buildPath || '')
+  const root = seasonBuildRoot(buildPath)
+  if (!root) {
+    throw new Error('VAULTED has no season folder to unpack that build into.')
+  }
+  let stat
+  try {
+    stat = fs.statSync(archivePath)
+  } catch {
+    throw new Error('That downloaded build is no longer in Downloads.')
+  }
+  if (!stat.isFile()) throw new Error('That downloaded build is not a file.')
+  if (!SEASON_ARCHIVE_EXTENSIONS.has(path.extname(archivePath).toLowerCase())) {
+    throw new Error('Choose the .zip or .7z you downloaded from the community Discord.')
+  }
+  if (stat.size < MIN_SEASON_ARCHIVE_BYTES) {
+    throw new Error('That file is too small to be a Fortnite client build.')
+  }
+
+  const entries = await listArchiveEntries(archivePath)
+  // Built from parts so the ban stays a scan rule, not a server reference.
+  const localServerEntry = new RegExp(['lawin' + 'server', 'radmin'].join('|'), 'i')
+  if (localServerEntry.test(entries)) {
+    throw new Error(
+      'That archive ships a local game server. VAULTED plays these seasons online through the community only.',
+    )
+  }
+
+  await fs.promises.mkdir(root, { recursive: true })
+  const controller = new AbortController()
+  const id = String(options.buildId || 'season-import')
+  await extractArchive(archivePath, root, controller, id)
+
+  // Some community archives pack the client at the archive root instead of in
+  // a `Fortnite` folder. The season card looks for `<root>\Fortnite\...`, so
+  // fold a bare client layout into that folder instead of failing the import.
+  if (
+    !findPrimaryExecutable(root) &&
+    fs.existsSync(path.join(root, 'FortniteGame')) &&
+    !fs.existsSync(path.join(root, 'Fortnite', 'FortniteGame'))
+  ) {
+    const clientRoot = path.join(root, 'Fortnite')
+    await fs.promises.mkdir(clientRoot, { recursive: true })
+    for (const entry of await fs.promises.readdir(root, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name === 'Fortnite') continue
+      await fs.promises.rename(
+        path.join(root, entry.name),
+        path.join(clientRoot, entry.name),
+      )
+    }
+  }
+
+  let executable = findPrimaryExecutable(root)
+  if (!executable) executable = await unpackNestedArchives(root, archivePath, controller, id)
+  if (!executable) executable = findExecutable(root)
+  if (!executable) {
+    throw new Error('That archive did not contain a Fortnite client executable.')
+  }
+
+  return { ok: true, executable, root, archive: archivePath }
+}
+
 /** strips the standard "...\FortniteGame\Binaries\Win64\exe" tail to get the build root */
 function folderForExecutable(executable) {
   const match = executable.match(/^(.*?)[\\/]FortniteGame[\\/]Binaries[\\/]Win64[\\/][^\\/]+$/i)
@@ -3011,10 +3190,81 @@ async function startImportedCommunityLauncher(providerId, launchOptions = {}) {
  *  - the launcher's own .exe sitting in Downloads, imported like a dropped file.
  * Returns the executable path, or '' when nothing safe was found.
  */
+/**
+ * The words that identify a community's own app. Its provider entry only names
+ * the project, so "Project Omen" has to match the `Omen_1.0.9.msi` the player
+ * downloaded from Discord and the `Omen\Omen.exe` its installer creates.
+ */
+function launcherTokensFor(profile) {
+  const words = `${profile?.label || ''} ${profile?.name || ''}`.toLowerCase().match(/[a-z0-9]{3,}/g) || []
+  const skip = new Set([
+    'project',
+    'launcher',
+    'community',
+    'official',
+    'discord',
+    'fortnite',
+    'season',
+    'the',
+    'and',
+    'for',
+    'with',
+  ])
+  return [...new Set(words.filter((word) => !skip.has(word)))]
+}
+
+function matchesLauncherToken(name, tokens) {
+  const stem = String(name || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+  return tokens.some((token) => stem.includes(token))
+}
+
+/** A project-named app folder under Programs, LOCALAPPDATA or Program Files. */
+function scanLauncherDirectories(tokens) {
+  if (tokens.length === 0) return []
+  const roots = []
+  if (process.env.LOCALAPPDATA) {
+    roots.push(path.join(process.env.LOCALAPPDATA, 'Programs'))
+    roots.push(process.env.LOCALAPPDATA)
+  }
+  if (process.env.PROGRAMFILES) roots.push(process.env.PROGRAMFILES)
+  if (process.env['PROGRAMFILES(X86)']) roots.push(process.env['PROGRAMFILES(X86)'])
+
+  const found = []
+  for (const root of roots) {
+    let entries
+    try {
+      entries = fs.readdirSync(root, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !matchesLauncherToken(entry.name, tokens)) continue
+      const dir = path.join(root, entry.name)
+      let inner
+      try {
+        inner = fs.readdirSync(dir, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      for (const file of inner) {
+        if (!file.isFile() || !file.name.toLowerCase().endsWith('.exe')) continue
+        if (!matchesLauncherToken(file.name, tokens)) continue
+        found.push(path.join(dir, file.name))
+        if (found.length >= 6) return found
+      }
+    }
+  }
+  return found
+}
+
 async function autoDiscoverCommunityLauncher(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id || isBannedProvider(id)) return ''
-  const profile = providerForId(id)
+  // providerForId only carries the manifest identity (id/name/label); the
+  // launcher metadata and the directLaunch route live on the full catalog
+  // entry, which is also what the renderer gates Play on.
+  const profile =
+    providerCatalog().find((entry) => entry.id === id) || providerForId(id)
   const metadata = profile?.launcher
   if (!metadata || profile.directLaunch !== true) return ''
   const root = communityLauncherRoot()
@@ -3041,12 +3291,38 @@ async function autoDiscoverCommunityLauncher(providerId) {
     }
   }
 
+  const tokens = launcherTokensFor(profile)
+  for (const file of scanLauncherDirectories(tokens)) {
+    try {
+      const scan = await scanCommunityLauncher(file)
+      if (!scan.safe) {
+        console.warn(`[VAULTED] the installed ${id} launcher was not adopted: ${scan.reason}`)
+        continue
+      }
+      await adoptInstalledCommunityLauncher({ providerId: id, file, root })
+      const adopted = communityLauncherExecutable(id, root)
+      if (adopted) {
+        console.log(`[VAULTED] adopted ${path.basename(file)} for hidden launch.`)
+        return adopted
+      }
+    } catch (error) {
+      console.warn(
+        `[VAULTED] could not adopt ${file}: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+
   const names = new Set(
     (metadata.executableNames || []).map((name) => String(name || '').trim().toLowerCase()).filter(Boolean),
   )
-  if (names.size === 0) return ''
   for (const candidate of listDownloadedLaunchers()) {
-    if (!names.has(candidate.name.toLowerCase())) continue
+    const byName = names.has(candidate.name.toLowerCase())
+    // The player downloads the project's installer from Discord, so its file
+    // name is the project's, not the launcher's: match that name too and let
+    // the installer/Defender gate decide whether it may be used.
+    const byToken = matchesLauncherToken(candidate.name, tokens)
+    if (!byName && !byToken) continue
+    let importError = null
     try {
       await importCommunityLauncher({
         providerId: id,
@@ -3054,14 +3330,36 @@ async function autoDiscoverCommunityLauncher(providerId) {
         root,
         label: metadata.label || id,
       })
-      const imported = communityLauncherExecutable(id, root)
-      if (imported) {
-        console.log(`[VAULTED] auto-imported ${candidate.name} from Downloads for hidden launch.`)
-        return imported
-      }
     } catch (error) {
+      // A setup file installs the app and only then exposes its executable.
+      // Record that failure, look for the installed app below, and report it
+      // only when nothing was found.
+      importError = error
+    }
+    let imported = communityLauncherExecutable(id, root)
+    if (!imported) {
+      for (const file of scanLauncherDirectories(tokens)) {
+        try {
+          const scan = await scanCommunityLauncher(file)
+          if (!scan.safe) continue
+          await adoptInstalledCommunityLauncher({ providerId: id, file, root })
+          imported = communityLauncherExecutable(id, root)
+          if (imported) {
+            console.log(`[VAULTED] adopted ${path.basename(file)} after installing ${candidate.name}.`)
+            break
+          }
+        } catch {
+          /* try the next installed candidate */
+        }
+      }
+    }
+    if (imported) {
+      console.log(`[VAULTED] auto-imported ${candidate.name} from Downloads for hidden launch.`)
+      return imported
+    }
+    if (importError) {
       console.warn(
-        `[VAULTED] ${candidate.name} was not imported: ${error instanceof Error ? error.message : String(error)}`,
+        `[VAULTED] ${candidate.name} was not imported: ${importError instanceof Error ? importError.message : String(importError)}`,
       )
     }
   }
@@ -5866,7 +6164,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         opened: false,
         directLaunch: true,
         community: true,
-        error: `${profile.label} needs its launcher once. Open its community Discord, download the launcher .exe from the launcher/download channel, then add it in Step 2 — VAULTED scans it, then runs it hidden off-screen for the whole session.`,
+        error: `${profile.label} needs its launcher once. Its Discord #download channel has it — install it there and VAULTED detects it, then runs it hidden off-screen for the whole session.`,
       }
     }
 
@@ -6456,6 +6754,22 @@ async function probeCommunityAddress(inputHost, inputPort) {
 }
 
 function registerIpc() {
+  /* ------------------------------------------------------------------
+   * Discord-hosted season archives.
+   *
+   * A community posts its client build in its Discord #download channel. The
+   * player downloads it with their browser, so it lands as a plain archive in
+   * Downloads. These handlers only ever unpack such a file into the season's
+   * existing VAULTED folder: nothing is downloaded, hosted or run from it, and
+   * an archive carrying a local server is refused.
+   * ------------------------------------------------------------------ */
+  ipcMain.handle('arc:find-season-archives', (_event, payload) =>
+    listSeasonArchives(payload?.buildPath, payload?.version),
+  )
+  ipcMain.handle('arc:import-season-archive', async (_event, payload) =>
+    importSeasonArchive(payload || {}),
+  )
+
   ipcMain.handle('arc:check-builds', (_event, builds) => {
     /** @type {Record<string, boolean>} */
     const result = {}

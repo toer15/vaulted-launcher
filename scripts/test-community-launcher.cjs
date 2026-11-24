@@ -228,6 +228,12 @@ assert.match(
   /Done — Back to Season Card\n/,
   'Step 2 must offer a way straight back to the season card',
 )
+// The panel is now a fallback only: Start no longer forces a verify screen.
+assert.match(
+  read('src/App.tsx'),
+  /discordGate=\{null\}/,
+  'the season card must not gate Play on Discord',
+)
 assert.match(panel, /onDone\?.\(\)/, 'the Done button must close the gate')
 assert.match(
   panel,
@@ -255,26 +261,60 @@ assert.match(
   'Step 2 must say where the launcher file comes from',
 )
 
-const app = read('src/App.tsx')
+// --- 7b. Discord seasons are linked end to end, with no verify screen ------
+// Start must never be gated on a Discord verification, a Discord season's
+// Download must go to that project's own #download channel, and the client the
+// player downloads there must be picked up from Downloads automatically.
+const launchSource = read('src/App.tsx')
+const mainSource = read('electron/main.cjs')
+assert.equal(/lockedGate/.test(launchSource), false, 'no verification lock may block Start')
 assert.match(
-  app,
-  /communityLauncherResumeRef\.current = \{ build, gate \}/,
-  'a missing community launcher must remember the Start it interrupted',
+  launchSource,
+  /const communityUnlocked = Boolean\(\r?\n\s*communityProvider\?\.directLaunch === true && communityGate,/,
+  'a Discord-hosted project is an online route without verification',
 )
 assert.match(
-  app,
-  /pending\.gate\.providerId === providerId[\s\S]{0,900}startBuildRef\.current\?\.\(pending\.build/,
-  'importing the launcher must resume that launch instead of waiting for Start again',
+  launchSource,
+  /if \(gate\) \{\r?\n[\s\S]{0,800}void window\.arc\?\.openDiscordInvite\?\.\(gate\.inviteUrl\)/,
+  'a missing community launcher must send the player to the Discord download channel',
 )
 assert.match(
-  app,
-  /communityLauncherResumeRef\.current = null[\s\S]{0,160}setDiscordPrompt\(null\)/,
-  'cancelling the gate must clear the pending launcher launch',
+  launchSource,
+  /findSeasonArchives!?\(\{ buildPath: build\.path, version: build\.version \}/,
+  'Download must look for the build the player downloaded in Discord',
 )
-assert.match(app, /communityUnlocked/)
-assert.match(app, /openProviderLauncher\(/)
-assert.match(app, /onLauncherImported=\{handleCommunityLauncherImported\}/)
-assert.match(app, /The community launcher stays hidden off-screen while Fortnite runs/)
+assert.match(
+  launchSource,
+  /window\.arc\?\.openDiscordInvite\?\.\(gate\.inviteUrl\)[\s\S]{0,600}watchDiscordSeasonDownloads\(build\)/,
+  'Download must open the community Discord and then watch for the file',
+)
+assert.match(
+  launchSource,
+  /importSeasonArchive\(\{\r?\n\s*buildId: build\.id,\r?\n\s*buildPath: build\.path,\r?\n\s*version: build\.version,\r?\n\s*archivePath: archive\.path,/,
+  'the downloaded Discord build must be unpacked into the season folder',
+)
+assert.match(
+  mainSource,
+  /function listSeasonArchives\(buildPath, version\)/,
+  'main must find Discord build archives in Downloads',
+)
+assert.match(
+  mainSource,
+  /function importSeasonArchive\(options = \{\}\)/,
+  'main must unpack a Discord build archive into the season folder',
+)
+assert.match(
+  read('electron/preload.cjs'),
+  /findSeasonArchives: \(payload\) => ipcRenderer\.invoke\('arc:find-season-archives'/,
+  'preload must expose the Downloads scan',
+)
+assert.match(launchSource, /communityUnlocked/)
+assert.match(launchSource, /openProviderLauncher\(/)
+assert.match(launchSource, /onLauncherImported=\{handleCommunityLauncherImported\}/)
+assert.match(
+  launchSource,
+  /The community launcher stays hidden off-screen while Fortnite runs/,
+)
 
 // --- 8. A portable launcher is linked in place, never re-run as a setup ----
 

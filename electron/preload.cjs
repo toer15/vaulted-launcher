@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld('arc', {
   closeBuild: (payload) => ipcRenderer.invoke('arc:close-build', payload),
   checkBuilds: (builds) => ipcRenderer.invoke('arc:check-builds', builds),
   detectBuildVersion: (folder) => ipcRenderer.invoke('arc:detect-build-version', folder),
+  // Discord-hosted seasons: find a client build the player downloaded in the
+  // community Discord, then unpack it into the season's existing folder.
+  findSeasonArchives: (payload) => ipcRenderer.invoke('arc:find-season-archives', payload),
+  importSeasonArchive: (payload) => ipcRenderer.invoke('arc:import-season-archive', payload),
   openDiscordInvite: (url) => ipcRenderer.invoke('arc:open-discord-invite', url),
   downloadBuild: (payload) => ipcRenderer.invoke('arc:download-build', payload),
   syncProviderBuild: (payload) => ipcRenderer.invoke('arc:sync-provider-build', payload),
