@@ -47,6 +47,9 @@ public class VaultedHiddenWindow {
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int index);
+  [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int index, int value);
+  [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
 }
 "@
 function Find-VaultedTopWindow([int]$targetPid) {
@@ -120,6 +123,60 @@ if ($top -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
 [void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, 120, 80, 1200, 800, 0x0040)
 [void][VaultedHiddenWindow]::SetForegroundWindow($top)
 'SHOWN'
+`
+}
+
+function popupScript(pid, ownerPid, width, height) {
+  const safePid = Math.max(1, Math.floor(Number(pid) || 0))
+  const safeOwnerPid = Math.max(1, Math.floor(Number(ownerPid) || 0))
+  const safeWidth = Math.max(380, Math.min(900, Math.floor(Number(width) || 560)))
+  const safeHeight = Math.max(420, Math.min(1000, Math.floor(Number(height) || 760)))
+  return `
+${WINDOW_TYPES}
+$p = Get-Process -Id ${safePid} -ErrorAction SilentlyContinue
+if (-not $p) { 'NO_PROCESS'; exit 1 }
+$top = Find-VaultedTopWindow ${safePid}
+if ($top -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
+$owner = Find-VaultedTopWindow ${safeOwnerPid}
+# A sign-in window belongs to VAULTED, so keep it a small popup centred on the
+# app instead of a full-size launcher window in the taskbar.
+if ($owner -ne [IntPtr]::Zero) {
+  [void][VaultedHiddenWindow]::SetWindowLongPtr($top, -8, $owner)
+  $ex = [VaultedHiddenWindow]::GetWindowLong($top, -20)
+  if ($ex -ne 0) {
+    $popupStyle = (($ex -bor 0x00000080) -band (-bnot 0x00040000))
+    [void][VaultedHiddenWindow]::SetWindowLong($top, -20, $popupStyle)
+  }
+}
+$w = ${safeWidth}
+$h = ${safeHeight}
+$x = 140
+$y = 90
+if ($owner -ne [IntPtr]::Zero) {
+  $ownerRect = New-Object VaultedHiddenWindow+RECT
+  if ([VaultedHiddenWindow]::GetWindowRect($owner, [ref]$ownerRect)) {
+    $ow = $ownerRect.R - $ownerRect.L
+    $oh = $ownerRect.B - $ownerRect.T
+    if ($ow -gt 200 -and $oh -gt 200 -and $ownerRect.L -gt -10000) {
+      if ($w -gt ($ow - 120)) { $w = [Math]::Max(420, $ow - 120) }
+      if ($h -gt ($oh - 80)) { $h = [Math]::Max(480, $oh - 80) }
+      $x = $ownerRect.L + [int](($ow - $w) / 2)
+      $y = $ownerRect.T + [int](($oh - $h) / 2)
+    }
+  }
+}
+[void][VaultedHiddenWindow]::ShowWindow($top, 9)
+[void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, $x, $y, $w, $h, 0x0020 -bor 0x0040)
+[void][VaultedHiddenWindow]::SetForegroundWindow($top)
+# A launcher that loads its page after opening can resize itself once more.
+Start-Sleep -Milliseconds 800
+$after = New-Object VaultedHiddenWindow+RECT
+if ([VaultedHiddenWindow]::GetWindowRect($top, [ref]$after)) {
+  if ((($after.R - $after.L) -ne $w) -or (($after.B - $after.T) -ne $h)) {
+    [void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, $x, $y, $w, $h, 0x0040)
+  }
+}
+'SHOWN_POPUP'
 `
 }
 
@@ -205,6 +262,25 @@ async function showCompanionLauncher(pid, options = {}) {
   return false
 }
 
+/**
+ * Reveal a launcher's own sign-in page as a small popup owned by VAULTED: it
+ * opens centred over the app, stays above it, skips the taskbar, and vanishes
+ * with the app. Used only for the pre-download sign-in, never for Play.
+ */
+async function showCompanionLauncherPopup(pid, ownerPid, options = {}) {
+  if (process.platform !== 'win32') return false
+  const attempts = Number.isFinite(options.attempts) ? options.attempts : 12
+  const waitMs = Number.isFinite(options.waitMs) ? options.waitMs : 500
+  const script = popupScript(pid, ownerPid, options.width, options.height)
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const { output } = await runPowerShell(script, 15_000)
+    if (output === 'SHOWN_POPUP') return true
+    if (output === 'NO_PROCESS') return false
+    await delay(waitMs)
+  }
+  return false
+}
+
 /** Click the hidden launcher's bottom full-width Play/Close button. */
 async function clickCompanionPlayButton(pid, options = {}) {
   if (process.platform !== 'win32') return { clicked: false, error: 'unsupported platform' }
@@ -226,6 +302,7 @@ module.exports = {
   hideCompanionLauncher,
   showCompanionLauncher,
   showCompanionLauncherOffscreen,
+  showCompanionLauncherPopup,
   delay,
   runPowerShell,
 }

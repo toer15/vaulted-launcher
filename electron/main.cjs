@@ -46,6 +46,7 @@ const {
   hideCompanionLauncher,
   showCompanionLauncher,
   showCompanionLauncherOffscreen,
+  showCompanionLauncherPopup,
 } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { detectBuildVersion } = require('./buildVersion.cjs')
@@ -7410,11 +7411,20 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       const finishLaunch = async (started) => {
         if (!started?.opened) return started
         const result = { ...started, args, version, savedBuild }
-        // Pre-download launcher sign-in: keep the launcher visible in its own
-        // window so the player can authenticate before the season is fetched.
+        // Pre-download launcher sign-in: show the launcher's own login as a
+        // small popup owned by VAULTED, so it returns to the app when closed.
         if (signInOnly && started.pid) {
           stopCompanionWindowHider(id)
-          result.visible = await showCompanionLauncher(started.pid, { attempts: 12, waitMs: 500 })
+          result.visible = await showCompanionLauncherPopup(started.pid, process.pid, {
+            attempts: 12,
+            waitMs: 500,
+          })
+          if (!result.visible) {
+            result.visible = await showCompanionLauncher(started.pid, {
+              attempts: 4,
+              waitMs: 500,
+            })
+          }
         }
         if (started.pid && buildFolder) {
           const gameExecutable =

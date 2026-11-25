@@ -1565,6 +1565,16 @@ function testInstallSeasonRequiresExplicitClick() {
   )
   assert.match(MAIN, /ipcMain\.handle\('win:focus'/, 'the focus IPC is missing')
   assert.match(MAIN, /AppActivate\(\$\{process\.pid\}\)/, 'Windows focus must activate the real window')
+  assert.match(
+    MAIN,
+    /showCompanionLauncherPopup\(started\.pid, process\.pid/,
+    'the launcher sign-in window must open as a small VAULTED-owned popup',
+  )
+  assert.match(
+    read('electron/companionAutomation.cjs'),
+    /SetWindowLongPtr\(\$top, -8, \$owner\)/,
+    'the sign-in popup must be owned by the VAULTED window so it stays attached',
+  )
 }
 
 function testCompanionDownloadHandoff() {
