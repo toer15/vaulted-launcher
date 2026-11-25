@@ -605,7 +605,9 @@ export function ActiveBuildCard({
     },
     downloading: {
       label:
-        download?.phase === 'runtime'
+        download?.phase === 'launcher'
+          ? 'Starting the season launcher…'
+          : download?.phase === 'runtime'
           ? 'Preparing the provider runtime…'
           : download?.phase === 'extracting'
             ? 'Unpacking…'
@@ -753,7 +755,9 @@ export function ActiveBuildCard({
         ? `Download paused at ${download.percent}% — continue where it left off.`
         : 'Download paused — continue where it left off.',
     downloading:
-      download?.phase === 'runtime'
+      download?.phase === 'launcher'
+        ? 'Opening the companion launcher in the background so it prepares its own download…'
+        : download?.phase === 'runtime'
         ? 'Downloading and verifying the provider runtime…'
         : download?.phase === 'extracting'
           ? 'Unpacking the build…'
@@ -1155,7 +1159,9 @@ export function ActiveBuildCard({
                 <span className="text-fog">
                   {download.phase === 'paused'
                     ? 'Interrupted — your partial download is kept'
-                    : download.phase === 'runtime'
+                    : download.phase === 'launcher'
+                      ? 'Opening the companion launcher to prepare its download…'
+                      : download.phase === 'runtime'
                       ? 'Preparing the signed provider runtime…'
                       : download.phase === 'extracting'
                         ? 'Unpacking archive…'

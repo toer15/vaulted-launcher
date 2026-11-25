@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('arc', {
   openDiscordInvite: (url) => ipcRenderer.invoke('arc:open-discord-invite', url),
   downloadBuild: (payload) => ipcRenderer.invoke('arc:download-build', payload),
   syncProviderBuild: (payload) => ipcRenderer.invoke('arc:sync-provider-build', payload),
+  // Start the season's other launcher after VAULTED installed its build, so
+  // the project's own prepare/download begins automatically.
+  startCompanionDownload: (providerId, folder) =>
+    ipcRenderer.invoke('arc:start-companion-download', providerId, folder),
   deleteBuild: (payload) => ipcRenderer.invoke('arc:delete-build', payload),
   cleanupBuildStorage: () => ipcRenderer.invoke('arc:cleanup-build-storage'),
   verifyBuild: (payload) => ipcRenderer.invoke('arc:verify-build', payload),

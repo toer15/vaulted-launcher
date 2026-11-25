@@ -223,7 +223,7 @@ export interface DownloadState {
   etaSeconds: number | null
   /** live transfer rate in bytes per second */
   speedBytesPerSecond?: number | null
-  phase: 'downloading' | 'verifying' | 'extracting' | 'runtime' | 'paused'
+  phase: 'downloading' | 'verifying' | 'extracting' | 'runtime' | 'launcher' | 'paused'
   /** bytes kept from an interrupted download, when paused */
   received?: number
   total?: number

@@ -565,13 +565,13 @@
       "title": "Chapter 2 Season 5",
       "chapter": 2,
       "season": 5,
-      "buildVersion": "15.00",
-      "sizeGB": 30.29,
-      "downloadUrl": "https://archive.org/download/fn-v15-archive/builds%2F15.00-CL-14835335.7z",
+      "buildVersion": "15.50",
+      "sizeGB": 29.1,
+      "downloadUrl": "https://archive.org/download/fn-v15-archive/builds%2F15.50-CL-15526472.7z",
       "runtimeProfile": "modern",
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s5",
-      "url": "https://archive.org/download/fn-v15-archive/builds%2F15.00-CL-14835335.7z",
-      "version": "15.00",
+      "url": "https://archive.org/download/fn-v15-archive/builds%2F15.50-CL-15526472.7z",
+      "version": "15.50",
       "servers": [
         {
           "name": "Reboot",
@@ -582,7 +582,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 30293312103,
+      "sizeBytes": 31247590105,
       "onlineProvider": {
         "id": "hydro",
         "name": "Hydro",
@@ -630,13 +630,13 @@
       "title": "Chapter 2 Season 7",
       "chapter": 2,
       "season": 7,
-      "buildVersion": "17.21",
-      "sizeGB": 30.89,
-      "downloadUrl": "https://archive.org/download/fn-v17-archive/17.21-CL-16967001.7z",
+      "buildVersion": "17.50",
+      "sizeGB": 34.56,
+      "downloadUrl": "https://archive.org/download/fn-v17-archive/builds%2F17.50-CL-17388565.7z",
       "runtimeProfile": "modern",
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s7",
-      "url": "https://archive.org/download/fn-v17-archive/17.21-CL-16967001.7z",
-      "version": "17.21",
+      "url": "https://archive.org/download/fn-v17-archive/builds%2F17.50-CL-17388565.7z",
+      "version": "17.50",
       "servers": [
         {
           "name": "Reboot",
@@ -647,7 +647,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 30893875564,
+      "sizeBytes": 37109957370,
       "onlineProvider": {
         "id": "eon",
         "name": "Project Eon",

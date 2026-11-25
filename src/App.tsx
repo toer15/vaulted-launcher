@@ -71,6 +71,7 @@ import {
   subscribeProviderRuntimeProgress,
   subscribeProviderSessionExpired,
   verifyBuildFiles,
+  type CompanionDownloadResult,
   type ProviderLauncherDetection,
   type ProviderRuntimeProgress,
   type ProviderRuntimeStatus,
@@ -166,6 +167,23 @@ const PROVIDER_BRAND_PATTERN = /\b(?:Project Era|EZFN Hybrid|EZFN|Stellar|Retrac
 
 function nativeMessage(message: string): string {
   return message.replace(PROVIDER_BRAND_PATTERN, 'online service')
+}
+
+/** One sentence for the download toast about the season's other launcher. */
+function companionDownloadNote(companion?: CompanionDownloadResult): string {
+  if (!companion) return ''
+  if (companion.started) {
+    return `${companion.label} is opening in the background so it starts its own prepare/download. Press Play if it needs a one-time sign-in.`
+  }
+  if (!companion.installed) {
+    return companion.installSource === 'official'
+      ? `${companion.label} could not be installed automatically — check the connection, then press Start to retry.`
+      : `${companion.label} is not on this PC yet; install it from its Discord download channel and Start will pick it up automatically.`
+  }
+  if (companion.error) {
+    return `${companion.label} is installed but could not start automatically — open it once, then press Start.`
+  }
+  return ''
 }
 
 const MANUAL_SERVERS_KEY = 'vaulted.manualServers.v1'
@@ -2469,6 +2487,7 @@ export default function App() {
             ),
           )
           rememberInstalledBuild(downloaded, result.folder)
+          const companionNote = companionDownloadNote(result.companion)
           if (result.runtimeInstalled && options.providerId) {
             setRuntimeStatuses((prev) => ({
               ...prev,
@@ -2490,7 +2509,7 @@ export default function App() {
             pushToast({
               tone: 'info',
               title: 'Build downloaded — runtime needs attention',
-              description: result.runtimeError,
+              description: [result.runtimeError, companionNote].filter(Boolean).join(' '),
             })
           } else {
             pushToast({
@@ -2504,6 +2523,14 @@ export default function App() {
                   ? `${build.season.label} and its official launcher ${result.runtimeVersion} are ready — press Play.`
                   : `${build.season.label} is ready — press Play.`,
             })
+            if (companionNote) {
+              pushToast({
+                tone: 'info',
+                title: 'Companion launcher preparing',
+                description: companionNote,
+                ttlMs: 20_000,
+              })
+            }
           }
         } else {
           pushToast({
@@ -2638,7 +2665,9 @@ export default function App() {
             title: result.buildVersion
               ? `Updated to the live ${result.buildVersion} build`
               : 'Live build updated',
-            description: `${build.season.label} is up to date — launching…`,
+            description: [`${build.season.label} is up to date — launching…`, companionDownloadNote(result.companion)]
+              .filter(Boolean)
+              .join(' '),
           })
         }
         if (options.launchAfter) {
@@ -3019,31 +3048,38 @@ export default function App() {
               setHostedLobby(null)
               shop.sets.recordLaunch(build.id)
               if (result.waitingForGame === true) {
-                // The community launcher is open on screen because its own
-                // sign-in and Play button are the only way into a hosted
-                // session. Stay on "Starting…" until main sees Fortnite.
+                // Main points the launcher at this exact downloaded folder and
+                // presses its own Play. Stay on "Starting…" until the real
+                // Fortnite client exists.
                 setPhase('launching')
-                setLaunchStage(`Sign in to ${provider.label}, then press Play…`)
-                // The launcher keeps its own library. Main hands it the exact
-                // downloaded folder through its own library API; the path is
-                // copied as well so Import Build still works if that fails.
-                let copiedPath = false
-                if (build.path) {
-                  try {
-                    await navigator.clipboard.writeText(build.path)
-                    copiedPath = true
-                  } catch {
-                    copiedPath = false
+                if (result.autoPlay === true) {
+                  setLaunchStage(`Starting ${provider.label} ${build.version}…`)
+                  pushToast({
+                    tone: 'info',
+                    title: `Starting ${provider.label} & Fortnite`,
+                    description:
+                      'VAULTED is selecting this downloaded build and pressing Play. The launcher stays hidden unless it needs a one-time sign-in.',
+                  })
+                } else {
+                  setLaunchStage(`Sign in to ${provider.label}, then press Play…`)
+                  let copiedPath = false
+                  if (build.path) {
+                    try {
+                      await navigator.clipboard.writeText(build.path)
+                      copiedPath = true
+                    } catch {
+                      copiedPath = false
+                    }
                   }
+                  pushToast({
+                    tone: 'info',
+                    title: `${provider.label} is open`,
+                    description: `VAULTED is adding this downloaded build to ${provider.label}'s library. Sign in once, then press Play. If it is not listed, use Import Build and paste the folder path${
+                      copiedPath ? ' (already copied)' : ''
+                    }.`,
+                    ttlMs: 20_000,
+                  })
                 }
-                pushToast({
-                  tone: 'info',
-                  title: `${provider.label} is open`,
-                  description: `VAULTED is adding this downloaded build to ${provider.label}'s library. Sign in once, then press Play. If it is not listed, use Import Build and paste the folder path${
-                    copiedPath ? ' (already copied)' : ''
-                  }.`,
-                  ttlMs: 20_000,
-                })
                 return true
               }
               setRunningId(build.id)
@@ -3153,15 +3189,18 @@ export default function App() {
             setHostedLobby(null)
             shop.sets.recordLaunch(build.id)
             if (result.waitingForGame === true) {
-              // The launcher is open but Fortnite is not running yet. Stay on
-              // "Starting…" until main observes the real client process.
+              // Main selects this exact downloaded build in the launcher and
+              // presses its own Play. Stay on "Starting…" until the real
+              // client process exists, then the launcher is hidden again.
               setPhase('launching')
-              setLaunchStage('Starting launcher & Fortnite…')
+              setLaunchStage(`Starting ${provider.label} ${build.version}…`)
               pushToast({
                 tone: 'info',
                 title: `Starting ${provider.label} & Fortnite`,
                 description:
-                  'The launcher stays open while Fortnite runs. If Windows asks about firewall access, choose Allow.',
+                  result.autoPlay === true
+                    ? 'VAULTED is selecting this downloaded build and pressing Play. If Windows asks about firewall access, choose Allow.'
+                    : 'The launcher stays open while Fortnite runs. If Windows asks about firewall access, choose Allow.',
               })
               return true
             }

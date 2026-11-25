@@ -58,6 +58,7 @@ const {
   importCommunityLauncher,
   listDownloadedLaunchers,
   scanCommunityLauncher,
+  scanWithDefender,
 } = require('./communityLauncher.cjs')
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
@@ -72,6 +73,11 @@ const {
   createCompanionSessionState,
   observeCompanionSession,
 } = require('./companionLifecycle.cjs')
+const {
+  clickNativeLaunchButton,
+  playCompanionBuild,
+  prepareEonConfig,
+} = require('./companionPlay.cjs')
 const rangeDownload = require('./rangeDownloader.cjs')
 const {
   ensureProviderRuntime,
@@ -125,6 +131,15 @@ const extractions = new Map()
 const providerLaunchers = new Map()
 /** providerId -> interval that keeps that launcher's window hidden */
 const companionWindowHiders = new Map()
+/**
+ * providerId -> launcher VAULTED opened after a season download so the
+ * project's own prepare/download step starts automatically. Play reveals this
+ * exact process instead of spawning a second copy, so the one-time sign-in is
+ * never left hidden behind VAULTED.
+ */
+const companionPrepareSessions = new Map()
+/** providerId -> in-flight auto-Play loop for the exact downloaded season. */
+const companionPlayRuns = new Map()
 
 /**
  * Keep a companion launcher invisible for its whole session: immediately after
@@ -2795,9 +2810,13 @@ function fortniteClientProbe() {
  * single-instance launcher may forward to an already-running copy and exit at
  * once, so the session monitor below never depends on the child's lifetime.
  */
-function registerProviderLauncher(providerId, child) {
+function registerProviderLauncher(providerId, child, extra = {}) {
   if (!child?.pid) return
-  providerLaunchers.set(providerId, { pid: child.pid, startedAt: Date.now() })
+  providerLaunchers.set(providerId, {
+    pid: child.pid,
+    startedAt: Date.now(),
+    ...(extra && typeof extra === 'object' ? extra : {}),
+  })
 }
 
 /**
@@ -2896,6 +2915,121 @@ function beginCompanionGameWatch({ providerId, launcherPid, launcherNames = [], 
 }
 
 /**
+ * Point the companion launcher at VAULTED's exact downloaded folder and press
+ * its own Play. It runs while the launcher stays hidden. Only a one-time
+ * sign-in, launcher update or missing library entry reveals that exact window;
+ * once the launcher accepts the build it is hidden again for the session.
+ */
+const COMPANION_PLAY_TIMEOUT_MS = 10 * 60_000
+
+function beginCompanionAutoPlay({
+  providerId,
+  launcherPid,
+  launcherNames = [],
+  port = 0,
+  folder = '',
+  version = '',
+  manifestId = '',
+  executable = '',
+}) {
+  const id = String(providerId || '').trim().toLowerCase()
+  let pid = Number(launcherPid)
+  if (!id || !folder || !Number.isInteger(pid) || pid <= 0) return null
+  const token = Symbol(id)
+  companionPlayRuns.set(id, token)
+  // The launch path may have started a periodic hider; stop it so the one
+  // legitimate sign-in reveal is not undone one second later. A successful
+  // auto-Play hides the launcher again explicitly.
+  stopCompanionWindowHider(id)
+  void hideCompanionLauncher(pid)
+  void (async () => {
+    let revealed = false
+    let importAttempts = 0
+    const deadline = Date.now() + COMPANION_PLAY_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if (companionPlayRuns.get(id) !== token) return
+      const probe = await fortniteClientProbe()
+      if (probe.running === true) {
+        await hideCompanionLauncher(pid)
+        return
+      }
+      if (!processAlive(pid) && launcherNames.length > 0) {
+        const current = await processPidsByImage(launcherNames)
+        if (current.length > 0) {
+          pid = current[0]
+          startCompanionWindowHider(id, pid)
+        }
+      }
+      const result = await playCompanionBuild({
+        providerId: id,
+        port,
+        folder,
+        version,
+        manifestId,
+        executable,
+        launcherPid: pid,
+        allowImport: importAttempts < 2,
+        pageTimeoutMs: 8_000,
+      })
+      if (result?.status === 'played' || result?.status === 'clicked') {
+        await hideCompanionLauncher(pid)
+        startCompanionWindowHider(id, pid)
+        return
+      }
+      if (result?.status === 'reload') {
+        await delay(1_500)
+        continue
+      }
+      if (result?.status === 'native') {
+        const click = await clickNativeLaunchButton(pid, { pattern: 'launch|play|start' })
+        if (click.clicked) {
+          await hideCompanionLauncher(pid)
+          startCompanionWindowHider(id, pid)
+          return
+        }
+        if (click.reason === 'needs-sign-in' && !revealed) {
+          revealed = await showCompanionLauncher(pid, { attempts: 10, waitMs: 500 })
+          await delay(2_500)
+          continue
+        }
+      }
+      if (result?.status === 'unsupported') {
+        // The process was already running without a DevTools endpoint. A
+        // native Play click still works for a single-window launcher; otherwise
+        // the one-time sign-in window is the only honest fallback.
+        const click = await clickNativeLaunchButton(pid, { pattern: 'play|launch|start' })
+        if (click.clicked) {
+          await hideCompanionLauncher(pid)
+          startCompanionWindowHider(id, pid)
+          return
+        }
+        if (!revealed) {
+          revealed = await showCompanionLauncher(pid, { attempts: 10, waitMs: 500 })
+        }
+        if (result.detail === 'no-bridge' || result.detail === 'generic-play-button') return
+        await delay(2_500)
+        continue
+      }
+      if (result?.status === 'needs-import') importAttempts += 1
+      if (!revealed) {
+        revealed = await showCompanionLauncher(pid, { attempts: 10, waitMs: 500 })
+      }
+      // Keep trying while the player signs in or updates the launcher. The
+      // moment the launcher accepts the build, VAULTED hides it again.
+      await delay(result?.status === 'needs-sign-in' ? 2_500 : 3_000)
+    }
+    if (revealed) {
+      send('arc:companion-play-timeout', {
+        providerId: id,
+        message:
+          "VAULTED could not finish the launcher's Play action automatically. Sign in or update the launcher, then press Start again.",
+      })
+    }
+  })()
+  return { waiting: true }
+}
+
+/**
  * A community launcher is not a background companion: its window is the
  * player's sign-in and Play UI, so it must stay visible until Fortnite really
  * starts. Hiding it first made the launcher unreachable, which is why Play
@@ -2961,7 +3095,7 @@ function watchCommunityGameStart({
         send('arc:companion-game-timeout', {
           providerId: id,
           message:
-            'The community launcher is still open. Sign in and press Play in its own window; VAULTED hides it as soon as Fortnite starts.',
+            'The launcher is still open but Fortnite did not start. If its window is visible, finish the one-time sign-in or launcher update; VAULTED hides it as soon as Fortnite starts.',
         })
         return
       }
@@ -3003,11 +3137,19 @@ function watchCommunityLauncherExit(providerId, child, launcherNames = []) {
       const running = await processPidsByImage(launcherNames)
       if (running.length > 0) {
         providerLaunchers.set(id, { pid: running[0], startedAt: Date.now() })
+        const preparing = companionPrepareSessions.get(id)
+        if (preparing) {
+          // A bootstrapper handed off to the already-running launcher: reveal
+          // and hide the real process, not the short-lived one we spawned.
+          companionPrepareSessions.set(id, { ...preparing, pid: running[0] })
+          startCompanionWindowHider(id, running[0])
+        }
         return
       }
       const probe = await fortniteClientProbe()
       if (probe.running) return
       providerLaunchers.delete(id)
+      companionPrepareSessions.delete(id)
       companionGameWaits.delete(id)
       stopCompanionWindowHider(id)
       const monitor = companionMonitors.get(id)
@@ -3151,6 +3293,237 @@ async function startCompanionLauncher(providerId, launchOptions = {}) {
 }
 
 /**
+ * Start the season's other launcher right after VAULTED installed the build,
+ * off-screen, so the project's own prepare/download step begins automatically.
+ * Only external (online-only) providers reach this path.
+ *
+ * The launcher app is installed first when the catalog has verified installer
+ * metadata (HTTPS allowlist, checksum, signature and installerSafety), and the
+ * installer itself is scanned with Windows Defender before it runs. A launcher
+ * the community distributes only through Discord is discovered/adopted from
+ * this PC through the same installerSafety + Defender gate; VAULTED never
+ * invents a download URL for it.
+ */
+async function startCompanionDownload(providerId, folder, options = {}) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id || isBannedProvider(id)) return null
+  const profile = providerCatalog().find((entry) => entry.id === id)
+  if (!profile || (profile.mode !== 'external' && profile.external !== true)) return null
+
+  const label = profile.runtime?.label || profile.launcher?.label || `${profile.label} launcher`
+  const safeFolder = typeof folder === 'string' && folder.trim() ? folder.trim() : ''
+  const report = typeof options.report === 'function' ? options.report : () => {}
+  const runtimeMetadata = providerRuntimeMetadata(id)
+  let executable = ''
+  let installedNow = false
+  let installError = ''
+
+  if (runtimeMetadata) {
+    executable = installedExecutable(runtimeMetadata)
+    if (!executable) {
+      report({ phase: 'runtime' })
+      try {
+        send('arc:runtime-progress', {
+          providerId: id,
+          label,
+          phase: 'downloading',
+          percent: null,
+          received: 0,
+          total: 0,
+          etaSeconds: null,
+          bytesPerSecond: null,
+        })
+        const runtime = await ensureProviderRuntime(id, runtimeMetadata, {
+          root: path.join(app.getPath('userData'), 'provider-runtimes'),
+          // A provider installer is a download like any other: scan the exact
+          // file with Defender before Windows is allowed to execute it.
+          scanInstaller: (file) => scanWithDefender(file),
+          report: (progress) =>
+            send('arc:runtime-progress', {
+              providerId: id,
+              label,
+              ...progress,
+              phase: progress.phase === 'installing' ? 'installing' : 'downloading',
+            }),
+        })
+        executable = runtime?.executable || ''
+        installedNow = Boolean(runtime?.installed)
+        send('arc:runtime-progress', {
+          providerId: id,
+          label,
+          phase: 'done',
+          percent: 100,
+          received: 0,
+          total: 0,
+          etaSeconds: null,
+          bytesPerSecond: null,
+        })
+      } catch (error) {
+        installError = error instanceof Error ? error.message : String(error)
+        send('arc:runtime-progress', {
+          providerId: id,
+          label,
+          phase: 'error',
+          percent: null,
+          received: 0,
+          total: 0,
+          etaSeconds: null,
+          bytesPerSecond: null,
+          error: installError,
+        })
+      }
+    }
+  } else {
+    executable = communityLauncherExecutable(id, communityLauncherRoot())
+    const alreadyInstalled = Boolean(executable)
+    if (!executable) {
+      try {
+        executable = await autoDiscoverCommunityLauncher(id)
+      } catch (error) {
+        installError = error instanceof Error ? error.message : String(error)
+      }
+    }
+    installedNow = Boolean(executable) && !alreadyInstalled
+  }
+
+  const result = {
+    providerId: id,
+    label,
+    installSource: runtimeMetadata ? 'official' : 'discord',
+    installed: Boolean(executable),
+    installedNow,
+    started: false,
+  }
+  if (!executable) {
+    return {
+      ...result,
+      reason: installError ? 'install-failed' : 'launcher-missing',
+      ...(installError ? { error: installError } : {}),
+    }
+  }
+
+  if (!runtimeMetadata) {
+    // A Discord-distributed launcher starts through the shared import path so
+    // it gets the same library bridge, window hider and exit watchdog as a
+    // launcher the player opened by hand.
+    report({ phase: 'launcher' })
+    try {
+      const started = await startImportedCommunityLauncher(id, {
+        folder: safeFolder,
+        hidden: true,
+      })
+      if (!started?.executable) {
+        return {
+          ...result,
+          installed: true,
+          reason: 'spawn-failed',
+          error: `${label} could not be started.`,
+        }
+      }
+      companionPrepareSessions.set(id, {
+        executable: started.executable,
+        pid: started.pid ?? null,
+        port: started.bridgePort || 0,
+        folder: safeFolder,
+        version: '',
+        launcherNames: started.launcherNames || [],
+      })
+      return {
+        ...result,
+        installed: true,
+        started: true,
+        pid: started.pid ?? null,
+        ...(started.alreadyRunning ? { alreadyRunning: true } : {}),
+      }
+    } catch (error) {
+      return {
+        ...result,
+        installed: true,
+        reason: 'spawn-failed',
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
+  // Eon reads FortnitePath only while booting. Point it at VAULTED's exact
+  // download before the launcher process starts, not after it is already up.
+  if (id === 'eon' && safeFolder) prepareEonConfig(safeFolder)
+
+  const existing = providerLaunchers.get(id)
+  if (existing?.pid) {
+    const existingVersion =
+      Object.keys(runtimeMetadata.manifestIds || {})[0] || runtimeMetadata.version || ''
+    companionPrepareSessions.set(id, {
+      executable,
+      pid: existing.pid,
+      port: existing.bridgePort || 0,
+      folder: safeFolder,
+      version: existingVersion,
+      manifestId:
+        runtimeMetadata.manifestIds?.[existingVersion] ||
+        Object.values(runtimeMetadata.manifestIds || {})[0] ||
+        '',
+      launcherNames: providerWindowNames(runtimeMetadata || profile.launcher),
+    })
+    return { ...result, started: true, alreadyRunning: true, pid: existing.pid }
+  }
+
+  report({ phase: 'launcher' })
+  try {
+    // Retrac needs its documented build manifest flag while it prepares the
+    // same season VAULTED just installed. Without it the launcher opens on a
+    // different build and its own download step has nothing to prepare.
+    const prepVersion =
+      Object.keys(runtimeMetadata.manifestIds || {})[0] || runtimeMetadata.version || ''
+    const args = launchArguments(runtimeMetadata, prepVersion) || []
+    const bridgePort = await allocateLauncherDebugPort()
+    const launcherNames = providerWindowNames(runtimeMetadata || profile.launcher)
+    const child = spawn(
+      executable,
+      bridgePort ? [...args, `--remote-debugging-port=${bridgePort}`] : args,
+      {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+        cwd: path.dirname(executable),
+        env: launcherBridgeEnv(bridgePort, {
+          ...process.env,
+          VAULTED_PROVIDER_ID: id,
+          VAULTED_COMMUNITY_LAUNCHER: '1',
+          ...(safeFolder
+            ? { VAULTED_BUILD_FOLDER: safeFolder, VAULTED_GAME_DIR: safeFolder }
+            : {}),
+        }),
+      },
+    )
+    child.unref()
+    registerProviderLauncher(id, child, { bridgePort, folder: safeFolder })
+    startCompanionWindowHider(id, child.pid)
+    startCompanionSessionMonitor(id, executable)
+    watchCommunityLauncherExit(id, child, launcherNames)
+    companionPrepareSessions.set(id, {
+      executable,
+      pid: child.pid ?? null,
+      port: bridgePort,
+      folder: safeFolder,
+      version: prepVersion,
+      manifestId:
+        runtimeMetadata.manifestIds?.[prepVersion] ||
+        Object.values(runtimeMetadata.manifestIds || {})[0] ||
+        '',
+      launcherNames,
+    })
+    return { ...result, started: true, pid: child.pid ?? null }
+  } catch (error) {
+    return {
+      ...result,
+      reason: 'spawn-failed',
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+/**
  * Bind the exact game PID the injector reported to this season's monitor.
  *
  * It is a local, cheap liveness signal next to the process-name poll, so the
@@ -3173,7 +3546,9 @@ function attachCompanionGameProcess(providerId, pid) {
 async function closeCompanionLauncherForProvider(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return false
+  companionPrepareSessions.delete(id)
   companionGameWaits.delete(id)
+  companionPlayRuns.delete(id)
   stopCompanionWindowHider(id)
   let closed = false
   const monitor = companionMonitors.get(id)
@@ -3292,7 +3667,9 @@ async function startImportedCommunityLauncher(providerId, launchOptions = {}) {
     return null
   }
   const existing = providerLaunchers.get(id)
-  if (existing) return { pid: existing.pid, executable, alreadyRunning: true }
+  if (existing) {
+    return { pid: existing.pid, executable, alreadyRunning: true }
+  }
   const folder =
     typeof launchOptions?.folder === 'string' ? launchOptions.folder.trim() : ''
   // Give the launcher's own UI a loopback DevTools port so VAULTED can add the
@@ -3315,17 +3692,33 @@ async function startImportedCommunityLauncher(providerId, launchOptions = {}) {
     }),
   })
   child.unref()
-  registerProviderLauncher(id, child)
+  registerProviderLauncher(id, child, { bridgePort, folder })
   const launcherNames = [path.basename(executable, path.extname(executable))]
   watchCommunityLauncherExit(id, child, launcherNames)
-  // Visible on purpose: this is where the player signs in to the community
-  // and presses its own Play button. It is hidden only once Fortnite runs.
-  void showCompanionLauncher(child.pid)
+  const hidden = launchOptions?.hidden === true
+  if (hidden) {
+    // Download handoff: the launcher runs off-screen while it prepares its own
+    // download. Play reveals this exact process for the one-time sign-in.
+    startCompanionWindowHider(id, child.pid)
+  } else {
+    // Visible on purpose: this is where the player signs in to the community
+    // and presses its own Play button. It is hidden only once Fortnite runs.
+    void showCompanionLauncher(child.pid)
+  }
   startCompanionSessionMonitor(id, executable)
   if (bridgePort && folder) {
     void linkCommunityBuildInBackground(id, bridgePort, communityBuildJunction(folder))
   }
-  return { pid: child.pid ?? null, executable, visible: true, bridge: Boolean(bridgePort) }
+  return {
+    pid: child.pid ?? null,
+    executable,
+    visible: !hidden,
+    bridge: Boolean(bridgePort),
+    bridgePort,
+    folder,
+    launcherNames,
+    hidden,
+  }
 }
 
 /**
@@ -4605,6 +4998,7 @@ async function downloadBuild(payload) {
   const runtimeTask = runtimeMetadata
     ? ensureProviderRuntime(providerId, runtimeMetadata, {
         root: path.join(app.getPath('userData'), 'provider-runtimes'),
+        scanInstaller: (file) => scanWithDefender(file),
         signal: controller.signal,
         report: (progress) => {
           if (!runtimeProgressAllowed) return
@@ -4960,6 +5354,51 @@ async function downloadBuild(payload) {
       })
     }
 
+    // Online-only seasons: with the build installed, start the season's other
+    // launcher off-screen so the project's own prepare/download step begins
+    // automatically. Only external providers get this handoff; a managed
+    // backend never needs (or gets) a second launcher.
+    if (controller.signal.aborted) throw abortError()
+    let companion = null
+    if (executable && !mobile && !SMOKE) {
+      const companionProfile = providerId
+        ? providerCatalog().find((entry) => entry.id === providerId)
+        : null
+      const externalRoute =
+        companionProfile?.mode === 'external' || companionProfile?.external === true
+      if (externalRoute) {
+        const progress = (extra = {}) =>
+          send('arc:download-progress', {
+            id,
+            received,
+            total,
+            percent: 100,
+            etaSeconds: null,
+            bytesPerSecond: null,
+            url: String(parsed),
+            ...extra,
+          })
+        progress({ phase: 'launcher' })
+        try {
+          companion = await startCompanionDownload(
+            providerId,
+            folderForExecutable(executable),
+            { report: (update) => progress(update) },
+          )
+        } catch (error) {
+          // A launcher handoff must never fail an otherwise complete install.
+          companion = {
+            providerId,
+            label: companionProfile.label || 'Companion Launcher',
+            installed: false,
+            started: false,
+            reason: 'spawn-failed',
+            error: error instanceof Error ? error.message : String(error),
+          }
+        }
+      }
+    }
+
     return {
       filePath,
       executable,
@@ -4981,6 +5420,7 @@ async function downloadBuild(payload) {
           }
         : {}),
       ...(runtimeError ? { runtimeError } : {}),
+      ...(companion ? { companion } : {}),
     }
   } catch (error) {
     // Never wipe the target folder, archive, or extracted files because of a
@@ -5514,6 +5954,42 @@ async function syncProviderBuild(payload) {
     await cleanupManagedBuild(key, targetDir, targetDir).catch((error) => {
       console.warn(`[VAULTED] Could not clean up the synced build: ${error.message}`)
     })
+    // The same online-only handoff as an archive download: once the provider
+    // build is installed, its other launcher prepares itself off-screen.
+    if (signal.aborted) throw abortError()
+    let companion = null
+    const companionProfile = providerCatalog().find((entry) => entry.id === providerId)
+    if (
+      !SMOKE &&
+      (companionProfile?.mode === 'external' || companionProfile?.external === true)
+    ) {
+      const progress = (extra = {}) =>
+        send('arc:download-progress', {
+          id,
+          received: total,
+          total,
+          percent: 100,
+          etaSeconds: null,
+          bytesPerSecond: null,
+          url: 'provider-live-build',
+          ...extra,
+        })
+      progress({ phase: 'launcher' })
+      try {
+        companion = await startCompanionDownload(providerId, targetDir, {
+          report: (update) => progress(update),
+        })
+      } catch (error) {
+        companion = {
+          providerId,
+          label: companionProfile.label || 'Companion Launcher',
+          installed: false,
+          started: false,
+          reason: 'spawn-failed',
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+    }
     return {
       folder: targetDir,
       executable,
@@ -5524,6 +6000,7 @@ async function syncProviderBuild(payload) {
       totalBytes: total,
       downloadedBytes: downloaded,
       reusedBytes: reused,
+      ...(companion ? { companion } : {}),
     }
   } finally {
     if (downloads.get(id) === controller) downloads.delete(id)
@@ -6057,6 +6534,7 @@ async function autoFixRepair(payload = {}) {
       try {
         launcher = await ensureProviderRuntime(providerId, metadata, {
           root: path.join(app.getPath('userData'), 'provider-runtimes'),
+          scanInstaller: (file) => scanWithDefender(file),
           forceInstall: force,
         })
         actions.push(
@@ -6204,18 +6682,33 @@ const EXTERNAL_LAUNCH_STABILITY_MS = 4_000
  * game process for the session monitor to watch, so the early exit is captured
  * here instead.
  */
-function spawnExternalLauncher(executable, args) {
+function spawnExternalLauncher(executable, args, options = {}) {
   return new Promise((resolve) => {
     let child
     try {
+      const bridgePort = Number(options.bridgePort) || 0
+      const launcherArgs = Array.isArray(args) ? [...args] : []
+      if (bridgePort) launcherArgs.push(`--remote-debugging-port=${bridgePort}`)
+      const folder = typeof options.folder === 'string' ? options.folder : ''
       // The launcher is a background helper now, never the player's window.
       // windowsHide covers the console/bootstrapper; the automation below also
       // moves and hides the Flutter window as soon as it exists.
-      child = spawn(executable, args, {
+      child = spawn(executable, launcherArgs, {
         detached: true,
         stdio: 'ignore',
         windowsHide: true,
         cwd: path.dirname(executable),
+        env: launcherBridgeEnv(bridgePort, {
+          ...process.env,
+          ...(folder
+            ? {
+                VAULTED_BUILD_FOLDER: folder,
+                VAULTED_GAME_DIR: folder,
+                VAULTED_PROVIDER_ID: String(options.providerId || ''),
+                VAULTED_COMMUNITY_LAUNCHER: '1',
+              }
+            : {}),
+        }),
       })
       if (child.pid) {
         // The Flutter window appears during the stability wait below, before
@@ -6261,6 +6754,9 @@ async function openProviderLauncherEntry(providerId, options = {}) {
 
     /** PIDs of a launcher that is already running under any of its names. */
     const runningLauncherPids = (names) => processPidsByImage(names)
+    // A loopback DevTools endpoint lets VAULTED select the exact downloaded
+    // build and press the launcher's own Play while its window stays hidden.
+    const launchBridgePort = await allocateLauncherDebugPort()
 
     /**
      * Start a launcher from every documented install location, repair the
@@ -6279,10 +6775,23 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       const adoptRunning = async () => {
         const pids = await runningLauncherPids(names)
         if (pids.length === 0) return null
-        providerLaunchers.set(id, { pid: pids[0], startedAt: Date.now() })
+        const prior = providerLaunchers.get(id)
+        providerLaunchers.set(id, {
+          pid: pids[0],
+          startedAt: Date.now(),
+          bridgePort: prior?.bridgePort || 0,
+          folder: prior?.folder || buildFolder,
+        })
         startCompanionWindowHider(id, pids[0])
         startCompanionSessionMonitor(id, current)
-        return { opened: true, path: current, pid: pids[0], tracked: true, alreadyRunning: true }
+        return {
+          opened: true,
+          path: current,
+          pid: pids[0],
+          tracked: true,
+          alreadyRunning: true,
+          bridgePort: prior?.bridgePort || 0,
+        }
       }
       // Most companions are single-instance: spawning a second copy exits at
       // once. Adopt the running window instead of calling it a broken install.
@@ -6294,7 +6803,11 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       const tryStart = async (paths) => {
         for (const candidate of paths) {
           current = candidate
-          const attempt = await spawnExternalLauncher(candidate, args)
+          const attempt = await spawnExternalLauncher(candidate, args, {
+            bridgePort: launchBridgePort,
+            folder: buildFolder,
+            providerId: id,
+          })
           if (attempt.error) {
             lastError = attempt.error
             continue
@@ -6341,10 +6854,19 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       // Only a managed provider's background companion (startCompanionLauncher)
       // is hidden. The session monitor keeps this launcher alive for the whole
       // game session and closes it after Fortnite exits or on Stop.
-      registerProviderLauncher(id, launch.child)
+      registerProviderLauncher(id, launch.child, {
+        bridgePort: launchBridgePort,
+        folder: buildFolder,
+      })
       startCompanionWindowHider(id, launch.child.pid)
       startCompanionSessionMonitor(id, current)
-      return { opened: true, path: current, pid: launch.child.pid ?? null, tracked: true }
+      return {
+        opened: true,
+        path: current,
+        pid: launch.child.pid ?? null,
+        tracked: true,
+        bridgePort: launchBridgePort,
+      }
     }
 
     const launchOptions =
@@ -6353,6 +6875,72 @@ async function openProviderLauncherEntry(providerId, options = {}) {
     const buildExecutable =
       typeof launchOptions.executable === 'string' ? launchOptions.executable : ''
 
+    // A launcher VAULTED opened after the season download is still running
+    // off-screen while it prepares its own files. Play reveals that exact
+    // process for the one-time sign-in instead of spawning a second copy that a
+    // single-instance launcher would ignore.
+    const prepared = companionPrepareSessions.get(id)
+    if (prepared?.pid) {
+      // The launcher has been preparing off-screen since the download. Play
+      // now selects the exact downloaded folder and presses its own Play; it
+      // stays hidden unless a one-time sign-in or update is required.
+      const preparedFolder = buildFolder || prepared.folder || ''
+      const preparedNames =
+        Array.isArray(prepared.launcherNames) && prepared.launcherNames.length > 0
+          ? prepared.launcherNames
+          : [path.basename(prepared.executable, path.extname(prepared.executable))]
+      let preparedPid = prepared.pid
+      if (!processAlive(preparedPid) && preparedNames.length > 0) {
+        const running = await processPidsByImage(preparedNames)
+        if (running.length > 0) preparedPid = running[0]
+      }
+      if (processAlive(preparedPid) && preparedFolder) {
+        stopCompanionWindowHider(id)
+        companionPrepareSessions.set(id, {
+          ...prepared,
+          pid: preparedPid,
+          folder: preparedFolder,
+        })
+        const gameExecutable =
+          buildExecutable || findPrimaryExecutable(preparedFolder)
+        watchCommunityGameStart({
+          providerId: id,
+          launcherPid: preparedPid,
+          launcherNames: preparedNames,
+          gameExecutable,
+          gameFolder: preparedFolder,
+        })
+        beginCompanionAutoPlay({
+          providerId: id,
+          launcherPid: preparedPid,
+          launcherNames: preparedNames,
+          port: prepared.port || 0,
+          folder: preparedFolder,
+          version: prepared.version || '',
+          manifestId:
+            prepared.manifestId ||
+            providerRuntimeMetadata(id)?.manifestIds?.[prepared.version] ||
+            '',
+          executable: prepared.executable || '',
+        })
+        return {
+          opened: true,
+          path: prepared.executable,
+          pid: preparedPid,
+          tracked: true,
+          // A launcher without a DevTools endpoint cannot be automated while
+          // hidden; its one-time sign-in window is shown instead.
+          visible: !prepared.port,
+          autoPlay: true,
+          waitingForGame: true,
+        }
+      }
+      // The prepared process is gone before the game started; let the normal
+      // path start a fresh launcher instead of leaving a dead card.
+      const gameRunning = (await fortniteClientProbe()).running === true
+      if (!gameRunning) await closeCompanionLauncherForProvider(id)
+    }
+
     // A Discord-only community has no launcher application at all. VAULTED
     // joins its live public servers with its own direct launch, so never ask
     // the player to install a launcher that does not exist.
@@ -6360,26 +6948,50 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       // The player can hand VAULTED the launcher they downloaded from the
       // community Discord. It runs hidden: it only provides the hosted
       // backend session, while VAULTED keeps the only visible window.
-      let imported = await startImportedCommunityLauncher(id, launchOptions)
+      let imported = await startImportedCommunityLauncher(id, {
+        ...launchOptions,
+        hidden: true,
+      })
       if (!imported?.executable) {
         // Step 2 is not only a manual picker: a launcher the player already
         // installed under %LOCALAPPDATA%, or downloaded and left in Downloads,
         // is safety-scanned and adopted before VAULTED asks for the file again.
         const discovered = await autoDiscoverCommunityLauncher(id)
-        if (discovered) imported = await startImportedCommunityLauncher(id, launchOptions)
+        if (discovered) {
+          imported = await startImportedCommunityLauncher(id, {
+            ...launchOptions,
+            hidden: true,
+          })
+        }
       }
       if (imported?.executable) {
         const waiting = Boolean(imported.pid)
+        const launcherNames =
+          imported.launcherNames?.length > 0
+            ? imported.launcherNames
+            : [path.basename(imported.executable, path.extname(imported.executable))]
+        const bridgePort =
+          imported.bridgePort || providerLaunchers.get(id)?.bridgePort || 0
+        const playFolder = buildFolder || imported.folder || ''
         if (waiting) {
           watchCommunityGameStart({
             providerId: id,
             launcherPid: imported.pid,
-            launcherNames: [
-              path.basename(imported.executable, path.extname(imported.executable)),
-            ],
+            launcherNames,
             gameExecutable:
               buildExecutable || (buildFolder ? findPrimaryExecutable(buildFolder) : ''),
-            gameFolder: buildFolder,
+            gameFolder: playFolder,
+          })
+        }
+        if (waiting && playFolder) {
+          beginCompanionAutoPlay({
+            providerId: id,
+            launcherPid: imported.pid,
+            launcherNames,
+            port: bridgePort,
+            folder: playFolder,
+            version: launchOptions.version || '',
+            executable: imported.executable,
           })
         }
         return {
@@ -6387,7 +6999,8 @@ async function openProviderLauncherEntry(providerId, options = {}) {
           path: imported.executable,
           pid: imported.pid ?? null,
           tracked: true,
-          visible: true,
+          visible: false,
+          autoPlay: true,
           waitingForGame: waiting,
         }
       }
@@ -6408,10 +7021,11 @@ async function openProviderLauncherEntry(providerId, options = {}) {
     if (runtimeMetadata) {
       const requestedVersion =
         typeof launchOptions.version === 'string' ? launchOptions.version.trim() : ''
+      // The game version comes from the season card. A launcher's own app
+      // version must never become Neo's launch version or Eon's game version.
       const manifestVersions = Object.keys(runtimeMetadata.manifestIds || {})
-      const version = runtimeMetadata.manifestIds?.[requestedVersion]
-        ? requestedVersion
-        : manifestVersions[0] || runtimeMetadata.version || ''
+      const version =
+        requestedVersion || manifestVersions[0] || runtimeMetadata.version || ''
       let executable = installedExecutable(runtimeMetadata)
       if (!executable) {
         // The season archive may already have been installed before this
@@ -6420,6 +7034,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         try {
           const runtime = await ensureProviderRuntime(id, runtimeMetadata, {
             root: path.join(app.getPath('userData'), 'provider-runtimes'),
+            scanInstaller: (file) => scanWithDefender(file),
           })
           executable = runtime?.executable || ''
         } catch (error) {
@@ -6459,26 +7074,44 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       const repairRuntime = async () => {
         const repaired = await ensureProviderRuntime(id, runtimeMetadata, {
           root: runtimeRoot,
+          scanInstaller: (file) => scanWithDefender(file),
           forceInstall: true,
         })
         return repaired?.executable || ''
       }
       const launcherNames = providerWindowNames(runtimeMetadata)
+      if (id === 'eon' && buildFolder) prepareEonConfig(buildFolder)
       const launcherCandidates = installedExecutables(runtimeMetadata)
       if (!launcherCandidates.includes(executable)) launcherCandidates.unshift(executable)
       const finishLaunch = (started) => {
         if (!started?.opened) return started
         const result = { ...started, args, version, savedBuild }
-        if (id === 'reboot-official' && started.pid) {
+        if (started.pid && buildFolder) {
           const gameExecutable =
-            buildExecutable || (buildFolder ? findPrimaryExecutable(buildFolder) : '') || ''
-          beginCompanionGameWatch({
+            buildExecutable || findPrimaryExecutable(buildFolder) || ''
+          watchCommunityGameStart({
             providerId: id,
             launcherPid: started.pid,
             launcherNames,
             gameExecutable,
+            gameFolder: buildFolder,
+          })
+          beginCompanionAutoPlay({
+            providerId: id,
+            launcherPid: started.pid,
+            launcherNames,
+            port: started.bridgePort || 0,
+            folder: buildFolder,
+            version,
+            manifestId:
+              runtimeMetadata.manifestIds?.[version] ||
+              Object.values(runtimeMetadata.manifestIds || {})[0] ||
+              '',
+            executable: started.path || executable,
           })
           result.waitingForGame = true
+          result.autoPlay = true
+          result.visible = false
         }
         return result
       }
@@ -6509,7 +7142,36 @@ async function openProviderLauncherEntry(providerId, options = {}) {
             null,
             providerWindowNames(launcherMetadata),
           )
-          return started.opened ? { ...started, version: '' } : started
+          if (!started.opened) return started
+          const launcherNames = providerWindowNames(launcherMetadata)
+          if (started.pid && buildFolder) {
+            watchCommunityGameStart({
+              providerId: id,
+              launcherPid: started.pid,
+              launcherNames,
+              gameExecutable:
+                buildExecutable || findPrimaryExecutable(buildFolder) || '',
+              gameFolder: buildFolder,
+            })
+            beginCompanionAutoPlay({
+              providerId: id,
+              launcherPid: started.pid,
+              launcherNames,
+              port: started.bridgePort || 0,
+              folder: buildFolder,
+              version: launchOptions.version || '',
+              manifestId: '',
+              executable: started.path || '',
+            })
+            return {
+              ...started,
+              version: '',
+              waitingForGame: true,
+              autoPlay: true,
+              visible: false,
+            }
+          }
+          return { ...started, version: '' }
         } catch (error) {
           return {
             opened: false,
@@ -7272,6 +7934,12 @@ function registerIpc() {
     providerRuntimeStatus(providerId),
   )
 
+  // The end of VAULTED's own season download for an online-only season: open
+  // that season's other launcher off-screen so its prepare/download starts.
+  ipcMain.handle('arc:start-companion-download', (_event, providerId, folder) =>
+    startCompanionDownload(providerId, folder),
+  )
+
   ipcMain.handle('arc:provider-launcher-detect', (_event, providerId) =>
     providerLauncherStatus(providerId),
   )
@@ -7296,6 +7964,7 @@ function registerIpc() {
       const stagedBefore = await stageSeasonLauncherDlls(id)
       const result = await ensureProviderRuntime(id, metadata, {
         root: path.join(app.getPath('userData'), 'provider-runtimes'),
+        scanInstaller: (file) => scanWithDefender(file),
         report: (progress) =>
           send('arc:runtime-progress', {
             providerId: id,

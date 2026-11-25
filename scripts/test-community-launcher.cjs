@@ -168,8 +168,8 @@ assert.match(
 )
 assert.match(
   main,
-  /let imported = await startImportedCommunityLauncher\(id, launchOptions\)/,
-  'Play routes a community season straight to the imported launcher',
+  /let imported = await startImportedCommunityLauncher\(id, \{[\s\S]{0,80}?launchOptions,[\s\S]{0,80}?hidden: true/,
+  'Play routes a community season straight to the hidden imported launcher',
 )
 assert.match(main, /startImportedCommunityLauncher/)
 assert.match(

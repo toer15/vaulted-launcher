@@ -95,7 +95,9 @@ export function BuildList({
                 .join(' · ')
             : download.phase === 'paused'
               ? `Paused${downloadPercent !== null ? ` · ${downloadPercent}%` : ''}`
-              : download.phase === 'runtime'
+              : download.phase === 'launcher'
+                ? 'Starting launcher…'
+                : download.phase === 'runtime'
                 ? 'Preparing runtime…'
                 : download.phase === 'extracting'
                   ? 'Unpacking…'

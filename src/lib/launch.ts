@@ -108,7 +108,7 @@ export interface DownloadProgress {
   bytesPerSecond: number | null
   /** the resolved source URL, including a bucket fallback switch */
   url?: string
-  phase: 'downloading' | 'verifying' | 'extracting' | 'runtime'
+  phase: 'downloading' | 'verifying' | 'extracting' | 'runtime' | 'launcher'
 }
 
 export interface ProviderRuntimeStatus {
@@ -190,6 +190,29 @@ export interface DownloadResult {
   runtimeInstaller?: string
   runtimeExecutable?: string
   runtimeError?: string
+  /** the online-only season's other launcher started for its own prepare step */
+  companion?: CompanionDownloadResult
+}
+
+/** Result of opening a season's other launcher after its build was installed. */
+export interface CompanionDownloadResult {
+  providerId: string
+  label: string
+  /** the official runtime installer or a Discord-distributed launcher */
+  installSource?: 'official' | 'discord'
+  started: boolean
+  installed: boolean
+  /** this handoff installed or imported the launcher itself */
+  installedNow?: boolean
+  alreadyRunning?: boolean
+  pid?: number | null
+  reason?:
+    | 'launcher-missing'
+    | 'install-failed'
+    | 'spawn-failed'
+    | 'not-external'
+    | string
+  error?: string
 }
 
 export interface ProviderSyncResult {
@@ -202,6 +225,8 @@ export interface ProviderSyncResult {
   totalBytes: number
   downloadedBytes: number
   reusedBytes: number
+  /** the online-only season's other launcher started for its own prepare step */
+  companion?: CompanionDownloadResult
 }
 
 /**
@@ -284,6 +309,11 @@ export interface LauncherBridge {
     buildId?: string
     validateProvider?: boolean
   }): Promise<DownloadResult>
+  /** start the season's other launcher hidden after VAULTED installed its build */
+  startCompanionDownload?(
+    providerId: string,
+    folder: string,
+  ): Promise<CompanionDownloadResult | null>
   /** download/repair a season from its provider's live chunk manifest */
   syncProviderBuild?(payload: {
     id: string
@@ -485,6 +515,8 @@ export interface LauncherBridge {
     tracked?: boolean
     /** main is starting the launcher's own game and will report the real PID */
     waitingForGame?: boolean
+    /** main is selecting this exact build and pressing the launcher's Play */
+    autoPlay?: boolean
     /** the community step is required because no launcher is installed */
     community?: boolean
     /** invite the in-app community dialog can show; never opened by VAULTED */
@@ -760,6 +792,23 @@ export async function startDownload(
       ...(options.buildId ? { buildId: options.buildId } : {}),
       ...(options.validateProvider ? { validateProvider: true } : {}),
     })
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+/**
+ * After a VAULTED install on an online-only season, open that season's other
+ * launcher off-screen so its own prepare/download step starts. Main installs
+ * a missing launcher first (verified metadata or a scanned Discord download).
+ */
+export async function startCompanionDownload(
+  providerId: string,
+  folder: string,
+): Promise<CompanionDownloadResult | null> {
+  if (!window.arc?.startCompanionDownload) return null
+  try {
+    return await window.arc.startCompanionDownload(providerId, folder)
   } catch (error) {
     throw cleanIpcError(error)
   }

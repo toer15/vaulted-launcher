@@ -44,6 +44,9 @@ const {
   providerRuntimeMetadata,
   providerUsesLegacyRedirect,
 } = require('../electron/onlineProviders.cjs')
+const {
+  COMPANION_PLAY_ADAPTERS,
+} = require('../electron/companionPlay.cjs')
 
 const MAIN = read('electron/main.cjs')
 
@@ -865,7 +868,7 @@ function testOnlineRoutes() {
   const externalHandoff = MAIN.slice(openAt, launchAt)
   assert.match(
     externalHandoff,
-    /registerProviderLauncher\(id, launch\.child\)\r?\n\s*startCompanionWindowHider\(id, launch\.child\.pid\)\r?\n\s*startCompanionSessionMonitor\(id, current\)/,
+    /registerProviderLauncher\(id, launch\.child, \{[\s\S]{0,300}?\}\)\r?\n\s*startCompanionWindowHider\(id, launch\.child\.pid\)\r?\n\s*startCompanionSessionMonitor\(id, current\)/,
     'an external launcher must be hidden and closed after the game exits',
   )
   assert.match(MAIN, /function startCompanionWindowHider\(providerId, pid\)/)
@@ -883,7 +886,11 @@ function testOnlineRoutes() {
   // as a running season: Start has to notice the early exit and repair the
   // install once through the provider's own setup.
   assert.match(MAIN, /const EXTERNAL_LAUNCH_STABILITY_MS = 4_000/)
-  assert.match(MAIN, /function spawnExternalLauncher\(executable, args\)/)
+  assert.match(
+    MAIN,
+    /function spawnExternalLauncher\(executable, args, options = \{\}\)/,
+    'the external launcher must receive the hidden bridge/folder handoff',
+  )
   const handoff = MAIN.slice(
     MAIN.indexOf('async function openProviderLauncherEntry('),
     MAIN.indexOf('async function launchOnlineProvider(', MAIN.indexOf('async function openProviderLauncherEntry(')),
@@ -1415,6 +1422,127 @@ function testInstallSeasonRequiresExplicitClick() {
   )
 }
 
+function testCompanionDownloadHandoff() {
+  // Every online-only (external) season must expose a launcher VAULTED can
+  // install or discover. A runtime provider gets the verified official
+  // installer; a Discord community gets the multi-GB auto-import scan.
+  const catalog = providerCatalog()
+  const external = catalog.filter(
+    (provider) => provider.mode === 'external' || provider.external === true,
+  )
+  assert.ok(external.length >= 10, 'the online-only launcher seasons must stay wired')
+  for (const provider of external) {
+    assert.ok(
+      providerRuntimeMetadata(provider.id) || provider.launcher,
+      `${provider.id} must keep a launcher path for the download handoff`,
+    )
+  }
+  // Every season whose primary route is one of those online-only providers
+  // must actually have a build VAULTED can download before handing over.
+  for (const [seasonId, season] of Object.entries(builds.seasons || {})) {
+    const primaryId = season?.onlineProvider?.id
+    if (!primaryId) continue
+    const profile = external.find((provider) => provider.id === primaryId)
+    if (!profile) continue
+    assert.ok(
+      Boolean(season.downloadUrl) || Boolean(season.providerBuild),
+      `${seasonId} is online-only through ${primaryId} but has no build download`,
+    )
+  }
+
+  // The handoff starts only after the build exists, and only for external
+  // routes; a managed backend never gets a second launcher.
+  const downloadAt = MAIN.indexOf('async function downloadBuild(')
+  const syncAt = MAIN.indexOf('async function syncProviderBuild(')
+  assert.ok(downloadAt > 0 && syncAt > downloadAt)
+  const downloadBody = MAIN.slice(downloadAt, syncAt)
+  assert.match(
+    downloadBody,
+    /companionProfile\?\.mode === 'external' \|\| companionProfile\?\.external === true/,
+    'only an external season gets the other-launcher handoff',
+  )
+  assert.match(downloadBody, /startCompanionDownload\(\s*providerId,/, 'the archive download must run it')
+  assert.match(downloadBody, /phase: 'launcher'/, 'the card must show the launcher prepare step')
+  const syncBody = MAIN.slice(syncAt, MAIN.indexOf('function emptyVerifyReport', syncAt))
+  assert.match(
+    syncBody,
+    /startCompanionDownload\(providerId, targetDir/,
+    'the live provider sync must run the same handoff',
+  )
+
+  // A runtime installer is Defender-scanned before Windows executes it, and
+  // every runtime install path passes that scanner.
+  const runtimeSource = read('electron/providerRuntime.cjs')
+  const scanAt = runtimeSource.indexOf('options.scanInstaller')
+  const installAt = runtimeSource.indexOf('const result = await installMsi')
+  assert.ok(scanAt > 0, 'providerRuntime must accept a Defender scanner')
+  assert.ok(installAt > scanAt, 'the scan must run before the installer')
+  assert.match(runtimeSource, /scan\?\.state === 'threats'/)
+  assert.ok(
+    (MAIN.match(/scanInstaller: \(file\) => scanWithDefender\(file\)/g) || []).length >= 5,
+    'every provider runtime install path must use the Defender scan',
+  )
+
+  // The launcher opens hidden, with the downloaded build folder, and Play
+  // reveals that exact process for the one-time sign-in.
+  const prepareAt = MAIN.indexOf('async function startCompanionDownload(')
+  assert.ok(prepareAt > 0, 'main must own the companion download handoff')
+  const prepareBody = MAIN.slice(
+    prepareAt,
+    MAIN.indexOf(' * Bind the exact game PID', prepareAt),
+  )
+  assert.match(prepareBody, /windowsHide: true/)
+  assert.match(prepareBody, /VAULTED_BUILD_FOLDER: safeFolder/)
+  assert.match(prepareBody, /startCompanionWindowHider\(id, child\.pid\)/)
+  assert.match(prepareBody, /companionPrepareSessions\.set\(id/)
+  assert.match(
+    prepareBody,
+    /startImportedCommunityLauncher\(id, \{\s*folder: safeFolder,\s*hidden: true/,
+    'a Discord launcher must keep its library bridge while it prepares hidden',
+  )
+  assert.doesNotMatch(
+    prepareBody,
+    /startHiddenWindowWatcher/,
+    'the 6-hour watcher would hide the launcher again when Play reveals it',
+  )
+  assert.doesNotMatch(
+    prepareBody,
+    /showCompanionLauncher/,
+    'the prepare launcher must stay off-screen until Play',
+  )
+  assert.match(
+    MAIN,
+    /const prepared = companionPrepareSessions\.get\(id\)/,
+    'Play must see the background prepare session',
+  )
+  assert.match(
+    MAIN,
+    /beginCompanionAutoPlay\(\{[\s\S]{0,260}?preparedPid/,
+    'Play must auto-select the prepared build instead of only revealing the launcher',
+  )
+  assert.match(
+    MAIN,
+    /visible: !prepared\.port,[\s\S]{0,120}?autoPlay: true/,
+    'the prepared Play handoff must automate Play and only reveal for sign-in',
+  )
+  assert.match(
+    MAIN,
+    /startCompanionWindowHider\(id, running\[0\]\)/,
+    'a bootstrapper handoff must move the prepare hider to the real process',
+  )
+  assert.match(MAIN, /arc:start-companion-download/)
+  assert.match(
+    read('electron/preload.cjs'),
+    /startCompanionDownload: \(providerId, folder\)/,
+    'the renderer must be able to retry the handoff',
+  )
+  assert.match(
+    read('src/components/ActiveBuildCard.tsx'),
+    /Opening the companion launcher in the background/,
+    'the card must explain the background prepare step',
+  )
+}
+
 async function testSeasonRotationGuard() {
   // Era hosts one Chapter 1 season at a time and publishes which one. The card
   // may only stay live while Era reports the season VAULTED shipped for it, so
@@ -1878,6 +2006,66 @@ function testCommunityLauncherUnlock() {
   )
 }
 
+/**
+ * Play is a folder -> exact build -> launcher Play handoff. Lock every active
+ * external season to a launcher path and lock the known launchers to the API
+ * or persisted library each project actually ships.
+ */
+function testCompanionPlayWiring() {
+  const source = read('electron/companionPlay.cjs')
+  for (const providerId of [
+    'era-official',
+    'hydro',
+    'neo',
+    'omen-official',
+    'hestia-official',
+    'retrac-official',
+    'eon',
+  ]) {
+    assert.ok(
+      COMPANION_PLAY_ADAPTERS[providerId],
+      `${providerId} must keep an exact-folder Play adapter`,
+    )
+  }
+  assert.match(source, /window\.era\.invoke\('game\.launch'/, 'Era must launch its own build id')
+  assert.match(source, /window\.hydro\.gameLaunch/, 'Hydro must launch its season key')
+  assert.match(source, /launch_neo_build/, 'Neo must launch the exact install path')
+  assert.match(source, /library\.LaunchBuild/, 'Omen must use its library launch path')
+  assert.match(source, /hestia\.installs/, 'Hestia must point its install map at the build')
+  assert.match(source, /localStorage\.getItem\('library'\)/, 'Retrac must seed its persisted library')
+  assert.match(source, /FortnitePath/, 'Eon must point Settings.ini at the build')
+
+  const external = providerCatalog().filter(
+    (provider) => provider.mode === 'external' || provider.external === true,
+  )
+  for (const provider of external) {
+    assert.ok(
+      provider.directLaunch === true ||
+        providerRuntimeMetadata(provider.id) ||
+        provider.launcher,
+      `${provider.id} needs a Play handoff to its community launcher`,
+    )
+  }
+
+  const openAt = MAIN.indexOf('async function openProviderLauncherEntry(')
+  const launchAt = MAIN.indexOf('async function launchOnlineProvider(', openAt)
+  const handoff = MAIN.slice(openAt, launchAt)
+  assert.match(handoff, /beginCompanionAutoPlay\(/, 'Play must press the launcher Play automatically')
+  assert.match(handoff, /watchCommunityGameStart\(/, 'Play must wait for the real client')
+  assert.match(handoff, /hidden: true/, 'the companion must start hidden')
+  assert.match(MAIN, /port: started\.bridgePort/, 'the prepare session must keep its bridge port')
+  assert.match(
+    read('src/App.tsx'),
+    /result\.autoPlay === true/,
+    'the card must not tell the player to press Play when VAULTED can',
+  )
+  assert.match(
+    read('src/lib/launch.ts'),
+    /autoPlay\?: boolean/,
+    'the renderer must receive the auto-Play handoff result',
+  )
+}
+
 async function run() {
   try {
     testCommunityLauncherUnlock()
@@ -1894,7 +2082,9 @@ async function run() {
   testCardStates()
   testHestiaAddsChapter1Season2Route()
   testInstallSeasonRequiresExplicitClick()
-  await testSeasonRotationGuard()
+      testCompanionDownloadHandoff()
+    testCompanionPlayWiring()
+    await testSeasonRotationGuard()
   await testDiscordOnlyNeverCountsOnline()
   testOnlineBadgeColors()
       testAutoFixWiring()

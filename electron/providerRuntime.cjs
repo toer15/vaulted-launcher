@@ -880,6 +880,18 @@ async function ensureProviderRuntime(providerId, metadata, options = {}) {
         (executable &&
           (metadata.kind === 'exe' || (await fileVersion(executable)).startsWith(release.version))))
     if (!currentInstall && metadata.autoInstall !== false && options.install !== false) {
+      // The installer was downloaded to VAULTED's own cache and hash-checked
+      // above. Run the caller's real Defender scan before Windows executes it;
+      // only an explicit threat blocks the install; an unavailable Defender
+      // CLI is handled by the launcher status, not mistaken for a threat.
+      if (typeof options.scanInstaller === 'function') {
+        const scan = await options.scanInstaller(installer)
+        if (scan?.state === 'threats') {
+          throw new Error(
+            `Windows Defender flagged the ${metadata.label} installer as malicious. VAULTED did not run it.`,
+          )
+        }
+      }
       options.report?.({
         received: meta.size,
         total: meta.size,
