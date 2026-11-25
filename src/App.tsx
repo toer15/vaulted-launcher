@@ -59,7 +59,6 @@ import {
   sameBuildVersion,
   scanInstalledBuilds,
   startDownload,
-  stopProviderLauncher,
   syncProviderBuild,
   subscribeBuildExit,
   subscribeCommunityBuildLinked,
@@ -4411,36 +4410,29 @@ export default function App() {
     const build = activeBuild
     if (!build) return
 
-    // running -> stop the client or the external season launcher
+    // Stop is one action for every route: close the game, the tracked client
+    // tree, the season's companion launcher, and this renderer's session state.
     if (runningId === build.id) {
-      if (externalLauncher?.buildId === build.id) {
-        try {
-          const stopped = await stopProviderLauncher(externalLauncher.providerId)
-          setExternalLauncher(null)
-          setRunningId(null)
-          setPhase('idle')
-          setLaunchFailure((current) => (current?.id === build.id ? null : current))
-          if (!providerOnly) void clearOnlineLobby(onlineServiceUrlRef.current).catch(() => {})
-          pushToast({
-            tone: stopped ? 'info' : 'error',
-            title: stopped ? 'Season launcher stopped' : 'Could not stop the launcher',
-            description: stopped ? build.season.label : 'The launcher was already gone.',
-          })
-        } catch (error) {
-          pushToast({
-            tone: 'error',
-            title: 'Could not stop the launcher',
-            description: error instanceof Error ? error.message : 'Unknown error.',
-          })
-        }
-        return
-      }
+      const providerId =
+        externalLauncher?.buildId === build.id ? externalLauncher.providerId : undefined
+      const launcherPid =
+        externalLauncher?.buildId === build.id ? externalLauncher.pid : null
+
+      // The button flips back to Play before IPC waits on Windows process exit.
+      // Clear the ref synchronously so a launcher-exit event from the close is
+      // not mistaken for the launcher crashing before the next render.
+      externalLauncherRef.current = null
+      setExternalLauncher(null)
+      setRunningId(null)
+      setPhase('idle')
+      setLaunchStage(null)
+      setHostedLobby(null)
+      setLaunchFailure((current) => (current?.id === build.id ? null : current))
+      localSessionRef.current = null
+      if (!providerOnly) void clearOnlineLobby(onlineServiceUrlRef.current).catch(() => {})
+
       try {
-        const closed = await closeBuildProcess(build.id)
-        setRunningId(null)
-        setPhase('idle')
-        setLaunchFailure((current) => (current?.id === build.id ? null : current))
-        if (!providerOnly) void clearOnlineLobby(onlineServiceUrlRef.current).catch(() => {})
+        const closed = await closeBuildProcess(build.id, providerId, launcherPid)
         pushToast({
           tone: closed ? 'info' : 'error',
           title: closed ? 'Fortnite stopped' : 'Could not stop Fortnite',

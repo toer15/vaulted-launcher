@@ -49,6 +49,7 @@ const {
 } = require('../electron/companionPlay.cjs')
 
 const MAIN = read('electron/main.cjs')
+const APP = read('src/App.tsx')
 
 function season(id) {
   const value = builds.seasons[id]
@@ -132,11 +133,71 @@ function testLaunchWiring() {
 
   const closeAt = MAIN.indexOf("ipcMain.handle('arc:close-build'")
   assert.ok(closeAt > 0, 'the Stop handler is missing')
-  const closeBody = MAIN.slice(closeAt, closeAt + 1400)
+  const closeBody = MAIN.slice(
+    closeAt,
+    MAIN.indexOf("ipcMain.handle('arc:lan-ip'", closeAt),
+  )
   assert.match(
     closeBody,
-    /closeCompanionLauncherForProvider\(entry\.providerId\)/,
+    /closeCompanionLauncherForProvider\(companionId\)/,
     'Stop must close the season companion launcher',
+  )
+  assert.match(
+    closeBody,
+    /killFortniteProcesses\(\)/,
+    'Stop must force the complete Fortnite process set, not only one PID',
+  )
+  assert.match(
+    closeBody,
+    /running\.delete\(id\)[\s\S]*killFortniteProcesses\(\)/,
+    'Stop must detach the session before closing so the exit is not a crash',
+  )
+  assert.match(
+    closeBody,
+    /closeCompanionLauncherForProvider\(companionId\)[\s\S]*killFortniteProcesses\(\)/,
+    'Stop must close the companion before the game so it cannot relaunch it',
+  )
+
+  const imagesAt = MAIN.indexOf('const FORTNITE_GAME_IMAGES')
+  assert.ok(imagesAt > 0, 'the Fortnite image list is missing')
+  const imagesBody = MAIN.slice(imagesAt, MAIN.indexOf('])', imagesAt))
+  for (const image of [
+    'FortniteClient-Win64-Shipping.exe',
+    'FortniteClient-Win64-Shipping_BE.exe',
+    'FortniteClient-Win64-Shipping_EAC.exe',
+    'FortniteLauncher.exe',
+  ]) {
+    assert.ok(imagesBody.includes(image), `Stop must include ${image}`)
+  }
+  const killAt = MAIN.indexOf('async function killFortniteProcesses()')
+  assert.ok(killAt > 0, 'the Fortnite force-close helper is missing')
+  assert.match(
+    MAIN.slice(killAt, killAt + 1600),
+    /'\/IM', image, '\/T', '\/F'/,
+    'Stop must taskkill every Fortnite image with /T /F',
+  )
+
+  // Stop resets the card before it waits for Windows and sends the provider to
+  // the same close path for every external/managed route.
+  const primaryAt = APP.indexOf('const handlePrimary = useCallback')
+  assert.ok(primaryAt > 0, 'the renderer primary action is missing')
+  const appStopAt = APP.indexOf('if (runningId === build.id)', primaryAt)
+  assert.ok(appStopAt > primaryAt, 'the renderer Stop branch is missing')
+  const appStopBody = APP.slice(appStopAt, appStopAt + 2200)
+  assert.match(
+    appStopBody,
+    /externalLauncherRef\.current = null[\s\S]*setRunningId\(null\)[\s\S]*setPhase\('idle'\)/,
+    'Stop must clear the active session and return the button to Play before IPC waits',
+  )
+  assert.match(
+    appStopBody,
+    /closeBuildProcess\(build\.id, providerId, launcherPid\)/,
+    'Stop must send the game and its external launcher to the combined close path',
+  )
+  assert.equal(
+    /stopProviderLauncher\(/.test(appStopBody),
+    false,
+    'Stop must not close only the launcher and leave Fortnite running',
   )
 
   // No timer or startup timeout may close a companion launcher.

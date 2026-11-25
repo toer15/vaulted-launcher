@@ -270,7 +270,18 @@ function testRetracPendingLaunchRouting() {
     /registerProviderLauncher\(id, launch\.child(?:, \{[^}]*\})?\)\r?\n\s*startCompanionWindowHider\(id, launch\.child\.pid\)\r?\n\s*startCompanionSessionMonitor\(id, current\)/,
     'the opened Retrac process must be hidden and tracked for auto-close',
   )
-  assert.match(main, /await closeProcessTreeGracefully\(entry\.pid\)/, 'tracked Retrac must be closed after the game exits')
+  const stopAt = main.indexOf("ipcMain.handle('arc:close-build'")
+  const stopBody = main.slice(stopAt, main.indexOf("ipcMain.handle('arc:lan-ip'", stopAt))
+  assert.match(
+    stopBody,
+    /entry\?\.pid[\s\S]{0,240}killProcessTree\(pid\)/,
+    'tracked Retrac must be force-closed on Stop',
+  )
+  assert.match(
+    stopBody,
+    /killFortniteProcesses\(\)/,
+    'Stop must also sweep every Fortnite process image',
+  )
 }
 
 function testLaunchArguments() {

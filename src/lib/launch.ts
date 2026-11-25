@@ -257,7 +257,11 @@ export interface LauncherBridge {
   } | null>
   getPublicAddress?(): Promise<string>
   setPublicAddress?(value: string): Promise<{ ok: boolean; error?: string; value?: string | null }>
-  closeBuild?(payload: { id: string }): Promise<{ closed: boolean }>
+  closeBuild?(payload: {
+    id: string
+    providerId?: string
+    launcherPid?: number
+  }): Promise<{ closed: boolean }>
   syncInventory?(payload: InventoryPayload & { username: string }): Promise<InventorySyncResult>
   /** persisted account session so reinstalling keeps the player signed in */
   accountSession?: {
@@ -696,10 +700,20 @@ export async function syncVaultedInventory(
   }
 }
 
-export async function closeBuildProcess(id: string): Promise<boolean> {
+export async function closeBuildProcess(
+  id: string,
+  providerId?: string,
+  launcherPid?: number | null,
+): Promise<boolean> {
   if (!window.arc?.closeBuild) return false
   try {
-    const result = await window.arc.closeBuild({ id })
+    const result = await window.arc.closeBuild({
+      id,
+      ...(providerId ? { providerId } : {}),
+      ...(Number.isInteger(launcherPid) && Number(launcherPid) > 0
+        ? { launcherPid: Number(launcherPid) }
+        : {}),
+    })
     return Boolean(result?.closed)
   } catch (error) {
     throw cleanIpcError(error)

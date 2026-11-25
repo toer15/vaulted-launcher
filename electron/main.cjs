@@ -567,6 +567,18 @@ function assertBuild(payload) {
 }
 
 const CLIENT_EXE = 'fortniteclient-win64-shipping.exe'
+/** Every process image a Fortnite session can leave behind on Windows. Stop
+ *  closes the whole set, not just the PID VAULTED happened to observe first. */
+const FORTNITE_GAME_IMAGES = Object.freeze([
+  'FortniteClient-Win64-Shipping.exe',
+  'FortniteClient-Win64-Shipping_BE.exe',
+  'FortniteClient-Win64-Shipping_BE_EOS.exe',
+  'FortniteClient-Win64-Shipping_EAC.exe',
+  'FortniteClient-Win64-Shipping_EAC_EOS.exe',
+  'FortniteClient-Win64-Shipping_EOS.exe',
+  'FortniteLauncher.exe',
+  'oAC.exe',
+])
 
 /** Newer builds also ship bootstrapper copies next to the real client. */
 function isClientExecutableName(name) {
@@ -3550,6 +3562,7 @@ async function closeCompanionLauncherForProvider(providerId) {
   companionGameWaits.delete(id)
   companionPlayRuns.delete(id)
   stopCompanionWindowHider(id)
+  stopProviderSessionHeartbeat(id, 'companion launcher closed')
   let closed = false
   const monitor = companionMonitors.get(id)
   if (monitor) {
@@ -4034,6 +4047,40 @@ function processPidsByImage(names) {
       },
     )
   })
+}
+
+/**
+ * Force-close every Fortnite process image. taskkill /T /F is the Windows
+ * operation that also reaps the anticheat/bootstrap children, and the second
+ * PID sweep catches a process that spawned between the image commands.
+ */
+async function killFortniteProcesses() {
+  if (process.platform !== 'win32') return false
+  let found = false
+  const initial = await processPidsByImage(FORTNITE_GAME_IMAGES)
+  if (initial.length > 0) {
+    found = true
+    for (const pid of initial) await killProcessTree(pid)
+  }
+  await Promise.all(
+    FORTNITE_GAME_IMAGES.map(
+      (image) =>
+        new Promise((resolve) => {
+          execFile(
+            'taskkill',
+            ['/IM', image, '/T', '/F'],
+            { windowsHide: true, timeout: 15_000 },
+            () => resolve(),
+          )
+        }),
+    ),
+  )
+  const remaining = await processPidsByImage(FORTNITE_GAME_IMAGES)
+  if (remaining.length > 0) {
+    found = true
+    for (const pid of remaining) await killProcessTree(pid)
+  }
+  return found
 }
 
 /** True while any Fortnite client process is open. */
@@ -8205,29 +8252,55 @@ function registerIpc() {
 
   ipcMain.handle('arc:close-build', async (_event, payload) => {
     const id = String(payload?.id ?? '')
-    stopJoinWatchdog(id)
+    const providerId = String(payload?.providerId ?? '')
+    const launcherPid = Number(payload?.launcherPid)
     const entry = running.get(id)
-    if (!entry?.pid) return { closed: false }
+    const companionId = String(providerId || entry?.providerId || '')
+      .trim()
+      .toLowerCase()
 
-    // Mark this exit before the close reaches the injector's exit event. The
-    // UI already knows about a user-requested close and should not show a
-    // crash message.
-    expectedBuildCloses.add(id)
-    await closeProcessTreeGracefully(entry.pid)
-    // Stop is the one close path that does not wait for the game to exit:
-    // the season's companion launcher goes down with it.
-    await closeCompanionLauncherForProvider(entry.providerId)
-    void entry.eraBridge?.close()
-    entry.realtimeSession?.close('game process closed by app')
+    // Remove the session before killing anything. The client/injector exit
+    // listeners then see a replaced-or-stopped session and cannot report a
+    // user-requested Stop as a crash.
+    if (entry) running.delete(id)
+    stopJoinWatchdog(id)
+    if (companionId) stopProviderSessionHeartbeat(companionId, 'stopped by user')
 
-    running.delete(id)
-    expectedBuildCloses.delete(id)
+    // Start closing the companion and force the game images down in parallel,
+    // then sweep the game once more after the launcher is dead in case the
+    // launcher recreated it during its own shutdown.
+    const launcherClose = companionId
+      ? closeCompanionLauncherForProvider(companionId)
+      : Promise.resolve(false)
+    let gameClosed = false
+    for (const pid of [
+      entry?.pid,
+      entry?.injectorPid,
+      entry?.companionLauncherPid,
+      launcherPid,
+    ]) {
+      if (!Number.isInteger(pid) || pid <= 0) continue
+      gameClosed = true
+      await killProcessTree(pid)
+    }
+    const injectors = await processPidsByImage(['VaultedInjector.exe'])
+    for (const pid of injectors) await killProcessTree(pid)
+    gameClosed = (await killFortniteProcesses()) || gameClosed
+    const launcherClosed = await launcherClose
+    if (launcherClosed) gameClosed = (await killFortniteProcesses()) || gameClosed
+
+    void entry?.eraBridge?.close()
+    entry?.realtimeSession?.close('game process stopped by app')
+
     if (running.size === 0) {
       clearJoinTarget()
       if (gameServerState) await stopGameServer()
       else await stopStaleVaultedClients()
     }
-    return { closed: true }
+    return {
+      closed: Boolean(entry || gameClosed || launcherClosed || injectors.length),
+      providerId: companionId || null,
+    }
   })
 
   ipcMain.handle('arc:lan-ip', () => lanAddress())
