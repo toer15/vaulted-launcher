@@ -1,6 +1,6 @@
 'use strict'
 
-const { execFile } = require('node:child_process')
+const { execFile, spawn } = require('node:child_process')
 
 /**
  * Companion launchers expose no CLI or URL to start the game, so VAULTED
@@ -50,6 +50,7 @@ public class VaultedHiddenWindow {
   [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h, int index);
   [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int index, int value);
   [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
 }
 "@
 function Find-VaultedTopWindow([int]$targetPid) {
@@ -70,6 +71,26 @@ function Find-VaultedTopWindow([int]$targetPid) {
   }
   [void][VaultedHiddenWindow]::EnumWindows($cb, [IntPtr]::Zero)
   return $script:foundTop
+}
+function Find-VaultedVisibleTopWindow([int]$targetPid) {
+  # Electron owns hidden helper windows as well as the real app window; centring
+  # on one of those would put the popup in the wrong place.
+  $script:foundVisible = [IntPtr]::Zero
+  $script:visibleArea = 0
+  $cb = [VaultedHiddenWindow+EnumProc]{
+    param($h, $l)
+    $owner = [uint32]0
+    [void][VaultedHiddenWindow]::GetWindowThreadProcessId($h, [ref]$owner)
+    if ($owner -eq $targetPid -and [VaultedHiddenWindow]::IsWindowVisible($h)) {
+      $r = New-Object VaultedHiddenWindow+RECT
+      [void][VaultedHiddenWindow]::GetWindowRect($h, [ref]$r)
+      $area = ($r.R - $r.L) * ($r.B - $r.T)
+      if ($area -gt $script:visibleArea) { $script:visibleArea = $area; $script:foundVisible = $h }
+    }
+    return $true
+  }
+  [void][VaultedHiddenWindow]::EnumWindows($cb, [IntPtr]::Zero)
+  return $script:foundVisible
 }
 function Hide-VaultedTopWindow([IntPtr]$top) {
   # Outside every monitor first, then remove it from the desktop/taskbar.
@@ -137,7 +158,8 @@ $p = Get-Process -Id ${safePid} -ErrorAction SilentlyContinue
 if (-not $p) { 'NO_PROCESS'; exit 1 }
 $top = Find-VaultedTopWindow ${safePid}
 if ($top -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
-$owner = Find-VaultedTopWindow ${safeOwnerPid}
+$owner = Find-VaultedVisibleTopWindow ${safeOwnerPid}
+if ($owner -eq [IntPtr]::Zero) { $owner = Find-VaultedTopWindow ${safeOwnerPid} }
 # A sign-in window belongs to VAULTED, so keep it a small popup centred on the
 # app instead of a full-size launcher window in the taskbar.
 if ($owner -ne [IntPtr]::Zero) {
@@ -177,6 +199,48 @@ if ([VaultedHiddenWindow]::GetWindowRect($top, [ref]$after)) {
   }
 }
 'SHOWN_POPUP'
+`
+}
+
+function fastenerScript(pid, ownerPid, width, height) {
+  const safePid = Math.max(1, Math.floor(Number(pid) || 0))
+  const safeOwnerPid = Math.max(1, Math.floor(Number(ownerPid) || 0))
+  const safeWidth = Math.max(380, Math.min(900, Math.floor(Number(width) || 560)))
+  const safeHeight = Math.max(420, Math.min(1000, Math.floor(Number(height) || 760)))
+  return `
+${WINDOW_TYPES}
+# Keep the sign-in window fastened to VAULTED: centred on the app and snapped
+# straight back if it is dragged, resized or left behind when VAULTED moves.
+$deadline = (Get-Date).AddMinutes(20)
+while ((Get-Date) -lt $deadline) {
+  $top = Find-VaultedTopWindow ${safePid}
+  if ($top -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 500; continue }
+  $owner = Find-VaultedVisibleTopWindow ${safeOwnerPid}
+  if ($owner -eq [IntPtr]::Zero) { $owner = Find-VaultedTopWindow ${safeOwnerPid} }
+  if ($owner -eq [IntPtr]::Zero) { break }
+  $ownerRect = New-Object VaultedHiddenWindow+RECT
+  if (-not [VaultedHiddenWindow]::GetWindowRect($owner, [ref]$ownerRect)) { break }
+  $ow = $ownerRect.R - $ownerRect.L
+  $oh = $ownerRect.B - $ownerRect.T
+  if ($ow -gt 300 -and $oh -gt 300 -and $ownerRect.L -gt -10000) {
+    $w = ${safeWidth}
+    $h = ${safeHeight}
+    if ($w -gt ($ow - 120)) { $w = [Math]::Max(420, $ow - 120) }
+    if ($h -gt ($oh - 80)) { $h = [Math]::Max(480, $oh - 80) }
+    $x = $ownerRect.L + [int](($ow - $w) / 2)
+    $y = $ownerRect.T + [int](($oh - $h) / 2)
+    $current = New-Object VaultedHiddenWindow+RECT
+    if ([VaultedHiddenWindow]::GetWindowRect($top, [ref]$current)) {
+      $moved = ([Math]::Abs($current.L - $x) -gt 2) -or ([Math]::Abs($current.T - $y) -gt 2)
+      $resized = ([Math]::Abs(($current.R - $current.L) - $w) -gt 2) -or ([Math]::Abs(($current.B - $current.T) - $h) -gt 2)
+      if ($moved -or $resized) {
+        [void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, $x, $y, $w, $h, 0x0004 -bor 0x0010)
+      }
+    }
+  }
+  Start-Sleep -Milliseconds 400
+}
+'FASTENED'
 `
 }
 
@@ -281,6 +345,29 @@ async function showCompanionLauncherPopup(pid, ownerPid, options = {}) {
   return false
 }
 
+/**
+ * Keep a sign-in popup fastened to VAULTED. The loop lives in one hidden
+ * PowerShell process and exits by itself when either window closes, so the
+ * player cannot drag, resize or park the launcher anywhere else.
+ */
+function startCompanionLauncherFastener(pid, ownerPid, options = {}) {
+  if (process.platform !== 'win32') return null
+  const script = fastenerScript(pid, ownerPid, options.width, options.height)
+  const encoded = Buffer.from(String(script), 'utf16le').toString('base64')
+  try {
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', encoded],
+      { windowsHide: true, stdio: 'ignore' },
+    )
+    child.on('error', () => {})
+    child.unref()
+    return child.pid || null
+  } catch {
+    return null
+  }
+}
+
 /** Click the hidden launcher's bottom full-width Play/Close button. */
 async function clickCompanionPlayButton(pid, options = {}) {
   if (process.platform !== 'win32') return { clicked: false, error: 'unsupported platform' }
@@ -303,6 +390,7 @@ module.exports = {
   showCompanionLauncher,
   showCompanionLauncherOffscreen,
   showCompanionLauncherPopup,
+  startCompanionLauncherFastener,
   delay,
   runPowerShell,
 }

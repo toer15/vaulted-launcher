@@ -1571,6 +1571,11 @@ function testInstallSeasonRequiresExplicitClick() {
     'the launcher sign-in window must open as a small VAULTED-owned popup',
   )
   assert.match(
+    MAIN,
+    /startCompanionLauncherFastener\(started\.pid, process\.pid\)/,
+    'the sign-in popup must stay centred and fastened to VAULTED',
+  )
+  assert.match(
     read('electron/companionAutomation.cjs'),
     /SetWindowLongPtr\(\$top, -8, \$owner\)/,
     'the sign-in popup must be owned by the VAULTED window so it stays attached',

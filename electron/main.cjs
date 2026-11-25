@@ -47,6 +47,7 @@ const {
   showCompanionLauncher,
   showCompanionLauncherOffscreen,
   showCompanionLauncherPopup,
+  startCompanionLauncherFastener,
 } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { detectBuildVersion } = require('./buildVersion.cjs')
@@ -7419,6 +7420,10 @@ async function openProviderLauncherEntry(providerId, options = {}) {
             attempts: 12,
             waitMs: 500,
           })
+          if (result.visible) {
+            // Keep it centred on VAULTED and snap it back if the player drags it.
+            startCompanionLauncherFastener(started.pid, process.pid)
+          }
           if (!result.visible) {
             result.visible = await showCompanionLauncher(started.pid, {
               attempts: 4,

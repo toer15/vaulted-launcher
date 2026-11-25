@@ -142,13 +142,13 @@ export function LauncherSignInModal({
             </p>
           )}
 
-          <div className="mt-2.5 flex items-center gap-2">
+          <div className="mt-2.5 grid gap-2">
             <button
               type="button"
               onClick={onOpen}
               disabled={busy}
               className={cx(
-                'flex flex-1 items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-[11.5px] font-bold text-white transition-all duration-200',
+                'flex w-full items-center justify-center gap-1.5 rounded-xl px-2.5 py-2 text-[11.5px] font-bold text-white transition-all duration-200',
                 busy
                   ? 'cursor-wait bg-arc/70 opacity-80'
                   : 'bg-arc shadow-[0_12px_26px_-16px_rgba(124,140,255,0.95)] hover:brightness-110 active:scale-[0.99]',
@@ -166,7 +166,7 @@ export function LauncherSignInModal({
               onClick={onContinue}
               disabled={busy}
               className={cx(
-                'flex flex-1 items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2 text-[11.5px] font-bold transition-all duration-200',
+                'flex w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2 text-[11.5px] font-bold transition-all duration-200',
                 busy
                   ? 'cursor-wait border-line bg-white/[0.04] text-fog/60'
                   : 'border-emerald-300/30 bg-emerald-400/10 text-emerald-100 hover:bg-emerald-400/15 active:scale-[0.99]',
