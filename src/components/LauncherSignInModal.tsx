@@ -21,10 +21,10 @@ interface LauncherSignInModalProps {
 
 /**
  * The season's own launcher owns its account, so VAULTED never asks for its
- * password. This is a small in-app popup, not a takeover: the season list
- * stays visible and usable behind it while the launcher window handles the
- * actual sign-in. Once the account is saved the popup disappears on its own
- * and the card's button changes back to Download Season.
+ * password. This popup is centred like the app's other dialogs while the
+ * launcher window handles the actual sign-in. Once the account is saved the
+ * popup disappears on its own and the card's button changes back to Download
+ * Season.
  */
 export function LauncherSignInModal({
   open,
@@ -53,11 +53,18 @@ export function LauncherSignInModal({
   const watching = opened && !busy
 
   return createPortal(
-    <div className="pointer-events-none fixed inset-0 z-[95]">
+    <div
+      className="fixed inset-0 z-[95] grid place-items-center overflow-y-auto bg-[#02070c]/88 px-4 py-6 backdrop-blur-md"
+      onMouseDown={(event) => {
+        if (!busy && event.target === event.currentTarget) onClose()
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="launcher-signin-title"
+    >
       <div
-        role="dialog"
-        aria-labelledby="launcher-signin-title"
-        className="animate-scale-in pointer-events-auto absolute bottom-5 right-5 w-[336px] max-w-[calc(100vw-2.5rem)] overflow-hidden rounded-2xl border border-line bg-ink/95 shadow-[0_26px_70px_-22px_rgba(0,0,0,0.95)] backdrop-blur-xl"
+        className="animate-scale-in relative w-full max-w-[460px] overflow-hidden rounded-3xl border border-line bg-ink shadow-[0_40px_120px_-30px_rgba(0,0,0,0.95)]"
+        onMouseDown={(event) => event.stopPropagation()}
       >
         <div
           className="h-[3px] bg-gradient-to-r from-emerald-400 via-arc to-transparent"
