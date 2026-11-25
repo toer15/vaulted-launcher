@@ -208,39 +208,183 @@ function fastenerScript(pid, ownerPid, width, height) {
   const safeWidth = Math.max(380, Math.min(900, Math.floor(Number(width) || 560)))
   const safeHeight = Math.max(420, Math.min(1000, Math.floor(Number(height) || 760)))
   return `
-${WINDOW_TYPES}
-# Keep the sign-in window fastened to VAULTED: centred on the app and snapped
-# straight back if it is dragged, resized or left behind when VAULTED moves.
-$deadline = (Get-Date).AddMinutes(20)
-while ((Get-Date) -lt $deadline) {
-  $top = Find-VaultedTopWindow ${safePid}
-  if ($top -eq [IntPtr]::Zero) { Start-Sleep -Milliseconds 500; continue }
-  $owner = Find-VaultedVisibleTopWindow ${safeOwnerPid}
-  if ($owner -eq [IntPtr]::Zero) { $owner = Find-VaultedTopWindow ${safeOwnerPid} }
-  if ($owner -eq [IntPtr]::Zero) { break }
-  $ownerRect = New-Object VaultedHiddenWindow+RECT
-  if (-not [VaultedHiddenWindow]::GetWindowRect($owner, [ref]$ownerRect)) { break }
-  $ow = $ownerRect.R - $ownerRect.L
-  $oh = $ownerRect.B - $ownerRect.T
-  if ($ow -gt 300 -and $oh -gt 300 -and $ownerRect.L -gt -10000) {
-    $w = ${safeWidth}
-    $h = ${safeHeight}
-    if ($w -gt ($ow - 120)) { $w = [Math]::Max(420, $ow - 120) }
-    if ($h -gt ($oh - 80)) { $h = [Math]::Max(480, $oh - 80) }
-    $x = $ownerRect.L + [int](($ow - $w) / 2)
-    $y = $ownerRect.T + [int](($oh - $h) / 2)
-    $current = New-Object VaultedHiddenWindow+RECT
-    if ([VaultedHiddenWindow]::GetWindowRect($top, [ref]$current)) {
-      $moved = ([Math]::Abs($current.L - $x) -gt 2) -or ([Math]::Abs($current.T - $y) -gt 2)
-      $resized = ([Math]::Abs(($current.R - $current.L) - $w) -gt 2) -or ([Math]::Abs(($current.B - $current.T) - $h) -gt 2)
-      if ($moved -or $resized) {
-        [void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, $x, $y, $w, $h, 0x0004 -bor 0x0010)
-      }
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+public static class VaultedFastener
+{
+    public delegate bool EnumProc(IntPtr h, IntPtr l);
+    public delegate IntPtr WndProcDelegate(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
+    [StructLayout(LayoutKind.Sequential)] public struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam; public uint time; public int x; public int y; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct WNDCLASSEX { public uint cbSize; public uint style; public IntPtr lpfnWndProc; public int cbClsExtra; public int cbWndExtra; public IntPtr hInstance; public IntPtr hIcon; public IntPtr hCursor; public IntPtr hbrBackground; public string lpszMenuName; public string lpszClassName; public IntPtr hIconSm; }
+
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+    [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern ushort RegisterClassEx(ref WNDCLASSEX wc);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateWindowEx(uint exStyle, string cls, string name, uint style, int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr inst, IntPtr param);
+    [DllImport("user32.dll")] static extern IntPtr DefWindowProc(IntPtr h, uint m, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr h);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] static extern bool SetLayeredWindowAttributes(IntPtr h, uint key, byte alpha, uint flags);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
+    [DllImport("user32.dll")] static extern bool PeekMessage(out MSG m, IntPtr h, uint min, uint max, uint remove);
+    [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG m);
+    [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG m);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetModuleHandle(string name);
+
+    static IntPtr found;
+    static long bestArea;
+    static WndProcDelegate overlayProc = OverlayProc;
+    static bool classReady;
+    static IntPtr moduleHandle;
+    static IntPtr overlayOwner;
+
+    static IntPtr OverlayProc(IntPtr h, uint m, IntPtr w, IntPtr l)
+    {
+        return DefWindowProc(h, m, w, l);
     }
-  }
-  Start-Sleep -Milliseconds 400
+
+    static IntPtr FindTop(uint target, bool visibleOnly)
+    {
+        found = IntPtr.Zero;
+        bestArea = 0;
+        EnumWindows(delegate(IntPtr h, IntPtr l)
+        {
+            uint p;
+            GetWindowThreadProcessId(h, out p);
+            if (p == target && (!visibleOnly || IsWindowVisible(h)))
+            {
+                RECT r;
+                GetWindowRect(h, out r);
+                long a = (long)(r.R - r.L) * (r.B - r.T);
+                if (a > bestArea) { bestArea = a; found = h; }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+
+    // A nearly invisible strip sitting on the popup's title bar. It swallows the
+    // mouse-down that would start a drag, so the window cannot be moved at all.
+    static IntPtr CreateOverlay(IntPtr owner)
+    {
+        if (moduleHandle == IntPtr.Zero) moduleHandle = GetModuleHandle(null);
+        if (!classReady)
+        {
+            WNDCLASSEX wc = new WNDCLASSEX();
+            wc.cbSize = (uint)Marshal.SizeOf(typeof(WNDCLASSEX));
+            wc.lpfnWndProc = Marshal.GetFunctionPointerForDelegate(overlayProc);
+            wc.hInstance = moduleHandle;
+            wc.lpszClassName = "VaultedFastenerOverlay";
+            RegisterClassEx(ref wc);
+            classReady = true;
+        }
+        IntPtr h = CreateWindowEx(0x00080000 | 0x00000080 | 0x08000000, "VaultedFastenerOverlay", "", 0x80000000, 0, 0, 100, 48, IntPtr.Zero, IntPtr.Zero, moduleHandle, IntPtr.Zero);
+        if (h == IntPtr.Zero) return IntPtr.Zero;
+        SetLayeredWindowAttributes(h, 0, 1, 2);
+        SetWindowLongPtr(h, -8, owner);
+        ShowWindow(h, 4);
+        return h;
+    }
+
+    public static void Run(uint launcherPid, uint ownerPid, int width, int height)
+    {
+        bool seen = false;
+        IntPtr overlay = IntPtr.Zero;
+        while (true)
+        {
+            IntPtr top = FindTop(launcherPid, true);
+            if (top == IntPtr.Zero) top = FindTop(launcherPid, false);
+            if (top == IntPtr.Zero)
+            {
+                if (seen) break;
+                Thread.Sleep(200);
+                continue;
+            }
+            seen = true;
+            IntPtr owner = FindTop(ownerPid, true);
+            if (owner == IntPtr.Zero) owner = FindTop(ownerPid, false);
+            if (owner == IntPtr.Zero) break;
+            RECT o;
+            if (!GetWindowRect(owner, out o)) break;
+            int ow = o.R - o.L;
+            int oh = o.B - o.T;
+            RECT c;
+            if (!GetWindowRect(top, out c)) break;
+            // Launchers often replace their startup window with the real one;
+            // an overlay owned by the old window dies with it, so re-attach.
+            if (overlay != IntPtr.Zero && (overlayOwner != top || !IsWindow(overlay)))
+            {
+                if (IsWindow(overlay)) DestroyWindow(overlay);
+                overlay = IntPtr.Zero;
+            }
+            if (overlay == IntPtr.Zero && IsWindowVisible(top))
+            {
+                overlay = CreateOverlay(top);
+                overlayOwner = top;
+            }
+            if (overlay != IntPtr.Zero)
+            {
+                IntPtr fg = GetForegroundWindow();
+                uint fgPid;
+                GetWindowThreadProcessId(fg, out fgPid);
+                bool active = fgPid == launcherPid || fgPid == ownerPid;
+                // The launcher raises itself while starting up, so keep the
+                // strip at the top of the normal windows while either window
+                // is in front; hide it entirely when another app takes focus
+                // so it never swallows clicks meant for that app.
+                ShowWindow(overlay, active ? 4 : 0);
+                if (active)
+                {
+                    SetWindowPos(overlay, IntPtr.Zero, c.L, c.T, Math.Max(1, c.R - c.L), 48, 0x0010 | 0x0040);
+                }
+                else
+                {
+                    SetWindowPos(overlay, IntPtr.Zero, c.L, c.T, Math.Max(1, c.R - c.L), 48, 0x0004 | 0x0010);
+                }
+            }
+            if (ow > 300 && oh > 300 && o.L > -10000)
+            {
+                int w = Math.Min(width, Math.Max(420, ow - 120));
+                int h = Math.Min(height, Math.Max(480, oh - 80));
+                int x = o.L + (ow - w) / 2;
+                int y = o.T + (oh - h) / 2;
+                bool moved = Math.Abs(c.L - x) > 1 || Math.Abs(c.T - y) > 1;
+                bool resized = Math.Abs((c.R - c.L) - w) > 1 || Math.Abs((c.B - c.T) - h) > 1;
+                if (moved || resized)
+                {
+                    bool dragging = (GetAsyncKeyState(0x01) & 0x8000) != 0;
+                    if (moved && dragging)
+                    {
+                        PostMessage(top, 0x001F, IntPtr.Zero, IntPtr.Zero);
+                        PostMessage(top, 0x0202, IntPtr.Zero, IntPtr.Zero);
+                    }
+                    SetWindowPos(top, IntPtr.Zero, x, y, w, h, 0x0004 | 0x0010);
+                }
+            }
+            MSG msg;
+            while (PeekMessage(out msg, IntPtr.Zero, 0, 0, 1))
+            {
+                TranslateMessage(ref msg);
+                DispatchMessage(ref msg);
+            }
+            Thread.Sleep(8);
+        }
+        if (overlay != IntPtr.Zero) DestroyWindow(overlay);
+    }
 }
-'FASTENED'
+'@
+[VaultedFastener]::Run(${safePid}, ${safeOwnerPid}, ${safeWidth}, ${safeHeight})
 `
 }
 
@@ -386,6 +530,7 @@ async function clickCompanionPlayButton(pid, options = {}) {
 
 module.exports = {
   clickCompanionPlayButton,
+  fastenerScript,
   hideCompanionLauncher,
   showCompanionLauncher,
   showCompanionLauncherOffscreen,

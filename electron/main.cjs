@@ -7416,14 +7416,14 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         // small popup owned by VAULTED, so it returns to the app when closed.
         if (signInOnly && started.pid) {
           stopCompanionWindowHider(id)
+          // Start the fastener before waiting for the window: compiling its
+          // native guard takes a moment, so this way the drag block is ready
+          // the instant the launcher appears instead of a second later.
+          startCompanionLauncherFastener(started.pid, process.pid)
           result.visible = await showCompanionLauncherPopup(started.pid, process.pid, {
             attempts: 12,
             waitMs: 500,
           })
-          if (result.visible) {
-            // Keep it centred on VAULTED and snap it back if the player drags it.
-            startCompanionLauncherFastener(started.pid, process.pid)
-          }
           if (!result.visible) {
             result.visible = await showCompanionLauncher(started.pid, {
               attempts: 4,
