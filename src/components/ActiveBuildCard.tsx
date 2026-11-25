@@ -85,6 +85,15 @@ interface ActiveBuildCardProps {
   onInstallRuntime?: () => void
   /** explicit Install Season action: the only path allowed to start a download */
   onInstallSeason?: () => void
+  /** the season's companion launcher account is required before downloading */
+  launcherSignInRequired?: boolean
+  /** the launcher sign-in popup is opening or checking the account */
+  launcherSigningIn?: boolean
+  /** the launcher account probe has not answered yet */
+  launcherAuthChecking?: boolean
+  launcherSignInLabel?: string
+  /** open the launcher account popup from the download-button slot */
+  onLauncherSignIn?: () => void
   /** this season's active backend needs an online account link */
   accountAuthRequired?: boolean
   /** the hosted provider already has an encrypted session */
@@ -317,6 +326,11 @@ export function ActiveBuildCard({
   runtime = null,
   onInstallRuntime,
   onInstallSeason,
+  launcherSignInRequired = false,
+  launcherSigningIn = false,
+  launcherAuthChecking = false,
+  launcherSignInLabel = 'Launcher',
+  onLauncherSignIn,
   accountAuthRequired = false,
   accountSignedIn = false,
   onConnectAccount,
@@ -469,6 +483,7 @@ export function ActiveBuildCard({
     hasDownloadSource &&
     runtimeReady &&
     !requiresSignIn &&
+    !launcherSignInRequired &&
     !busy &&
     !archived &&
     !discordSetupLocked &&
@@ -723,6 +738,8 @@ export function ActiveBuildCard({
       ? 'No live online server for this season right now.'
       : setupBanner
       ? 'Complete Step 1 to unlock the season install.'
+      : launcherSignInRequired && !requiresSignIn
+      ? `Sign in to ${launcherSignInLabel} to unlock Download Season.`
       : discordSetupEligible
         ? requiresSignIn
           ? 'Step 2 — sign in to unlock the season install.'
@@ -1427,6 +1444,44 @@ export function ActiveBuildCard({
                           </button>
                         )}
 
+                        {launcherSignInRequired && !requiresSignIn && (
+                          <button
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              if (launcherAuthChecking || launcherSigningIn) return
+                              onLauncherSignIn?.()
+                            }}
+                            disabled={launcherAuthChecking || launcherSigningIn}
+                            title={
+                              launcherAuthChecking
+                                ? `Checking ${launcherSignInLabel} account…`
+                                : launcherSigningIn
+                                  ? `Signing in to ${launcherSignInLabel}…`
+                                  : `Sign in to ${launcherSignInLabel} to unlock Download Season`
+                            }
+                            className={cx(
+                              'inline-flex items-center gap-2 rounded-xl px-4 py-3 text-[12.5px] font-semibold text-white shadow-[0_14px_34px_-16px_rgba(16,185,129,0.8)] transition-all duration-200',
+                              launcherAuthChecking || launcherSigningIn
+                                ? 'cursor-wait bg-emerald-500/70 opacity-85'
+                                : 'bg-gradient-to-r from-emerald-400 to-emerald-600 text-void hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99]',
+                            )}
+                          >
+                            {launcherAuthChecking || launcherSigningIn ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <LogIn className="h-4 w-4" />
+                            )}
+                            <span>
+                              {launcherAuthChecking
+                                ? 'Checking launcher sign-in…'
+                                : launcherSigningIn
+                                  ? 'Signing in…'
+                                  : 'Sign in'}
+                            </span>
+                          </button>
+                        )}
+
                         {discordSetupLocked ? (
                           <button
                             type="button"
@@ -1440,7 +1495,7 @@ export function ActiveBuildCard({
                             <MessageCircle className="h-4 w-4" />
                             <span>Verify {discordProjectLabel} Discord</span>
                           </button>
-                        ) : runtimeRequired && !runtimeReady ? null : (
+                        ) : runtimeRequired && !runtimeReady ? null : launcherSignInRequired ? null : (
                           <button
                             type="button"
                             onClick={(event) => {
@@ -1491,7 +1546,13 @@ export function ActiveBuildCard({
                             1 · {runtimeRequired ? 'Runtime' : 'Discord'}
                           </span>
                           <span className="text-fog/40">→</span>
-                          <span className={!requiresSignIn ? 'text-emerald-300' : 'text-fog'}>
+                          <span
+                            className={
+                              !requiresSignIn && !launcherSignInRequired
+                                ? 'text-emerald-300'
+                                : 'text-fog'
+                            }
+                          >
                             2 · Sign in
                           </span>
                           <span className="text-fog/40">→</span>

@@ -3,6 +3,7 @@ import { ActiveBuildCard } from './components/ActiveBuildCard'
 import { AutoFixView, type AutoFixEntryView } from './components/AutoFixView'
 import { AddBuildDialog } from './components/AddBuildDialog'
 import { ConnectAccountModal } from './components/ConnectAccountModal'
+import { LauncherSignInModal } from './components/LauncherSignInModal'
 import { SignInModal } from './components/SignInModal'
 import { BuildDrawer } from './components/BuildDrawer'
 import { FriendsView } from './components/FriendsView'
@@ -41,6 +42,7 @@ import {
   canDownloadBuilds,
   cancelDownload,
   checkInstalledBuilds,
+  checkLauncherAuth,
   cleanupBuildStorage,
   closeBuildProcess,
   deleteBuild,
@@ -66,11 +68,13 @@ import {
   subscribeCompanionGameTimeout,
   subscribeDownloadProgress,
   subscribeJoinFailed,
+  stopProviderLauncher,
   subscribeProviderLauncherExit,
   subscribeProviderRuntimeProgress,
   subscribeProviderSessionExpired,
   verifyBuildFiles,
   type CompanionDownloadResult,
+  type LauncherAuthStatus,
   type ProviderLauncherDetection,
   type ProviderRuntimeProgress,
   type ProviderRuntimeStatus,
@@ -171,6 +175,9 @@ function nativeMessage(message: string): string {
 /** One sentence for the download toast about the season's other launcher. */
 function companionDownloadNote(companion?: CompanionDownloadResult): string {
   if (!companion) return ''
+  if (companion.signInRequired) {
+    return `${companion.label} needs a one-time sign-in. Press Play to open it, sign in, and it can then download and play this season online.`
+  }
   if (companion.started) {
     return `${companion.label} is opening in the background so it starts its own prepare/download. Press Play if it needs a one-time sign-in.`
   }
@@ -345,6 +352,14 @@ interface AccountPrompt {
   }
 }
 
+interface LauncherSignInPrompt {
+  providerId: string
+  label: string
+  seasonLabel: string
+  verifiable: boolean
+  signedIn: boolean | null
+}
+
 export default function App() {
   const [builds, setBuilds] = useState<Build[]>(() => {
     const persisted = loadState()
@@ -463,6 +478,20 @@ export default function App() {
   const [accountBusy, setAccountBusy] = useState(false)
   const [accountError, setAccountError] = useState<string | null>(null)
   const accountPromptRef = useRef(false)
+  // The season's own launcher owns its account. This popup opens that
+  // launcher, waits for sign-in, then resumes the same season download.
+  const [launcherSignIn, setLauncherSignIn] = useState<LauncherSignInPrompt | null>(null)
+  const [launcherSignInBusy, setLauncherSignInBusy] = useState(false)
+  const [launcherSignInOpened, setLauncherSignInOpened] = useState(false)
+  const [launcherSignInError, setLauncherSignInError] = useState<string | null>(null)
+  /** one completion path closes the launcher once, even if poll and continue race */
+  const launcherSignInCompletingRef = useRef(false)
+  const launcherConfirmedRef = useRef<Set<string>>(new Set())
+  const [launcherConfirmedIds, setLauncherConfirmedIds] = useState<string[]>([])
+  const [launcherAuthStatuses, setLauncherAuthStatuses] = useState<
+    Record<string, LauncherAuthStatus | null>
+  >({})
+  const [launcherAuthChecked, setLauncherAuthChecked] = useState<string[]>([])
   // Holds the Play that opened the account prompt until the provider session
   // has rendered into app state. The resume then re-enters startBuild instead
   // of bypassing VAULTED's sign-in and managed-build preflight gates.
@@ -1034,6 +1063,41 @@ export default function App() {
       installed: detection?.installed === true,
     }
   }, [activeCompanionProvider, activeCompanionProviderId, launcherDetections])
+
+  const activeLauncherCandidate = Boolean(
+    activeCompanionProvider &&
+      activeCompanionProvider.directLaunch !== true &&
+      (activeCompanionProvider.runtime || activeCompanionProvider.launcher),
+  )
+  const activeLauncherAuth = activeCompanionProviderId
+    ? launcherAuthStatuses[activeCompanionProviderId]
+    : null
+  const launcherAuthPending = Boolean(
+    activeLauncherCandidate &&
+      activeCompanionProviderId &&
+      !launcherAuthChecked.includes(activeCompanionProviderId),
+  )
+  const launcherSignInLabel =
+    activeLauncherAuth?.label ||
+    activeLauncher?.label ||
+    activeRuntime?.label ||
+    activeCompanionProvider?.label ||
+    'Launcher'
+  const launcherSignInRequired = Boolean(
+    activeBuild &&
+      !installed[activeBuild.id] &&
+      activeLauncherCandidate &&
+      (launcherAuthPending ||
+        (activeLauncherAuth?.hasLauncher === true &&
+          activeLauncherAuth.signedIn !== true &&
+          !(activeCompanionProviderId && launcherConfirmedIds.includes(activeCompanionProviderId)) &&
+          !(activeCompanionProviderId && launcherConfirmedRef.current.has(activeCompanionProviderId)))),
+  )
+  const launcherSigningIn = Boolean(
+    launcherSignIn &&
+      launcherSignIn.providerId === activeCompanionProviderId &&
+      (launcherSignInBusy || launcherSignInOpened),
+  )
 
   // Bind the card to the selected companion's gate. Never fall back to another
   // community's gate just because it appears first on the build.
@@ -1686,6 +1750,35 @@ export default function App() {
   }, [native])
 
   const activeRuntimeProviderId = activeCompanionProviderId
+
+  // Read the season launcher's own account before showing Download Season.
+  // The card shows "Sign in" in the download button's place, and flips back to
+  // Download Season as soon as this check (or the sign-in popup) confirms it.
+  useEffect(() => {
+    if (!native || !activeCompanionProviderId || !activeLauncherCandidate) return
+    const providerId = activeCompanionProviderId
+    let cancelled = false
+    void checkLauncherAuth(providerId)
+      .then((status) => {
+        if (!cancelled) {
+          setLauncherAuthStatuses((prev) => ({ ...prev, [providerId]: status ?? null }))
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLauncherAuthStatuses((prev) => ({ ...prev, [providerId]: null }))
+        }
+      })
+      .finally(() => {
+        if (cancelled) return
+        setLauncherAuthChecked((prev) =>
+          prev.includes(providerId) ? prev : [...prev, providerId],
+        )
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [activeCompanionProviderId, activeLauncherCandidate, native])
 
   // The season card needs the companion launcher state before it can enable
   // Download Season. Main owns the installer and returns only safe metadata.
@@ -2804,8 +2897,207 @@ export default function App() {
   const handleInstallSeason = useCallback(() => {
     const build = activeBuild
     if (!build) return
-    requestDownload(build, { explicit: true })
-  }, [activeBuild, requestDownload])
+    const providerId = activeCompanionProvider?.id || build.onlineProvider?.id || ''
+    const provider =
+      activeCompanionProvider ??
+      providerCatalog.find((entry) => entry.id === providerId) ??
+      null
+    // Only an actual launcher app owns a launcher account. Direct-launch
+    // communities have no window to sign in to.
+    const hasLauncher =
+      Boolean(provider) &&
+      provider?.directLaunch !== true &&
+      Boolean(provider?.runtime || provider?.launcher)
+    if (!providerId || !provider || !hasLauncher) {
+      requestDownload(build, { explicit: true })
+      return
+    }
+    void (async () => {
+      try {
+        const status = await checkLauncherAuth(providerId)
+        if (
+          !status?.hasLauncher ||
+          status.signedIn === true ||
+          (status.signedIn === null && launcherConfirmedRef.current.has(providerId))
+        ) {
+          requestDownload(build, { explicit: true })
+          return
+        }
+        setLauncherAuthStatuses((prev) => ({ ...prev, [providerId]: status }))
+        setLauncherSignInOpened(false)
+        setLauncherSignInError(null)
+        setLauncherSignIn({
+          providerId,
+          label: status.label || provider.label || 'Launcher',
+          seasonLabel: build.season.label,
+          verifiable: status.verifiable === true,
+          signedIn: status.signedIn,
+        })
+      } catch {
+        // A launcher-status read must never block a download. If the bridge is
+        // unavailable, keep the existing download path working.
+        requestDownload(build, { explicit: true })
+      }
+    })()
+  }, [activeBuild, activeCompanionProvider, providerCatalog, requestDownload])
+
+  /** Open the launcher account popup from the card's Sign in button. */
+  const openLauncherSignIn = useCallback(() => {
+    const build = activeBuild
+    const providerId = activeCompanionProviderId
+    if (!build || !providerId) return
+    const status = launcherAuthStatuses[providerId]
+    if (status?.signedIn === true) return
+    setLauncherSignInOpened(false)
+    setLauncherSignInError(null)
+    setLauncherSignIn({
+      providerId,
+      label: status?.label || launcherSignInLabel,
+      seasonLabel: build.season.label,
+      verifiable: status?.verifiable === true,
+      signedIn: status?.signedIn ?? null,
+    })
+  }, [
+    activeBuild,
+    activeCompanionProviderId,
+    launcherAuthStatuses,
+    launcherSignInLabel,
+  ])
+
+  const closeLauncherSignIn = useCallback(() => {
+    if (launcherSignInBusy) return
+    setLauncherSignIn(null)
+    setLauncherSignInOpened(false)
+    setLauncherSignInError(null)
+  }, [launcherSignInBusy])
+
+  const openLauncherForSignIn = useCallback(async () => {
+    const prompt = launcherSignIn
+    if (!prompt || !window.arc?.openProviderLauncher) return
+    setLauncherSignInBusy(true)
+    setLauncherSignInError(null)
+    try {
+      const result = await window.arc.openProviderLauncher(prompt.providerId, {
+        name: `${prompt.seasonLabel} sign-in`,
+        signInOnly: true,
+      })
+      if (!result?.opened) {
+        throw new Error(result?.error || `${prompt.label} could not be opened.`)
+      }
+      setLauncherSignInOpened(true)
+    } catch (error) {
+      setLauncherSignInError(
+        error instanceof Error ? error.message : 'The launcher could not be opened.',
+      )
+    } finally {
+      setLauncherSignInBusy(false)
+    }
+  }, [launcherSignIn])
+
+  /**
+   * Finish a launcher sign-in in one place: record the account, close the
+   * launcher window VAULTED opened for it, bring VAULTED back to the front and
+   * restore the Download Season button. The download itself still waits for
+   * the player's click.
+   */
+  const finishLauncherSignIn = useCallback(
+    async (prompt: LauncherSignInPrompt, status: LauncherAuthStatus | null, opened: boolean) => {
+      if (launcherSignInCompletingRef.current) return
+      launcherSignInCompletingRef.current = true
+      setLauncherSignInBusy(true)
+      setLauncherSignInError(null)
+      try {
+        if (status) {
+          setLauncherAuthStatuses((prev) => ({ ...prev, [prompt.providerId]: status }))
+        } else if (prompt.signedIn === null) {
+          // No common token store exists for this launcher. Remember the player's
+          // confirmation for this session instead of pretending VAULTED verified it.
+          launcherConfirmedRef.current.add(prompt.providerId)
+          setLauncherConfirmedIds((prev) =>
+            prev.includes(prompt.providerId) ? prev : [...prev, prompt.providerId],
+          )
+        }
+        if (opened) {
+          // Close only the season launcher VAULTED opened for sign-in. It cannot
+          // reach any game process because this path never pressed Play.
+          try {
+            await stopProviderLauncher(prompt.providerId)
+          } catch {
+            /* close is best-effort; the account is still confirmed */
+          }
+        }
+        setLauncherSignIn(null)
+        setLauncherSignInOpened(false)
+        try {
+          await window.arc?.window?.focus?.()
+        } catch {
+          /* focus is best-effort */
+        }
+      } finally {
+        launcherSignInCompletingRef.current = false
+        setLauncherSignInBusy(false)
+      }
+    },
+    [],
+  )
+
+  const continueLauncherSignIn = useCallback(async () => {
+    const prompt = launcherSignIn
+    if (!prompt) return
+    setLauncherSignInBusy(true)
+    setLauncherSignInError(null)
+    try {
+      let status: LauncherAuthStatus | null = null
+      if (prompt.verifiable) {
+        status = await checkLauncherAuth(prompt.providerId)
+        if (status?.signedIn !== true) {
+          setLauncherSignInError(
+            `Still signed out of ${prompt.label}. Finish signing in there, then press continue again.`,
+          )
+          return
+        }
+      }
+      await finishLauncherSignIn(prompt, status, launcherSignInOpened)
+    } catch (error) {
+      setLauncherSignInError(
+        error instanceof Error ? error.message : 'The launcher sign-in could not be checked.',
+      )
+    } finally {
+      setLauncherSignInBusy(false)
+    }
+  }, [finishLauncherSignIn, launcherSignIn, launcherSignInOpened])
+
+  // Eon writes its saved account to Settings.ini as soon as the login finishes.
+  // Watch that file while its window is open so the player does not have to
+  // return to VAULTED and press continue: the launcher closes itself and
+  // VAULTED comes back automatically. Other launchers have no readable token,
+  // so they keep the explicit confirmation button.
+  useEffect(() => {
+    const prompt = launcherSignIn
+    if (!prompt?.verifiable || !launcherSignInOpened || launcherSignInBusy) return
+    let cancelled = false
+    let timer = 0
+    const poll = async () => {
+      if (cancelled || launcherSignInCompletingRef.current) return
+      let status: LauncherAuthStatus | null = null
+      try {
+        status = await checkLauncherAuth(prompt.providerId)
+      } catch {
+        /* keep polling while the launcher window is open */
+      }
+      if (cancelled) return
+      if (status?.signedIn === true) {
+        void finishLauncherSignIn(prompt, status, true)
+        return
+      }
+      timer = window.setTimeout(poll, 2000)
+    }
+    timer = window.setTimeout(poll, 1500)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [finishLauncherSignIn, launcherSignIn, launcherSignInBusy, launcherSignInOpened])
 
   /** One-click repair to the exact live provider build, then Play. */
   const handleUpdateLiveBuild = useCallback(() => {
@@ -5423,6 +5715,11 @@ export default function App() {
                 runtime={activeRuntime}
                 onInstallRuntime={() => void handleInstallRuntime()}
                 onInstallSeason={handleInstallSeason}
+                launcherSignInRequired={launcherSignInRequired}
+                launcherSigningIn={launcherSigningIn}
+                launcherAuthChecking={launcherAuthPending}
+                launcherSignInLabel={launcherSignInLabel}
+                onLauncherSignIn={openLauncherSignIn}
                 accountAuthRequired={Boolean(
                   activeBuild && installed[activeBuild.id] && activeAccountBackend,
                 )}
@@ -5541,6 +5838,20 @@ export default function App() {
         error={accountError}
         onClose={handleAccountCancel}
         onContinue={() => void handleAccountContinue()}
+      />
+
+      <LauncherSignInModal
+        open={Boolean(launcherSignIn)}
+        seasonLabel={launcherSignIn?.seasonLabel ?? ''}
+        launcherLabel={launcherSignIn?.label ?? 'launcher'}
+        verifiable={launcherSignIn?.verifiable === true}
+        signedIn={launcherSignIn?.signedIn ?? null}
+        busy={launcherSignInBusy}
+        opened={launcherSignInOpened}
+        error={launcherSignInError}
+        onOpen={() => void openLauncherForSignIn()}
+        onContinue={() => void continueLauncherSignIn()}
+        onClose={closeLauncherSignIn}
       />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />

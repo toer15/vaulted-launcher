@@ -70,6 +70,8 @@ export interface LaunchPayload {
 export interface WindowControls {
   minimize(): Promise<void>
   toggleMaximize(): Promise<void>
+  /** bring VAULTED back after a launcher sign-in finishes */
+  focus?(): Promise<boolean>
   close(): Promise<void>
 }
 
@@ -194,6 +196,18 @@ export interface DownloadResult {
   companion?: CompanionDownloadResult
 }
 
+/** Launcher-owned account state, checked before a season download. */
+export interface LauncherAuthStatus {
+  providerId: string
+  label: string
+  /** the season hands off to its own launcher app */
+  hasLauncher: boolean
+  /** true/false when VAULTED can read the launcher's saved session; null otherwise */
+  signedIn: boolean | null
+  /** false when the launcher has no readable token and the player confirms */
+  verifiable: boolean
+}
+
 /** Result of opening a season's other launcher after its build was installed. */
 export interface CompanionDownloadResult {
   providerId: string
@@ -205,6 +219,8 @@ export interface CompanionDownloadResult {
   /** this handoff installed or imported the launcher itself */
   installedNow?: boolean
   alreadyRunning?: boolean
+  /** the companion launcher opened visibly because its own account sign-in gates its download */
+  signInRequired?: boolean
   pid?: number | null
   reason?:
     | 'launcher-missing'
@@ -441,6 +457,8 @@ export interface LauncherBridge {
   providerCatalog?(): Promise<GlobalBackend[]>
   /** Detect an installed community launcher without downloading anything. */
   providerLauncherDetect?(providerId: string): Promise<ProviderLauncherDetection | null>
+  /** Whether the season's own launcher already has a saved account session. */
+  launcherAuthStatus?(providerId: string): Promise<LauncherAuthStatus | null>
   /** Verify the public invite for a Discord-gated community. */
   discordGateVerify?(providerId: string): Promise<{
     ok: boolean
@@ -507,6 +525,8 @@ export interface LauncherBridge {
       name?: string
       folder?: string
       executable?: string
+      /** open the launcher for its own account sign-in, not a game launch */
+      signInOnly?: boolean
     },
   ): Promise<{
     opened: boolean
@@ -517,6 +537,8 @@ export interface LauncherBridge {
     version?: string
     pid?: number | null
     tracked?: boolean
+    /** the launcher window is visible for a one-time sign-in */
+    visible?: boolean
     /** main is starting the launcher's own game and will report the real PID */
     waitingForGame?: boolean
     /** main is selecting this exact build and pressing the launcher's Play */
@@ -900,6 +922,16 @@ export async function detectProviderLauncher(
   if (!window.arc?.providerLauncherDetect) return null
   try {
     return await window.arc.providerLauncherDetect(providerId)
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+/** Ask main whether the season's launcher already has a saved account. */
+export async function checkLauncherAuth(providerId: string): Promise<LauncherAuthStatus | null> {
+  if (!window.arc?.launcherAuthStatus) return null
+  try {
+    return await window.arc.launcherAuthStatus(providerId)
   } catch (error) {
     throw cleanIpcError(error)
   }

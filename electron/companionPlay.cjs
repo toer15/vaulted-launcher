@@ -620,10 +620,51 @@ function eonSettingsPath() {
   return path.join(base, 'EonLauncherV2', 'Settings.ini')
 }
 
+/** Eon's INI parser unescapes both backslashes and \\n. */
+function unescapeEonValue(value) {
+  return String(value || '').replace(/\\(\\|n)/g, (_match, escaped) =>
+    escaped === 'n' ? '\n' : '\\',
+  )
+}
+
+/** Read the settings Eon will load on its next start. */
+function readEonConfig() {
+  const file = eonSettingsPath()
+  const empty = { file, exists: false, folder: '', signedIn: false }
+  if (!file) return empty
+  let text = ''
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch {
+    return empty
+  }
+  let section = ''
+  let folder = ''
+  let token = ''
+  for (const line of text.split(/\r?\n/)) {
+    const header = line.match(/^\s*\[([^\]]+)\]\s*$/)
+    if (header) {
+      section = header[1].trim().toLowerCase()
+      continue
+    }
+    const value = line.match(/^\s*([^=]+?)\s*=\s*(.*)$/)
+    if (!value) continue
+    const key = value[1].trim().toLowerCase()
+    if (section === 'game' && key === 'fortnitepath') {
+      folder = unescapeEonValue(value[2].trim())
+    }
+    if (section === 'credentials' && key === 'launchertoken') {
+      token = unescapeEonValue(value[2].trim())
+    }
+  }
+  return { file, exists: true, folder, signedIn: Boolean(token) }
+}
+
 /** Eon stores its game path in Settings.ini; preserve every other setting. */
 function prepareEonConfig(folder) {
-  const file = eonSettingsPath()
-  if (!file) return false
+  const before = readEonConfig()
+  const file = before.file
+  if (!file) return { ok: false, changed: false, ...before }
   let text = ''
   try {
     text = fs.readFileSync(file, 'utf8')
@@ -643,7 +684,12 @@ function prepareEonConfig(folder) {
       '',
     ].join('\r\n')
   }
-  const escaped = String(path.resolve(folder)).replace(/\r?\n/g, '')
+  // Match Eon's own serializer. A raw path containing a backslash followed by
+  // n (for example C:\\new\\build) would otherwise deserialize as a newline.
+  const escaped = String(path.resolve(folder))
+    .replace(/\\/g, '\\\\')
+    .replace(/\r/g, '')
+    .replace(/\n/g, '\\n')
   let replaced = false
   const lines = text.split(/\r?\n/)
   const output = []
@@ -675,40 +721,18 @@ function prepareEonConfig(folder) {
     const temp = `${file}.vaulted.tmp`
     fs.writeFileSync(temp, output.join('\r\n'))
     fs.renameSync(temp, file)
-    return true
+    const after = readEonConfig()
+    return {
+      ok: true,
+      changed:
+        normalizePath(before.folder) !== normalizePath(after.folder) || !before.exists,
+      previousFolder: before.folder,
+      folder: after.folder,
+      signedIn: after.signedIn,
+    }
   } catch {
-    return false
+    return { ok: false, changed: false, ...before }
   }
-}
-
-async function playEon({ page, folder, build }) {
-  // Eon's renderer calls its own Tauri command with the selected game path.
-  // Using that command is the same action as its Play button, but it cannot
-  // depend on the window being visible or on a localized button label.
-  prepareEonConfig(folder)
-  const ready = await waitForPageValue(
-    page,
-    `Boolean(window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function')`,
-    10_000,
-  )
-  if (!ready) return { status: 'unsupported', detail: 'eon-not-ready' }
-  const result = await evaluate(
-    page,
-    `(async () => {
-      try {
-        return JSON.stringify(await window.__TAURI_INTERNALS__.invoke('LaunchGame', {
-          Path: ${JSON.stringify(folder)},
-        }));
-      } catch (error) {
-        return JSON.stringify({ error: String(error && error.message || error) });
-      }
-    })()`,
-  )
-  if (result?.Launched === true) return { status: 'played', build }
-  if (result?.Cancelled === true) {
-    return { status: 'needs-sign-in', detail: 'eon-cancelled' }
-  }
-  return { status: 'failed', detail: result?.error || 'eon-launch' }
 }
 
 /* ---------------------------------------------------------- generic UI ---- */
@@ -810,24 +834,44 @@ async function clickNativeLaunchButton(pid, options = {}) {
   if (process.platform !== 'win32') return { clicked: false, reason: 'unsupported' }
   const safePid = Math.max(1, Math.floor(Number(pid) || 0))
   const pattern = String(options.pattern || 'launch|play|start').replace(/'/g, "''")
+  // Eon hosts its WebView content in a separate accessibility window. Searching
+  // only the first top-level XAML window therefore sees the startup splash and
+  // never its Sign In / Play buttons. Filter the whole desktop tree by PID so
+  // WinUI, WebView2 and Chromium accessibility content are all included.
   const script = `
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+$rootPid = ${safePid}
+# WebView2 renders Eon's page in child msedgewebview2 processes. Their UIA
+# elements have the renderer PID, not Eon's PID, so include every descendant.
+$allowed = New-Object 'System.Collections.Generic.HashSet[int]'
+[void]$allowed.Add($rootPid)
+try {
+  $procs = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId
+  $changed = $true
+  while ($changed) {
+    $changed = $false
+    foreach ($proc in $procs) {
+      if ($allowed.Contains([int]$proc.ParentProcessId) -and -not $allowed.Contains([int]$proc.ProcessId)) {
+        [void]$allowed.Add([int]$proc.ProcessId)
+        $changed = $true
+      }
+    }
+  }
+} catch {
+  # PID-only fallback still works for native WinUI buttons.
+}
 $root = [System.Windows.Automation.AutomationElement]::RootElement
-$condition = New-Object System.Windows.Automation.PropertyCondition(
-  [System.Windows.Automation.AutomationElement]::ProcessIdProperty, ${safePid})
-$window = $root.FindFirst([System.Windows.Automation.TreeScope]::Children, $condition)
-if (-not $window) { 'NO_WINDOW'; exit 2 }
-$all = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
-  [System.Windows.Automation.Condition]::TrueCondition)
+$all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
 $signedOut = $false
 foreach ($element in $all) {
+  if (-not $allowed.Contains([int]$element.Current.ProcessId)) { continue }
   $name = [string]$element.Current.Name
   $type = [string]$element.Current.ControlType.ProgrammaticName
-  if ($type -eq 'ControlType.Button' -and $name -match 'sign in|log in|login|continue with') {
+  if ($type -eq 'ControlType.Button' -and $name -match '(?i)^(sign in|signin|log in|login|continue with)') {
     $signedOut = $true
   }
-  if ($type -eq 'ControlType.Button' -and $name -match '${pattern}') {
+  if ($type -eq 'ControlType.Button' -and $name -match '(?i)^(launch|play|start)(\\s|$)') {
     $invoke = $element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
     if ($invoke) { $invoke.Invoke(); "CLICKED:$name"; exit 0 }
   }
@@ -868,16 +912,19 @@ async function playCompanionBuild(options = {}) {
   if (adapter === 'hydro') {
     prepareHydroLibrary(folder, build)
   }
-  const port = Number(options.port) || 0
-  if (!port) {
-    // A launcher already running outside VAULTED has no DevTools endpoint.
-    // Native Play is still safe for a single-build WinUI app; everything else
-    // needs the player to see the launcher once.
-    if (COMPANION_PLAY_ADAPTERS[providerId] === 'eon') {
-      return { status: 'native', detail: 'eon-no-port' }
+  // Eon disables WebView2 DevTools in its WinUI host, so there is no page to
+  // query even when a port is allocated. Its Settings.ini is the exact-folder
+  // handoff and its own Play button is reachable through UI Automation.
+  if (adapter === 'eon') {
+    const config = prepareEonConfig(folder)
+    return {
+      status: 'native',
+      detail: config.signedIn ? 'eon-ready' : 'eon-sign-in',
+      signedIn: config.signedIn,
     }
-    return { status: 'unsupported', detail: 'no-bridge' }
   }
+  const port = Number(options.port) || 0
+  if (!port) return { status: 'unsupported', detail: 'no-bridge' }
   const page = await waitForLauncherPage(port, Number(options.pageTimeoutMs) || 12_000)
   if (!page) return { status: 'unsupported', detail: 'launcher-not-reachable' }
   const context = {
@@ -897,7 +944,6 @@ async function playCompanionBuild(options = {}) {
     if (adapter === 'omen') return await playOmen(context)
     if (adapter === 'hestia') return await playHestia(context)
     if (adapter === 'retrac') return await playRetrac(context)
-    if (adapter === 'eon') return await playEon(context)
     return await playGeneric(context)
   } catch (error) {
     return {
@@ -915,5 +961,6 @@ module.exports = {
   playCompanionBuild,
   prepareEonConfig,
   prepareHydroLibrary,
+  readEonConfig,
   resolveGameFolder,
 }

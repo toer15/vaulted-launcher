@@ -200,6 +200,29 @@ function testLaunchWiring() {
     'Stop must not close only the launcher and leave Fortnite running',
   )
 
+  // Closing VAULTED is the same stop for every active launcher-backed season.
+  const windowCloseAt = MAIN.indexOf("mainWindow.on('close'")
+  assert.ok(windowCloseAt > 0, 'the VAULTED window close handler is missing')
+  const windowCloseBody = MAIN.slice(windowCloseAt, windowCloseAt + 900)
+  assert.match(
+    windowCloseBody,
+    /hasActiveGameSession\(\)[\s\S]*stopActiveGameSessionsForQuit\(\)/,
+    'closing VAULTED must stop an active game session before the window goes away',
+  )
+  const quitStopAt = MAIN.indexOf('async function stopActiveGameSessionsForQuit()')
+  assert.ok(quitStopAt > 0, 'the window-close session teardown is missing')
+  const quitStopBody = MAIN.slice(quitStopAt, quitStopAt + 2600)
+  assert.match(
+    quitStopBody,
+    /killFortniteProcesses\(\)[\s\S]*closeCompanionLauncherForProvider\(providerId\)/,
+    'window close must stop the game and every companion launcher',
+  )
+  assert.match(
+    quitStopBody,
+    /hasTrackedGameProcess\(\)/,
+    'a launcher sign-in window alone must not kill an unrelated Fortnite client',
+  )
+
   // No timer or startup timeout may close a companion launcher.
   assert.equal(
     /setTimeout\([\s\S]{0,200}closeCompanionLauncherForProvider/.test(MAIN),
@@ -961,7 +984,11 @@ function testOnlineRoutes() {
     false,
     'an external launcher must be verified alive instead of assumed started',
   )
-  assert.match(handoff, /startVisibleLauncher\(launcherCandidates, args, repairRuntime, launcherNames\)/)
+  assert.match(
+    handoff,
+    /startVisibleLauncher\(\s*launcherCandidates,\s*args,\s*repairRuntime,\s*launcherNames,\s*preferredPid,?\s*\)/,
+    'the runtime handoff must pass the already-running Eon PID so Play adopts it',
+  )
   assert.match(
     handoff,
     /const launcherCandidates = installedExecutables\(runtimeMetadata\)/,
@@ -1461,8 +1488,13 @@ function testInstallSeasonRequiresExplicitClick() {
   // of sending the player to a browser.
   assert.match(
     app,
-    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,400}?requestDownload\(build, \{ explicit: true \}\)/,
+    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,4000}?requestDownload\(build, \{ explicit: true \}\)/,
     'Install Season must be the only explicit download entry point',
+  )
+  assert.match(
+    app,
+    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,4000}?checkLauncherAuth\(providerId\)/,
+    'Install Season must check the season launcher sign-in before downloading',
   )
   assert.equal(
     /handleInstallSeason[\s\S]{0,600}openDiscordInvite/.test(app),
@@ -1481,6 +1513,58 @@ function testInstallSeasonRequiresExplicitClick() {
     /if \(onInstallSeason\) onInstallSeason\(\)/,
     'the Install Season button must call the explicit handler',
   )
+
+  // The download slot belongs to the season launcher account until it is
+  // signed in. Only then does Download Season come back.
+  const card = read('src/components/ActiveBuildCard.tsx')
+  assert.match(
+    card,
+    /launcherSignInRequired && !requiresSignIn[\s\S]{0,1200}onLauncherSignIn/,
+    'the download-button slot must offer launcher sign-in first',
+  )
+  assert.match(card, /Signing in…/, 'the slot must say Signing in while the popup runs')
+  assert.match(
+    card,
+    /runtimeRequired && !runtimeReady \? null : launcherSignInRequired \? null/,
+    'Download Season must stay hidden until launcher sign-in succeeds',
+  )
+  assert.match(
+    app,
+    /onLauncherSignIn=\{openLauncherSignIn\}/,
+    'the card sign-in action must open the launcher popup',
+  )
+  assert.equal(
+    /launcherDownloadRef/.test(app),
+    false,
+    'finishing sign-in must return to Download Season, not auto-start the download',
+  )
+  const modal = read('src/components/LauncherSignInModal.tsx')
+  assert.match(
+    modal,
+    /opened \? `Sign in to \$\{launcherLabel\} again` : `Sign in to \$\{launcherLabel\}`/,
+    'the popup action must say Sign in with the launcher name',
+  )
+  assert.doesNotMatch(modal, /Open \$\{launcherLabel\}/, 'the popup must not offer a plain Open action')
+
+  // A finished sign-in closes the launcher VAULTED opened and returns focus to
+  // VAULTED; a readable launcher session is detected without pressing continue.
+  assert.match(
+    app,
+    /if \(opened\) \{[\s\S]{0,300}?await stopProviderLauncher\(prompt\.providerId\)/,
+    'a finished sign-in must close the launcher it opened',
+  )
+  assert.match(
+    app,
+    /await window\.arc\?\.window\?\.focus\?\.\(\)/,
+    'VAULTED must come back to the front after signing in',
+  )
+  assert.match(
+    app,
+    /status\?\.signedIn === true[\s\S]{0,200}finishLauncherSignIn\(prompt, status, true\)/,
+    'a readable launcher session must complete sign-in automatically',
+  )
+  assert.match(MAIN, /ipcMain\.handle\('win:focus'/, 'the focus IPC is missing')
+  assert.match(MAIN, /AppActivate\(\$\{process\.pid\}\)/, 'Windows focus must activate the real window')
 }
 
 function testCompanionDownloadHandoff() {
@@ -1573,8 +1657,8 @@ function testCompanionDownloadHandoff() {
   )
   assert.match(
     MAIN,
-    /const prepared = companionPrepareSessions\.get\(id\)/,
-    'Play must see the background prepare session',
+    /const prepared =\s*(?:id === 'eon' \? null :\s*)?companionPrepareSessions\.get\(id\)/,
+    'Play must see the background prepare session (Eon uses its native runtime path)',
   )
   assert.match(
     MAIN,

@@ -316,7 +316,7 @@ assert.match(
 )
 assert.match(
   launchSource,
-  /const handleInstallSeason = useCallback\(\(\) => \{\r?\n\s*const build = activeBuild\r?\n\s*if \(!build\) return\r?\n\s*requestDownload\(build, \{ explicit: true \}\)/,
+  /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,4000}?requestDownload\(build, \{ explicit: true \}\)/,
   'Download must start VAULTED own download, never a browser handoff',
 )
 assert.equal(

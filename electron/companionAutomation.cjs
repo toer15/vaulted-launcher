@@ -158,6 +158,36 @@ async function hideCompanionLauncher(pid) {
 }
 
 /**
+ * Make a launcher window rendered but keep it off every monitor. WebView2 builds
+ * no accessibility tree for a hidden window, but Eon's only launch API is its
+ * Play button in that tree. Showing it off-screen lets UI Automation find and
+ * invoke the button without the player seeing a flash of the launcher.
+ */
+async function showCompanionLauncherOffscreen(pid, options = {}) {
+  if (process.platform !== 'win32') return false
+  const safePid = Math.max(1, Math.floor(Number(pid) || 0))
+  const attempts = Number.isFinite(options.attempts) ? options.attempts : 8
+  const waitMs = Number.isFinite(options.waitMs) ? options.waitMs : 350
+  const script = `
+${WINDOW_TYPES}
+$p = Get-Process -Id ${safePid} -ErrorAction SilentlyContinue
+if (-not $p) { 'NO_PROCESS'; exit 1 }
+$top = Find-VaultedTopWindow ${safePid}
+if ($top -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
+[void][VaultedHiddenWindow]::ShowWindow($top, 4)
+[void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, -20000, -20000, 1200, 800, 0x0010 -bor 0x0040)
+'SHOWN_OFFSCREEN'
+`
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const { output } = await runPowerShell(script, 10_000)
+    if (output === 'SHOWN_OFFSCREEN') return true
+    if (output === 'NO_PROCESS') return false
+    await delay(waitMs)
+  }
+  return false
+}
+
+/**
  * Bring a launcher window back on screen. A community launcher needs its own
  * sign-in/Play UI the first time, and an earlier hidden session can leave the
  * saved window position off every monitor, so show and reposition it.
@@ -195,6 +225,7 @@ module.exports = {
   clickCompanionPlayButton,
   hideCompanionLauncher,
   showCompanionLauncher,
+  showCompanionLauncherOffscreen,
   delay,
   runPowerShell,
 }

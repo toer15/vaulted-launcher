@@ -45,6 +45,7 @@ const {
   clickCompanionPlayButton,
   hideCompanionLauncher,
   showCompanionLauncher,
+  showCompanionLauncherOffscreen,
 } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { detectBuildVersion } = require('./buildVersion.cjs')
@@ -77,6 +78,7 @@ const {
   clickNativeLaunchButton,
   playCompanionBuild,
   prepareEonConfig,
+  readEonConfig,
 } = require('./companionPlay.cjs')
 const rangeDownload = require('./rangeDownloader.cjs')
 const {
@@ -317,6 +319,28 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
     if (SMOKE) runSmokeTest()
+  })
+
+  // Closing VAULTED is a stop for every active season session. The Stop button
+  // already closes the game, launcher and injector; the window close must do the
+  // same instead of leaving Fortnite running after its launcher disappears.
+  let sessionCloseInFlight = false
+  let sessionCloseFinished = false
+  mainWindow.on('close', (event) => {
+    if (sessionCloseFinished) return
+    if (sessionCloseInFlight) {
+      event.preventDefault()
+      return
+    }
+    if (!hasActiveGameSession()) return
+    event.preventDefault()
+    sessionCloseInFlight = true
+    const win = mainWindow
+    void stopActiveGameSessionsForQuit().finally(() => {
+      sessionCloseInFlight = false
+      sessionCloseFinished = true
+      if (win && !win.isDestroyed()) win.close()
+    })
   })
 
   mainWindow.on('closed', () => {
@@ -2953,8 +2977,10 @@ function beginCompanionAutoPlay({
   // legitimate sign-in reveal is not undone one second later. A successful
   // auto-Play hides the launcher again explicitly.
   stopCompanionWindowHider(id)
-  void hideCompanionLauncher(pid)
   void (async () => {
+    // Await the initial hide before a sign-in reveal can run; otherwise the
+    // hide PowerShell can land after the reveal and leave Eon invisible.
+    await hideCompanionLauncher(pid)
     let revealed = false
     let importAttempts = 0
     const deadline = Date.now() + COMPANION_PLAY_TIMEOUT_MS
@@ -2993,6 +3019,22 @@ function beginCompanionAutoPlay({
         continue
       }
       if (result?.status === 'native') {
+        // Eon's own Settings.ini already says whether it has an account. Show
+        // the one-time sign-in immediately instead of waiting for the WebView's
+        // accessibility tree to finish rendering on a fresh launch.
+        if (id === 'eon' && result.signedIn === false) {
+          // Keep the sign-in window on screen on every pass. A late in-flight
+          // hide (early spawn hider or download hider) can land just after the
+          // first reveal; re-showing each pass makes that harmless. Re-entering
+          // the off-screen UIA click here would hide it again instead.
+          revealed =
+            (await showCompanionLauncher(pid, { attempts: 8, waitMs: 500 })) || revealed
+          await delay(2_500)
+          continue
+        }
+        // Eon builds no UI Automation tree while hidden, so keep the window
+        // off-screen and shown for the UIA Play click; the player sees nothing.
+        if (id === 'eon' && !revealed) await showCompanionLauncherOffscreen(pid)
         const click = await clickNativeLaunchButton(pid, { pattern: 'launch|play|start' })
         if (click.clicked) {
           await hideCompanionLauncher(pid)
@@ -3271,6 +3313,11 @@ async function startCompanionLauncher(providerId, launchOptions = {}) {
   if (isBannedProvider(id)) return null
   const metadata = companionLauncherMetadata(id)
   const executable = metadata ? installedExecutable(metadata) : ''
+  const safeFolder =
+    typeof launchOptions?.folder === 'string' ? launchOptions.folder.trim() : ''
+  if (id === 'eon' && safeFolder) {
+    await configureEonForFolder(safeFolder, providerWindowNames(metadata))
+  }
   const existing = providerLaunchers.get(id)
   if (existing) {
     startCompanionSessionMonitor(id, executable)
@@ -3457,9 +3504,14 @@ async function startCompanionDownload(providerId, folder, options = {}) {
     }
   }
 
-  // Eon reads FortnitePath only while booting. Point it at VAULTED's exact
-  // download before the launcher process starts, not after it is already up.
-  if (id === 'eon' && safeFolder) prepareEonConfig(safeFolder)
+  const launcherNames = providerWindowNames(runtimeMetadata || profile.launcher)
+  // Eon reads FortnitePath only while booting and holds it in memory. Restart
+  // an already-running Eon when the exact downloaded folder changed; otherwise
+  // leave its session/download alone and reuse the same window.
+  const eonSetup =
+    id === 'eon' && safeFolder
+      ? await configureEonForFolder(safeFolder, launcherNames)
+      : null
 
   const existing = providerLaunchers.get(id)
   if (existing?.pid) {
@@ -3475,9 +3527,52 @@ async function startCompanionDownload(providerId, folder, options = {}) {
         runtimeMetadata.manifestIds?.[existingVersion] ||
         Object.values(runtimeMetadata.manifestIds || {})[0] ||
         '',
-      launcherNames: providerWindowNames(runtimeMetadata || profile.launcher),
+      launcherNames,
     })
-    return { ...result, started: true, alreadyRunning: true, pid: existing.pid }
+    startCompanionWindowHider(id, existing.pid)
+    const needsSignIn = id === 'eon' && eonSetup?.signedIn === false
+    return {
+      ...result,
+      started: true,
+      alreadyRunning: true,
+      pid: existing.pid,
+      ...(needsSignIn ? { signInRequired: true } : {}),
+    }
+  }
+
+  // Eon may have been opened by the player before VAULTED. It is a
+  // single-instance WinUI app, so spawning again would only exit; adopt the
+  // running process and reuse the Settings.ini it already loaded.
+  if (id === 'eon' && !existing?.pid) {
+    const running = await processPidsByImage(launcherNames)
+    if (running.length > 0) {
+      const pid = running[0]
+      registerProviderLauncher(id, { pid }, { bridgePort: 0, folder: safeFolder })
+      startCompanionSessionMonitor(id, executable)
+      const existingVersion =
+        Object.keys(runtimeMetadata.manifestIds || {})[0] || runtimeMetadata.version || ''
+      companionPrepareSessions.set(id, {
+        executable,
+        pid,
+        port: 0,
+        folder: safeFolder,
+        version: existingVersion,
+        manifestId:
+          runtimeMetadata.manifestIds?.[existingVersion] ||
+          Object.values(runtimeMetadata.manifestIds || {})[0] ||
+          '',
+        launcherNames,
+      })
+      startCompanionWindowHider(id, pid)
+      const needsSignIn = eonSetup?.signedIn === false
+      return {
+        ...result,
+        started: true,
+        alreadyRunning: true,
+        pid,
+        ...(needsSignIn ? { signInRequired: true } : {}),
+      }
+    }
   }
 
   report({ phase: 'launcher' })
@@ -3489,7 +3584,6 @@ async function startCompanionDownload(providerId, folder, options = {}) {
       Object.keys(runtimeMetadata.manifestIds || {})[0] || runtimeMetadata.version || ''
     const args = launchArguments(runtimeMetadata, prepVersion) || []
     const bridgePort = await allocateLauncherDebugPort()
-    const launcherNames = providerWindowNames(runtimeMetadata || profile.launcher)
     const child = spawn(
       executable,
       bridgePort ? [...args, `--remote-debugging-port=${bridgePort}`] : args,
@@ -3525,7 +3619,13 @@ async function startCompanionDownload(providerId, folder, options = {}) {
         '',
       launcherNames,
     })
-    return { ...result, started: true, pid: child.pid ?? null }
+    const needsSignIn = id === 'eon' && eonSetup?.signedIn === false
+    return {
+      ...result,
+      started: true,
+      pid: child.pid ?? null,
+      ...(needsSignIn ? { signInRequired: true } : {}),
+    }
   } catch (error) {
     return {
       ...result,
@@ -3614,6 +3714,30 @@ function providerWindowNames(metadata) {
     (name) => typeof name === 'string' && name.trim(),
   )
   return [...new Set(names.map((name) => name.trim()))]
+}
+
+function normalizedFolder(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\//g, '\\')
+    .replace(/\\+$/, '')
+    .toLowerCase()
+}
+
+/**
+ * Eon reads Settings.ini only while booting. If it is already running, a path
+ * written now is invisible to that process, so restart it before asking its
+ * Play button to use the folder. A running Eon with the exact same path is
+ * left alone: its signed-in session and current download stay intact.
+ */
+async function configureEonForFolder(folder, launcherNames = []) {
+  const target = normalizedFolder(path.resolve(folder))
+  const before = readEonConfig()
+  const running = launcherNames.length > 0 ? await processPidsByImage(launcherNames) : []
+  const restart = running.length > 0 && normalizedFolder(before.folder) !== target
+  if (restart) await closeCompanionLauncherForProvider('eon')
+  const config = prepareEonConfig(folder)
+  return { ...config, restart, running: running.length > 0, pids: running }
 }
 
 /**
@@ -4007,6 +4131,33 @@ function providerLauncherStatus(providerId) {
   }
 }
 
+/**
+ * Launcher-owned account state before a season download. Only Eon exposes a
+ * readable saved session (Settings.ini); other launchers have no common token
+ * store, so they stay `null` and the renderer asks the player to confirm.
+ */
+function launcherAuthStatus(providerId) {
+  const id = String(providerId || '').trim().toLowerCase()
+  const provider = providerCatalog().find((entry) => entry.id === id)
+  if (!provider) return null
+  const label = provider.runtime?.label || provider.launcher?.label || provider.label || id
+  const hasLauncher = provider.directLaunch !== true && Boolean(provider.runtime || provider.launcher)
+  if (!hasLauncher) {
+    return { providerId: id, label, hasLauncher: false, signedIn: null, verifiable: false }
+  }
+  if (id === 'eon') {
+    const config = readEonConfig()
+    return {
+      providerId: id,
+      label,
+      hasLauncher: true,
+      signedIn: config.signedIn === true,
+      verifiable: true,
+    }
+  }
+  return { providerId: id, label, hasLauncher: true, signedIn: null, verifiable: false }
+}
+
 /** Public runtime state for the season card; no URLs or filesystem internals. */
 function providerRuntimeStatus(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
@@ -4036,8 +4187,12 @@ function processPidsByImage(names) {
         `Get-Process -Name ${clean.map((name) => `'${name}'`).join(',')} -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }`,
       ],
       { windowsHide: true, timeout: 8_000 },
-      (error, stdout) => {
-        if (error || !stdout) return resolve([])
+      (_error, stdout) => {
+        // PowerShell exits 1 when one of several requested process names is
+        // absent, but still prints the PIDs that do exist. Discarding stdout on
+        // that non-zero exit made a running Eon look absent and spawned a
+        // second copy. Parse the output regardless of the exit code.
+        if (!stdout) return resolve([])
         resolve(
           String(stdout)
             .split(/\r?\n/)
@@ -4081,6 +4236,99 @@ async function killFortniteProcesses() {
     for (const pid of remaining) await killProcessTree(pid)
   }
   return found
+}
+
+function activeSessionProviderIds() {
+  return [
+    ...new Set([
+      ...providerLaunchers.keys(),
+      ...companionMonitors.keys(),
+      ...companionGameWaits.keys(),
+    ]),
+  ]
+}
+
+/** True when VAULTED owns a live session or companion launcher. */
+function hasActiveGameSession() {
+  return running.size > 0 || activeSessionProviderIds().length > 0 || Boolean(gameServerState)
+}
+
+/**
+ * Only a session that actually reached a game process may sweep Fortnite on
+ * quit. An open launcher sign-in window is closed, but an unrelated official
+ * Fortnite client the player has open is left alone.
+ */
+function hasTrackedGameProcess() {
+  // A local launch or a pending launcher Play owns the game even before its
+  // process is visible. A sign-in-only launcher window does not: the monitor
+  // can see an unrelated official Fortnite and must not claim it.
+  if (running.size > 0 || companionGameWaits.size > 0) return true
+  for (const monitor of companionMonitors.values()) {
+    if (Number.isInteger(monitor?.gamePid) && processAlive(monitor.gamePid)) return true
+  }
+  return false
+}
+
+/**
+ * Close VAULTED's active game, companion launchers and helpers. This is the
+ * window-close half of the Stop button; it never touches a provider-owned
+ * account or files.
+ */
+async function stopActiveGameSessionsForQuit() {
+  const hadGameProcess = hasTrackedGameProcess()
+  const providerIds = activeSessionProviderIds()
+  const entries = [...running.entries()]
+  running.clear()
+
+  const closeJobs = []
+  for (const [id, entry] of entries) {
+    stopJoinWatchdog(id)
+    expectedBuildCloses.add(id)
+    for (const pid of [entry?.pid, entry?.injectorPid, entry?.companionLauncherPid]) {
+      if (!Number.isInteger(pid) || pid <= 0) continue
+      closeJobs.push(killProcessTree(pid).catch(() => {}))
+    }
+    try {
+      void entry?.eraBridge?.close()
+    } catch {
+      /* best effort */
+    }
+    try {
+      entry?.realtimeSession?.close('VAULTED closed')
+    } catch {
+      /* best effort */
+    }
+  }
+
+  if (hadGameProcess) closeJobs.push(killFortniteProcesses().catch(() => false))
+  for (const providerId of providerIds) {
+    closeJobs.push(closeCompanionLauncherForProvider(providerId).catch(() => false))
+  }
+  await Promise.all(closeJobs)
+
+  if (hadGameProcess) {
+    // A companion can recreate the game during its own shutdown; sweep once
+    // more after the launcher trees are gone, exactly like Stop does.
+    try {
+      await killFortniteProcesses()
+    } catch {
+      /* best effort */
+    }
+    try {
+      const injectors = await processPidsByImage(['VaultedInjector.exe'])
+      await Promise.all(injectors.map((pid) => killProcessTree(pid).catch(() => {})))
+    } catch {
+      /* best effort */
+    }
+  }
+  clearJoinTarget()
+  if (gameServerState) {
+    try {
+      await stopGameServer()
+    } catch {
+      /* best effort */
+    }
+  }
 }
 
 /** True while any Fortnite client process is open. */
@@ -6732,6 +6980,8 @@ const EXTERNAL_LAUNCH_STABILITY_MS = 4_000
 function spawnExternalLauncher(executable, args, options = {}) {
   return new Promise((resolve) => {
     let child
+    let earlyHide = null
+    let stopEarlyHide = null
     try {
       const bridgePort = Number(options.bridgePort) || 0
       const launcherArgs = Array.isArray(args) ? [...args] : []
@@ -6763,9 +7013,9 @@ function spawnExternalLauncher(executable, args, options = {}) {
         // moment so even a launcher that shows itself cannot flash on screen.
         const earlyPid = child.pid
         void hideCompanionLauncher(earlyPid)
-        const earlyHide = setInterval(() => void hideCompanionLauncher(earlyPid), 400)
+        earlyHide = setInterval(() => void hideCompanionLauncher(earlyPid), 400)
         earlyHide.unref?.()
-        const stopEarlyHide = setTimeout(() => clearInterval(earlyHide), 12_000)
+        stopEarlyHide = setTimeout(() => clearInterval(earlyHide), 12_000)
         stopEarlyHide.unref?.()
       }
     } catch (error) {
@@ -6777,6 +7027,10 @@ function spawnExternalLauncher(executable, args, options = {}) {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      // The stability window is over; the provider-scoped hider/Play handoff
+      // owns the window now. Leaving this timer running hides a sign-in reveal.
+      if (earlyHide) clearInterval(earlyHide)
+      if (stopEarlyHide) clearTimeout(stopEarlyHide)
       resolve(result)
     }
     const timer = setTimeout(
@@ -6811,7 +7065,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
      * only after it survives. `repair` runs the provider's own installer and
      * returns the executable that is now on disk.
      */
-    const startVisibleLauncher = async (executablePaths, args, repair = null, names = []) => {
+    const startVisibleLauncher = async (executablePaths, args, repair = null, names = [], preferredPid = 0) => {
       const candidates = (Array.isArray(executablePaths) ? executablePaths : [executablePaths]).filter(
         Boolean,
       )
@@ -6820,7 +7074,10 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       }
       let current = candidates[0]
       const adoptRunning = async () => {
-        const pids = await runningLauncherPids(names)
+        const pids =
+          Number.isInteger(preferredPid) && preferredPid > 0 && processAlive(preferredPid)
+            ? [preferredPid]
+            : await runningLauncherPids(names)
         if (pids.length === 0) return null
         const prior = providerLaunchers.get(id)
         providerLaunchers.set(id, {
@@ -6829,7 +7086,9 @@ async function openProviderLauncherEntry(providerId, options = {}) {
           bridgePort: prior?.bridgePort || 0,
           folder: prior?.folder || buildFolder,
         })
-        startCompanionWindowHider(id, pids[0])
+        // Do not start a new hider here: the Play handoff is about to stop it
+        // and reveal this same process for a one-time sign-in. An in-flight
+        // hide from the hider can otherwise land after that reveal.
         startCompanionSessionMonitor(id, current)
         return {
           opened: true,
@@ -6921,12 +7180,16 @@ async function openProviderLauncherEntry(providerId, options = {}) {
     const buildFolder = typeof launchOptions.folder === 'string' ? launchOptions.folder : ''
     const buildExecutable =
       typeof launchOptions.executable === 'string' ? launchOptions.executable : ''
+    const signInOnly = launchOptions.signInOnly === true
 
     // A launcher VAULTED opened after the season download is still running
     // off-screen while it prepares its own files. Play reveals that exact
     // process for the one-time sign-in instead of spawning a second copy that a
     // single-instance launcher would ignore.
-    const prepared = companionPrepareSessions.get(id)
+    // Eon has no DevTools page to drive, so its prepared session only adds a
+    // second path with a port it ignores. Send it through the native runtime
+    // path below, which adopts the exact running PID and uses UI Automation.
+    const prepared = id === 'eon' ? null : companionPrepareSessions.get(id)
     if (prepared?.pid) {
       // The launcher has been preparing off-screen since the download. Play
       // now selects the exact downloaded folder and presses its own Play; it
@@ -6941,7 +7204,15 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         const running = await processPidsByImage(preparedNames)
         if (running.length > 0) preparedPid = running[0]
       }
-      if (processAlive(preparedPid) && preparedFolder) {
+      // A prepared Eon that booted for an older folder cannot be retargeted in
+      // memory. Drop it and let the normal runtime start below boot a new one
+      // with the exact downloaded folder.
+      const eonFolderMismatch =
+        id === 'eon' &&
+        Boolean(preparedFolder) &&
+        normalizedFolder(readEonConfig().folder) !== normalizedFolder(path.resolve(preparedFolder))
+      if (eonFolderMismatch) await closeCompanionLauncherForProvider(id)
+      if (!eonFolderMismatch && processAlive(preparedPid) && preparedFolder) {
         stopCompanionWindowHider(id)
         companionPrepareSessions.set(id, {
           ...prepared,
@@ -7127,12 +7398,24 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         return repaired?.executable || ''
       }
       const launcherNames = providerWindowNames(runtimeMetadata)
-      if (id === 'eon' && buildFolder) prepareEonConfig(buildFolder)
+      // Point Eon at the exact downloaded folder before its Play starts, and
+      // restart an Eon that is already up on a different folder so it reloads
+      // Settings.ini. A same-folder Eon is adopted with its sign-in intact.
+      const eonSetup =
+        id === 'eon' && buildFolder
+          ? await configureEonForFolder(buildFolder, launcherNames)
+          : null
       const launcherCandidates = installedExecutables(runtimeMetadata)
       if (!launcherCandidates.includes(executable)) launcherCandidates.unshift(executable)
-      const finishLaunch = (started) => {
+      const finishLaunch = async (started) => {
         if (!started?.opened) return started
         const result = { ...started, args, version, savedBuild }
+        // Pre-download launcher sign-in: keep the launcher visible in its own
+        // window so the player can authenticate before the season is fetched.
+        if (signInOnly && started.pid) {
+          stopCompanionWindowHider(id)
+          result.visible = await showCompanionLauncher(started.pid, { attempts: 12, waitMs: 500 })
+        }
         if (started.pid && buildFolder) {
           const gameExecutable =
             buildExecutable || findPrimaryExecutable(buildFolder) || ''
@@ -7163,8 +7446,16 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         return result
       }
       try {
-        const started = await startVisibleLauncher(launcherCandidates, args, repairRuntime, launcherNames)
-        return finishLaunch(started)
+        const preferredPid =
+          id === 'eon' && !eonSetup?.restart ? eonSetup?.pids?.[0] || 0 : 0
+        const started = await startVisibleLauncher(
+          launcherCandidates,
+          args,
+          repairRuntime,
+          launcherNames,
+          preferredPid,
+        )
+        return await finishLaunch(started)
       } catch (error) {
         return {
           opened: false,
@@ -7991,6 +8282,10 @@ function registerIpc() {
     providerLauncherStatus(providerId),
   )
 
+  ipcMain.handle('arc:launcher-auth-status', (_event, providerId) =>
+    launcherAuthStatus(providerId),
+  )
+
   ipcMain.handle('arc:install-provider-runtime', async (_event, providerId) => {
     const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
     const metadata = providerRuntimeMetadata(id)
@@ -8461,6 +8756,44 @@ function registerIpc() {
     if (!mainWindow) return
     if (mainWindow.isMaximized()) mainWindow.unmaximize()
     else mainWindow.maximize()
+  })
+
+  ipcMain.handle('win:focus', () => {
+    const win = mainWindow
+    if (!win || win.isDestroyed()) return Promise.resolve(false)
+    if (win.isMinimized()) win.restore()
+    // Windows may keep whichever app was active before the launcher (a game,
+    // for example) in front even after focus(). A short always-on-top pulse
+    // plus AppActivate makes the return to VAULTED reliable without leaving it
+    // pinned above other windows.
+    win.setAlwaysOnTop(true)
+    win.show()
+    win.focus()
+    win.moveTop()
+    setTimeout(() => {
+      try {
+        if (!win.isDestroyed()) win.setAlwaysOnTop(false)
+      } catch {
+        /* window closed during the focus pulse */
+      }
+    }, 900)
+    return new Promise((resolve) => {
+      try {
+        execFile(
+          'powershell.exe',
+          [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `$w = New-Object -ComObject WScript.Shell; $w.AppActivate(${process.pid})`,
+          ],
+          { windowsHide: true, timeout: 5_000 },
+          (error, stdout) => resolve(!error && /true/i.test(String(stdout))),
+        )
+      } catch {
+        resolve(false)
+      }
+    })
   })
 
   ipcMain.handle('win:close', () => {
