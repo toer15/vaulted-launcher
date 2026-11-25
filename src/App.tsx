@@ -3041,37 +3041,10 @@ export default function App() {
     [],
   )
 
-  const continueLauncherSignIn = useCallback(async () => {
-    const prompt = launcherSignIn
-    if (!prompt) return
-    setLauncherSignInBusy(true)
-    setLauncherSignInError(null)
-    try {
-      let status: LauncherAuthStatus | null = null
-      if (prompt.verifiable) {
-        status = await checkLauncherAuth(prompt.providerId)
-        if (status?.signedIn !== true) {
-          setLauncherSignInError(
-            `Still signed out of ${prompt.label}. Finish signing in there, then press continue again.`,
-          )
-          return
-        }
-      }
-      await finishLauncherSignIn(prompt, status, launcherSignInOpened)
-    } catch (error) {
-      setLauncherSignInError(
-        error instanceof Error ? error.message : 'The launcher sign-in could not be checked.',
-      )
-    } finally {
-      setLauncherSignInBusy(false)
-    }
-  }, [finishLauncherSignIn, launcherSignIn, launcherSignInOpened])
-
   // Eon writes its saved account to Settings.ini as soon as the login finishes.
   // Watch that file while its window is open so the player does not have to
-  // return to VAULTED and press continue: the launcher closes itself and
-  // VAULTED comes back automatically. Other launchers have no readable token,
-  // so they keep the explicit confirmation button.
+  // return to VAULTED: the launcher closes itself and VAULTED comes back
+  // automatically.
   useEffect(() => {
     const prompt = launcherSignIn
     if (!prompt?.verifiable || !launcherSignInOpened || launcherSignInBusy) return
@@ -3098,6 +3071,20 @@ export default function App() {
       window.clearTimeout(timer)
     }
   }, [finishLauncherSignIn, launcherSignIn, launcherSignInBusy, launcherSignInOpened])
+
+  // Launchers with no readable token store cannot be verified from disk, so
+  // their sign-in window closing is the signal that the player is done. VAULTED
+  // then dismisses the popup itself and restores the card's button, with no
+  // extra confirmation click.
+  useEffect(() => {
+    const prompt = launcherSignIn
+    if (!prompt || prompt.verifiable || !launcherSignInOpened) return
+    return subscribeProviderLauncherExit((payload) => {
+      if (payload.providerId !== prompt.providerId) return
+      if (launcherSignInCompletingRef.current) return
+      void finishLauncherSignIn(prompt, null, true)
+    })
+  }, [finishLauncherSignIn, launcherSignIn, launcherSignInOpened])
 
   /** One-click repair to the exact live provider build, then Play. */
   const handleUpdateLiveBuild = useCallback(() => {
@@ -5850,7 +5837,6 @@ export default function App() {
         opened={launcherSignInOpened}
         error={launcherSignInError}
         onOpen={() => void openLauncherForSignIn()}
-        onContinue={() => void continueLauncherSignIn()}
         onClose={closeLauncherSignIn}
       />
 

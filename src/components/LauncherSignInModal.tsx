@@ -15,7 +15,6 @@ interface LauncherSignInModalProps {
   opened: boolean
   error?: string | null
   onOpen: () => void
-  onContinue: () => void
   onClose: () => void
 }
 
@@ -36,7 +35,6 @@ export function LauncherSignInModal({
   opened,
   error,
   onOpen,
-  onContinue,
   onClose,
 }: LauncherSignInModalProps) {
   useEffect(() => {
@@ -117,10 +115,10 @@ export function LauncherSignInModal({
               {signedIn === false
                 ? verifiable
                   ? `Sign in at ${launcherLabel}. VAULTED closes it and returns here automatically.`
-                  : `Sign in at ${launcherLabel}, then press continue. VAULTED closes it and brings you back.`
+                  : `Sign in at ${launcherLabel}, then close its window. VAULTED comes back here automatically.`
                 : verifiable
                   ? `VAULTED reads ${launcherLabel}'s saved session only; it never sees your password.`
-                  : `VAULTED cannot read ${launcherLabel}'s account storage, so confirm once you are signed in.`}
+                  : `VAULTED cannot read ${launcherLabel}'s account storage, so it returns when you close the sign-in window.`}
             </p>
           </div>
 
@@ -136,7 +134,7 @@ export function LauncherSignInModal({
               )}
               {verifiable
                 ? `Waiting for your ${launcherLabel} session. It closes and this goes away on its own.`
-                : `Finish in ${launcherLabel}, then press continue — it closes and this goes away.`}
+                : `Finish in ${launcherLabel}, then close it — VAULTED comes back here automatically.`}
             </p>
           )}
 
@@ -166,25 +164,7 @@ export function LauncherSignInModal({
               ) : (
                 <ExternalLink className="h-3.5 w-3.5" />
               )}
-              {opened ? `Sign in to ${launcherLabel} again` : `Sign in to ${launcherLabel}`}
-            </button>
-            <button
-              type="button"
-              onClick={onContinue}
-              disabled={busy}
-              className={cx(
-                'flex w-full items-center justify-center gap-1.5 rounded-xl border px-2.5 py-2 text-[11.5px] font-bold transition-all duration-200',
-                busy
-                  ? 'cursor-wait border-line bg-white/[0.04] text-fog/60'
-                  : 'border-emerald-300/30 bg-emerald-400/10 text-emerald-100 hover:bg-emerald-400/15 active:scale-[0.99]',
-              )}
-            >
-              {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <ShieldCheck className="h-3.5 w-3.5" />
-              )}
-              {busy ? 'Signing in…' : "I've signed in — continue"}
+              {busy ? 'Signing in…' : opened ? `Sign in to ${launcherLabel} again` : `Sign in to ${launcherLabel}`}
             </button>
           </div>
 
