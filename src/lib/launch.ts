@@ -206,6 +206,8 @@ export interface LauncherAuthStatus {
   signedIn: boolean | null
   /** false when the launcher has no readable token and the player confirms */
   verifiable: boolean
+  /** VAULTED registered this launcher account and remembers it across restarts */
+  recorded?: boolean
 }
 
 /** Result of opening a season's other launcher after its build was installed. */
@@ -459,6 +461,11 @@ export interface LauncherBridge {
   providerLauncherDetect?(providerId: string): Promise<ProviderLauncherDetection | null>
   /** Whether the season's own launcher already has a saved account session. */
   launcherAuthStatus?(providerId: string): Promise<LauncherAuthStatus | null>
+  /** Save which launcher this PC is signed into, so a restart still knows. */
+  launcherAccountRecord?(
+    providerId: string,
+    payload?: { label?: string; verifiable?: boolean },
+  ): Promise<{ ok: boolean; accounts?: unknown[] } | null>
   /** Verify the public invite for a Discord-gated community. */
   discordGateVerify?(providerId: string): Promise<{
     ok: boolean
@@ -934,6 +941,20 @@ export async function checkLauncherAuth(providerId: string): Promise<LauncherAut
     return await window.arc.launcherAuthStatus(providerId)
   } catch (error) {
     throw cleanIpcError(error)
+  }
+}
+
+/** Remember a completed launcher sign-in for this PC. */
+export async function recordLauncherAccount(
+  providerId: string,
+  payload: { label?: string; verifiable?: boolean } = {},
+): Promise<boolean> {
+  if (!window.arc?.launcherAccountRecord) return false
+  try {
+    const result = await window.arc.launcherAccountRecord(providerId, payload)
+    return result?.ok === true
+  } catch {
+    return false
   }
 }
 

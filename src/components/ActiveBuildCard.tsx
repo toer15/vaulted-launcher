@@ -92,6 +92,8 @@ interface ActiveBuildCardProps {
   /** the launcher account probe has not answered yet */
   launcherAuthChecking?: boolean
   launcherSignInLabel?: string
+  /** launcher this PC is registered as signed into, when VAULTED knows it */
+  launcherAccountLabel?: string | null
   /** open the launcher account popup from the download-button slot */
   onLauncherSignIn?: () => void
   /** this season's active backend needs an online account link */
@@ -330,6 +332,7 @@ export function ActiveBuildCard({
   launcherSigningIn = false,
   launcherAuthChecking = false,
   launcherSignInLabel = 'Launcher',
+  launcherAccountLabel = null,
   onLauncherSignIn,
   accountAuthRequired = false,
   accountSignedIn = false,
@@ -1380,6 +1383,12 @@ export function ActiveBuildCard({
                     <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
                     <span>{setupBanner}</span>
                   </div>
+                )}
+                {launcherAccountLabel && (
+                  <p className="mb-2 flex items-center gap-1.5 rounded-xl border border-emerald-300/20 bg-emerald-400/[0.06] px-3 py-1.5 text-[10.5px] font-semibold text-emerald-200">
+                    <ShieldCheck className="h-3 w-3 shrink-0" />
+                    Signed in to {launcherAccountLabel}
+                  </p>
                 )}
                 <div className="relative flex flex-wrap items-center gap-2">
                   {setupSequence ? (

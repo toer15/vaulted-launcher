@@ -4134,9 +4134,85 @@ function providerLauncherStatus(providerId) {
 }
 
 /**
+ * Launcher accounts VAULTED has registered on this PC. Eon's Settings.ini stays
+ * the live source of truth for its own session; launchers with no readable
+ * token store are recorded when the player's sign-in window closes, so a
+ * restart still knows which launcher the PC is signed into instead of asking
+ * for the same sign-in again.
+ */
+function launcherAccountsPath() {
+  return path.join(app.getPath('userData'), 'launcher-accounts.json')
+}
+
+function readLauncherAccounts() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(launcherAccountsPath(), 'utf8'))
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const accounts = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      const providerId = String(key || '').trim().toLowerCase()
+      if (!/^[a-z0-9:_-]{1,80}$/.test(providerId)) continue
+      if (!value || typeof value !== 'object' || value.signedIn !== true) continue
+      accounts[providerId] = {
+        providerId,
+        label: String(value.label || providerId).slice(0, 120),
+        verifiable: value.verifiable === true,
+        signedIn: true,
+        updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : '',
+      }
+    }
+    return accounts
+  } catch {
+    return {}
+  }
+}
+
+function writeLauncherAccounts(accounts) {
+  try {
+    const target = launcherAccountsPath()
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    const temporary = `${target}.tmp`
+    fs.writeFileSync(temporary, JSON.stringify(accounts, null, 2), 'utf8')
+    fs.renameSync(temporary, target)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Record (or clear) the launcher account for one provider. A launcher VAULTED
+ * can read is recorded from its own saved session; a launcher without a token
+ * store is recorded when the player finishes its sign-in window.
+ */
+function recordLauncherAccount(providerId, payload = {}) {
+  const id = String(providerId || '').trim().toLowerCase()
+  const accounts = readLauncherAccounts()
+  if (!/^[a-z0-9:_-]{1,80}$/.test(id)) {
+    return { ok: false, accounts: Object.values(accounts) }
+  }
+  if (payload.signedIn === false) {
+    if (!accounts[id]) return { ok: true, accounts: Object.values(accounts) }
+    delete accounts[id]
+  } else {
+    const provider = providerCatalog().find((entry) => entry.id === id)
+    const label =
+      provider?.runtime?.label || provider?.launcher?.label || provider?.label || payload.label || id
+    accounts[id] = {
+      providerId: id,
+      label: String(label).slice(0, 120),
+      verifiable: payload.verifiable === true,
+      signedIn: true,
+      updatedAt: new Date().toISOString(),
+    }
+  }
+  return { ok: writeLauncherAccounts(accounts), accounts: Object.values(accounts) }
+}
+
+/**
  * Launcher-owned account state before a season download. Only Eon exposes a
  * readable saved session (Settings.ini); other launchers have no common token
- * store, so they stay `null` and the renderer asks the player to confirm.
+ * store, so their registered record is what VAULTED remembers.
  */
 function launcherAuthStatus(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
@@ -4147,17 +4223,36 @@ function launcherAuthStatus(providerId) {
   if (!hasLauncher) {
     return { providerId: id, label, hasLauncher: false, signedIn: null, verifiable: false }
   }
+  const recorded = readLauncherAccounts()[id]
   if (id === 'eon') {
     const config = readEonConfig()
+    // Eon is the one launcher with a readable saved session. Mirror it into the
+    // account record so every path sees the same registered launcher.
+    if (config.signedIn === true) {
+      if (!recorded) recordLauncherAccount(id, { label, verifiable: true })
+    } else if (recorded) {
+      recordLauncherAccount(id, { signedIn: false })
+    }
     return {
       providerId: id,
       label,
       hasLauncher: true,
       signedIn: config.signedIn === true,
       verifiable: true,
+      recorded: config.signedIn === true,
     }
   }
-  return { providerId: id, label, hasLauncher: true, signedIn: null, verifiable: false }
+  if (recorded) {
+    return {
+      providerId: id,
+      label: recorded.label || label,
+      hasLauncher: true,
+      signedIn: true,
+      verifiable: false,
+      recorded: true,
+    }
+  }
+  return { providerId: id, label, hasLauncher: true, signedIn: null, verifiable: false, recorded: false }
 }
 
 /** Public runtime state for the season card; no URLs or filesystem internals. */
@@ -8299,6 +8394,12 @@ function registerIpc() {
 
   ipcMain.handle('arc:launcher-auth-status', (_event, providerId) =>
     launcherAuthStatus(providerId),
+  )
+
+  // Remember which launcher account this PC finished signing in to, so a
+  // restart does not ask for the same sign-in window again.
+  ipcMain.handle('arc:record-launcher-account', (_event, providerId, payload) =>
+    recordLauncherAccount(providerId, payload || {}),
   )
 
   ipcMain.handle('arc:install-provider-runtime', async (_event, providerId) => {

@@ -58,6 +58,7 @@ import {
   pickBuildFolder,
   pickExistingBuildFolder,
   pickInstallDir,
+  recordLauncherAccount,
   sameBuildVersion,
   scanInstalledBuilds,
   startDownload,
@@ -1098,6 +1099,15 @@ export default function App() {
       launcherSignIn.providerId === activeCompanionProviderId &&
       (launcherSignInBusy || launcherSignInOpened),
   )
+  // Which launcher this PC is signed into, so the card can show the registered
+  // account instead of silently reverting to the download button.
+  const launcherAccountLabel =
+    activeLauncherCandidate &&
+    activeCompanionProviderId &&
+    (activeLauncherAuth?.signedIn === true ||
+      launcherConfirmedIds.includes(activeCompanionProviderId))
+      ? launcherSignInLabel
+      : null
 
   // Bind the card to the selected companion's gate. Never fall back to another
   // community's gate just because it appears first on the build.
@@ -3010,12 +3020,16 @@ export default function App() {
         if (status) {
           setLauncherAuthStatuses((prev) => ({ ...prev, [prompt.providerId]: status }))
         } else if (prompt.signedIn === null) {
-          // No common token store exists for this launcher. Remember the player's
-          // confirmation for this session instead of pretending VAULTED verified it.
+          // No common token store exists for this launcher. Register the player's
+          // completed sign-in for this PC instead of pretending VAULTED read it.
           launcherConfirmedRef.current.add(prompt.providerId)
           setLauncherConfirmedIds((prev) =>
             prev.includes(prompt.providerId) ? prev : [...prev, prompt.providerId],
           )
+          void recordLauncherAccount(prompt.providerId, {
+            label: prompt.label,
+            verifiable: false,
+          })
         }
         if (opened) {
           // Close only the season launcher VAULTED opened for sign-in. It cannot
@@ -5706,6 +5720,7 @@ export default function App() {
                 launcherSigningIn={launcherSigningIn}
                 launcherAuthChecking={launcherAuthPending}
                 launcherSignInLabel={launcherSignInLabel}
+                launcherAccountLabel={launcherAccountLabel}
                 onLauncherSignIn={openLauncherSignIn}
                 accountAuthRequired={Boolean(
                   activeBuild && installed[activeBuild.id] && activeAccountBackend,

@@ -66,6 +66,8 @@ contextBridge.exposeInMainWorld('arc', {
     ipcRenderer.invoke('arc:provider-launcher-detect', providerId),
   launcherAuthStatus: (providerId) =>
     ipcRenderer.invoke('arc:launcher-auth-status', providerId),
+  launcherAccountRecord: (providerId, payload) =>
+    ipcRenderer.invoke('arc:record-launcher-account', providerId, payload),
   discordGateVerify: (providerId) => ipcRenderer.invoke('arc:discord-gate-verify', providerId),
   providerLiveStatus: () => ipcRenderer.invoke('arc:provider-live-status'),
   providerPrepare: (providerId) => ipcRenderer.invoke('arc:provider-prepare', providerId),
