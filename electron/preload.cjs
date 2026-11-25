@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('arc', {
   onBuildExited: (callback) => subscribe('arc:build-exited', callback),
   onProviderLauncherExited: (callback) => subscribe('arc:provider-launcher-exited', callback),
   onCompanionGameStarted: (callback) => subscribe('arc:companion-game-started', callback),
+  onCommunityBuildLinked: (callback) => subscribe('arc:community-build-linked', callback),
   onCompanionGameTimeout: (callback) => subscribe('arc:companion-game-timeout', callback),
   onProviderSessionExpired: (callback) => subscribe('arc:provider-session-expired', callback),
   onJoinFailed: (callback) => subscribe('arc:join-failed', callback),

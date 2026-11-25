@@ -45,15 +45,24 @@ public class VaultedHiddenWindow {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
 }
 "@
 function Find-VaultedTopWindow([int]$targetPid) {
   $script:foundTop = [IntPtr]::Zero
+  $script:foundArea = 0
   $cb = [VaultedHiddenWindow+EnumProc]{
     param($h, $l)
     $owner = [uint32]0
     [void][VaultedHiddenWindow]::GetWindowThreadProcessId($h, [ref]$owner)
-    if ($owner -eq $targetPid) { $script:foundTop = $h; return $false }
+    if ($owner -eq $targetPid) {
+      $r = New-Object VaultedHiddenWindow+RECT
+      [void][VaultedHiddenWindow]::GetWindowRect($h, [ref]$r)
+      $area = ($r.R - $r.L) * ($r.B - $r.T)
+      # A Tauri/WebView app owns helper windows too; always pick its real one.
+      if ($area -gt $script:foundArea) { $script:foundArea = $area; $script:foundTop = $h }
+    }
     return $true
   }
   [void][VaultedHiddenWindow]::EnumWindows($cb, [IntPtr]::Zero)
@@ -97,6 +106,23 @@ Hide-VaultedTopWindow $top
 `
 }
 
+function showScript(pid) {
+  return `
+${WINDOW_TYPES}
+$p = Get-Process -Id ${Math.max(1, Math.floor(Number(pid) || 0))} -ErrorAction SilentlyContinue
+if (-not $p) { 'NO_PROCESS'; exit 1 }
+$top = Find-VaultedTopWindow ${Math.max(1, Math.floor(Number(pid) || 0))}
+if ($top -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
+# A previous session may have left the window off-screen; put it back on it.
+[void][VaultedHiddenWindow]::ShowWindow($top, 9)
+# HWND_TOP + SWP_SHOWWINDOW, never HWND_TOPMOST: this explicit community
+# launch is the one moment the player must see and use the launcher.
+[void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, 120, 80, 1200, 800, 0x0040)
+[void][VaultedHiddenWindow]::SetForegroundWindow($top)
+'SHOWN'
+`
+}
+
 function clickScript(pid, xRatio, yRatio, fromBottom) {
   const safePid = Math.max(1, Math.floor(Number(pid) || 0))
   const vertical =
@@ -131,6 +157,24 @@ async function hideCompanionLauncher(pid) {
   return output === 'HIDDEN'
 }
 
+/**
+ * Bring a launcher window back on screen. A community launcher needs its own
+ * sign-in/Play UI the first time, and an earlier hidden session can leave the
+ * saved window position off every monitor, so show and reposition it.
+ */
+async function showCompanionLauncher(pid, options = {}) {
+  if (process.platform !== 'win32') return false
+  const attempts = Number.isFinite(options.attempts) ? options.attempts : 12
+  const waitMs = Number.isFinite(options.waitMs) ? options.waitMs : 500
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const { output } = await runPowerShell(showScript(pid), 10_000)
+    if (output === 'SHOWN') return true
+    if (output === 'NO_PROCESS') return false
+    await delay(waitMs)
+  }
+  return false
+}
+
 /** Click the hidden launcher's bottom full-width Play/Close button. */
 async function clickCompanionPlayButton(pid, options = {}) {
   if (process.platform !== 'win32') return { clicked: false, error: 'unsupported platform' }
@@ -150,6 +194,7 @@ async function clickCompanionPlayButton(pid, options = {}) {
 module.exports = {
   clickCompanionPlayButton,
   hideCompanionLauncher,
+  showCompanionLauncher,
   delay,
   runPowerShell,
 }

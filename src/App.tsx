@@ -3,7 +3,6 @@ import { ActiveBuildCard } from './components/ActiveBuildCard'
 import { AutoFixView, type AutoFixEntryView } from './components/AutoFixView'
 import { AddBuildDialog } from './components/AddBuildDialog'
 import { ConnectAccountModal } from './components/ConnectAccountModal'
-import { DiscordGateModal } from './components/DiscordGateModal'
 import { SignInModal } from './components/SignInModal'
 import { BuildDrawer } from './components/BuildDrawer'
 import { FriendsView } from './components/FriendsView'
@@ -63,6 +62,7 @@ import {
   stopProviderLauncher,
   syncProviderBuild,
   subscribeBuildExit,
+  subscribeCommunityBuildLinked,
   subscribeCompanionGameStarted,
   subscribeCompanionGameTimeout,
   subscribeDownloadProgress,
@@ -123,11 +123,6 @@ import {
 import defaultBuilds from './assets/builds.json'
 import { buildForSeason, ensureAllSeasons, seedBuilds, sortBuilds } from './lib/sampleBuilds'
 import { loadState, saveState, uid } from './lib/storage'
-import {
-  isDiscordGateVerified,
-  loadDiscordGateVerifications,
-  saveDiscordGateVerifications,
-} from './lib/discordGates'
 import { useItemShop } from './lib/useItemShop'
 import { inventoryItemsFor, SHOP_CATALOG } from './lib/shop'
 import type {
@@ -138,7 +133,6 @@ import type {
   BuildVerifyReport,
   DownloadState,
   DiscordGate,
-  DiscordGateVerification,
   GlobalBackend,
   LaunchPhase,
   ProviderAuthStatus,
@@ -334,13 +328,6 @@ interface AccountPrompt {
   }
 }
 
-interface DiscordPrompt {
-  build: Build
-  gate: DiscordGate
-  join?: { host: string; port: number }
-  options?: { promptOnEmpty?: boolean; forceProviderId?: string }
-}
-
 export default function App() {
   const [builds, setBuilds] = useState<Build[]>(() => {
     const persisted = loadState()
@@ -459,19 +446,6 @@ export default function App() {
   const [accountBusy, setAccountBusy] = useState(false)
   const [accountError, setAccountError] = useState<string | null>(null)
   const accountPromptRef = useRef(false)
-  // Community Discord unlocks are local to this PC and keyed by the mapped
-  // provider id. The invite is verified in main; the launch path is untouched.
-  const [discordGateVerifications, setDiscordGateVerifications] = useState<
-    Record<string, DiscordGateVerification>
-  >(() => loadDiscordGateVerifications())
-  const [discordPrompt, setDiscordPrompt] = useState<DiscordPrompt | null>(null)
-  const [discordBusy, setDiscordBusy] = useState(false)
-  const [discordError, setDiscordError] = useState<string | null>(null)
-  const discordResumeRef = useRef<DiscordPrompt | null>(null)
-  // Holds the Start that stopped because the community launcher is not on this
-  // PC yet. Importing that launcher in Step 2 resumes the same launch instead
-  // of leaving the player to press Start again on a modal that looks stuck.
-  const communityLauncherResumeRef = useRef<DiscordPrompt | null>(null)
   // Holds the Play that opened the account prompt until the provider session
   // has rendered into app state. The resume then re-enters startBuild instead
   // of bypassing VAULTED's sign-in and managed-build preflight gates.
@@ -1050,18 +1024,6 @@ export default function App() {
     activeCompanionProvider?.discordGate ??
     activeBuild?.discordGates?.find((gate) => gate.providerId === activeCompanionProviderId) ??
     null
-  const activeDiscordGateVerified = Boolean(
-    activeDiscordGate && isDiscordGateVerified(discordGateVerifications, activeDiscordGate),
-  )
-  const activeDiscordSetupLocked = Boolean(
-    activeBuild &&
-      !installed[activeBuild.id] &&
-      activeDiscordGate &&
-      activeDiscordGate.statusOnly !== true &&
-      !activeDiscordGateVerified &&
-      !activeLauncher?.installed &&
-      !activeRuntime?.required,
-  )
 
   // The card offers the generic account connection for any hosted backend
   // that needs an account. Local `auth: "none"` engines never show it, and a
@@ -1690,8 +1652,19 @@ export default function App() {
       if (!active || active.providerId !== payload.providerId) return
       setExternalLauncher(null)
       setRunningId((current) => (current === active.buildId ? null : current))
-      setPhase((current) => (current === 'running' ? 'idle' : current))
       setLaunchStage(null)
+      if (payload.reason === 'launcher-exited') {
+        // It closed on its own before Fortnite started, so there is no game to
+        // return to: a retry must open it again instead of hanging on Starting.
+        setPhase('error')
+        setLaunchFailure({
+          id: active.buildId,
+          message:
+            'The community launcher closed before Fortnite started. Press Start to open it again.',
+        })
+        return
+      }
+      setPhase((current) => (current === 'running' ? 'idle' : current))
     })
   }, [native])
 
@@ -1793,6 +1766,8 @@ export default function App() {
     const offStarted = subscribeCompanionGameStarted((payload) => {
       const active = externalLauncherRef.current
       if (!active || active.providerId !== payload.providerId) return
+      setRunningId(active.buildId)
+      setHostedLobby(null)
       setPhase('running')
       setLaunchStage(null)
       setLaunchFailure((current) => (current?.id === active.buildId ? null : current))
@@ -1812,9 +1787,29 @@ export default function App() {
       setLaunchFailure({ id: active.buildId, message: payload.message })
       pushToast({ tone: 'error', title: 'Fortnite did not start', description: payload.message })
     })
+    const offLinked = subscribeCommunityBuildLinked((payload) => {
+      const active = externalLauncherRef.current
+      if (!active || active.providerId !== payload.providerId) return
+      if (!payload.linked) {
+        if (payload.supported && payload.reason === 'not-signed-in') {
+          setLaunchStage('Sign in to the community launcher, then press Play…')
+        }
+        return
+      }
+      setLaunchStage('Build added to the launcher. Press Play there…')
+      pushToast({
+        tone: 'success',
+        title: payload.already ? 'Build already in the launcher' : 'Build added to the launcher',
+        description: `VAULTED handed this downloaded build to the community launcher${
+          payload.title ? ` (${payload.title})` : ''
+        }. Press Play in it; VAULTED hides it when Fortnite starts.`,
+        ttlMs: 12_000,
+      })
+    })
     return () => {
       offStarted()
       offTimeout()
+      offLinked()
     }
   }, [native, pushToast])
 
@@ -3021,16 +3016,43 @@ export default function App() {
                 buildId: build.id,
                 pid: result.pid ?? null,
               })
-              setRunningId(build.id)
               setHostedLobby(null)
               shop.sets.recordLaunch(build.id)
+              if (result.waitingForGame === true) {
+                // The community launcher is open on screen because its own
+                // sign-in and Play button are the only way into a hosted
+                // session. Stay on "Starting…" until main sees Fortnite.
+                setPhase('launching')
+                setLaunchStage(`Sign in to ${provider.label}, then press Play…`)
+                // The launcher keeps its own library. Main hands it the exact
+                // downloaded folder through its own library API; the path is
+                // copied as well so Import Build still works if that fails.
+                let copiedPath = false
+                if (build.path) {
+                  try {
+                    await navigator.clipboard.writeText(build.path)
+                    copiedPath = true
+                  } catch {
+                    copiedPath = false
+                  }
+                }
+                pushToast({
+                  tone: 'info',
+                  title: `${provider.label} is open`,
+                  description: `VAULTED is adding this downloaded build to ${provider.label}'s library. Sign in once, then press Play. If it is not listed, use Import Build and paste the folder path${
+                    copiedPath ? ' (already copied)' : ''
+                  }.`,
+                  ttlMs: 20_000,
+                })
+                return true
+              }
+              setRunningId(build.id)
               setPhase('running')
               setLaunchStage(null)
               pushToast({
                 tone: 'success',
                 title: `${provider.label} is starting ${build.version}`,
-                description:
-                  'The community launcher stays hidden off-screen while Fortnite runs.',
+                description: 'The community launcher stays open while Fortnite runs.',
               })
               return true
             }
@@ -3042,18 +3064,14 @@ export default function App() {
             if (gate) {
               // Never bounce the player into a browser: the launcher is found
               // and adopted automatically once it is installed on this PC, so
-              // the next Start hands the season to it.
-              discordResumeRef.current = null
-              communityLauncherResumeRef.current = null
+              // the next Start opens it for the one-time sign-in.
               pushToast({
                 tone: 'info',
                 title: `${provider.label} launcher needed`,
-                description: `Install ${gate.label}'s launcher once, then press Start — VAULTED finds it and runs the season through it.`,
+                description: `Install ${gate.label}'s launcher once, then press Start — VAULTED finds it and opens it for you.`,
               })
-              setLaunchFailure({ id: build.id, message })
-            } else {
-              setLaunchFailure({ id: build.id, message })
             }
+            setLaunchFailure({ id: build.id, message })
             pushToast({
               tone: 'info',
               title: `${provider.label} setup`,
@@ -3101,19 +3119,13 @@ export default function App() {
               : undefined,
           )
           if (result?.community) {
-            // No launcher is installed, so the in-app community step opens
-            // the verified Discord invite (or copies it). VAULTED opens no
-            // website and no third-party launcher here.
-            const gate = provider.discordGate ?? null
+            // No launcher is installed. There is no verification modal any
+            // more: report the missing launcher on the card and let the next
+            // Start adopt it once it is installed (or downloaded).
             const message =
               result.error ||
               `${provider.label} has no launcher that VAULTED can open on this PC.`
-            if (gate) {
-              setDiscordError(message)
-              setDiscordPrompt({ build, gate })
-            } else {
-              setLaunchFailure({ id: build.id, message })
-            }
+            setLaunchFailure({ id: build.id, message })
             pushToast({
               tone: 'info',
               title: `${provider.label} community step`,
@@ -3408,110 +3420,6 @@ export default function App() {
     accountPromptRef.current = false
   }, [accountBusy])
 
-  // VAULTED opens no website in a browser: the community step's invite box is
-  // the copy fallback beside the Open Discord Server button.
-  const handleCopyDiscordInvite = useCallback(async () => {
-    const pending = discordPrompt
-    if (!pending) return
-    try {
-      await navigator.clipboard.writeText(pending.gate.inviteUrl)
-      setDiscordError(null)
-      pushToast({
-        tone: 'info',
-        title: 'Invite copied',
-        description: 'Paste it into Discord to join the community.',
-      })
-    } catch {
-      setDiscordError('The Discord invite could not be copied. Select the link and copy it manually.')
-    }
-  }, [discordPrompt, pushToast])
-
-  const handleDiscordVerify = useCallback(async () => {
-    const pending = discordPrompt
-    if (!pending || discordBusy) return
-    if (!window.arc?.discordGateVerify) {
-      setDiscordError('Discord verification needs the desktop app. Run "npm run app".')
-      return
-    }
-    setDiscordBusy(true)
-    setDiscordError(null)
-    try {
-      const result = await window.arc.discordGateVerify(pending.gate.providerId)
-      if (!result?.ok || !result.guildId) {
-        throw new Error('That Discord community could not be verified. Try again.')
-      }
-      const next = {
-        ...discordGateVerifications,
-        [pending.gate.providerId]: {
-          providerId: pending.gate.providerId,
-          guildId: result.guildId,
-          ...(result.guildName ? { guildName: result.guildName } : {}),
-          ...(typeof result.memberCount === 'number' ? { memberCount: result.memberCount } : {}),
-          verifiedAt: result.verifiedAt,
-        },
-      }
-      setDiscordGateVerifications(next)
-      saveDiscordGateVerifications(next)
-      // Keep the panel open: Step 2 is the community launcher import. The
-      // launch that opened this gate resumes when the player presses Start
-      // after the launcher is installed, never on a timer.
-      discordResumeRef.current = null
-      setDiscordError(null)
-    } catch (error) {
-      setDiscordError(
-        nativeMessage(error instanceof Error ? error.message : 'Discord verification failed.'),
-      )
-    } finally {
-      setDiscordBusy(false)
-    }
-  }, [discordBusy, discordGateVerifications, discordPrompt])
-
-  /**
-   * Step 2 finished. Refresh the launcher detection and, when this import came
-   * from a Start that had nothing to launch, continue that launch right away.
-   */
-  const handleCommunityLauncherImported = useCallback(
-    (providerId: string) => {
-      const pending = communityLauncherResumeRef.current
-      communityLauncherResumeRef.current = null
-      void detectProviderLauncher(providerId)
-        .then((status) => {
-          if (!status) return
-          setLauncherDetections((prev) => ({ ...prev, [status.providerId]: status }))
-        })
-        .catch(() => {})
-      if (pending && pending.gate.providerId === providerId) {
-        setDiscordPrompt(null)
-        setDiscordError(null)
-        pushToast({
-          tone: 'success',
-          title: 'Community launcher ready',
-          description: `${pending.build.season.label} is starting through it, hidden off-screen.`,
-        })
-        // Let the import land before re-entering Play, so it sees the launcher.
-        window.setTimeout(() => {
-          void startBuildRef.current?.(pending.build, pending.join, pending.options)
-        }, 250)
-        return
-      }
-      pushToast({
-        tone: 'success',
-        title: 'Community launcher ready',
-        description:
-          'Install Season is unlocked. The launcher starts hidden off-screen when you press Start.',
-      })
-    },
-    [pushToast],
-  )
-
-  const handleDiscordCancel = useCallback(() => {
-    if (discordBusy) return
-    discordResumeRef.current = null
-    communityLauncherResumeRef.current = null
-    setDiscordPrompt(null)
-    setDiscordError(null)
-  }, [discordBusy])
-
   /** Re-scan every configured external directory immediately before Play. */
   const refreshCommunityServers = useCallback(async (): Promise<CommunityServer[]> => {
     const directory = await fetchCommunityDirectory({ token: onlineToken, force: true })
@@ -3720,16 +3628,11 @@ export default function App() {
           Boolean(entry.discordGate),
       )
       if (!join && !options.forceProviderId && discordHostedProvider) {
-        const discordUnlocked = Boolean(
-          isDiscordGateVerified(discordGateVerifications, discordHostedProvider.discordGate!) ||
-            launcherDetections[discordHostedProvider.id]?.installed === true,
-        )
-        if (discordUnlocked) {
-          // startOnlineProvider opens Step 2 itself when the community launcher
-          // is not on this PC yet, so nothing after this may show a server error.
-          await startOnlineProvider(build, discordHostedProvider)
-          return
-        }
+        // There is no verification gate: main discovers or adopts the community
+        // launcher (installed, or still in Downloads) on demand, so Play always
+        // hands the season to the launcher that hosts it.
+        await startOnlineProvider(build, discordHostedProvider)
+        return
       }
 
       localSessionRef.current = null
@@ -4065,7 +3968,6 @@ export default function App() {
       shop.sets,
       shop.owned,
       shop.equipped,
-      discordGateVerifications,
       detectInstalledVersion,
     ],
   )
@@ -4090,17 +3992,6 @@ export default function App() {
       pending.server ? { host: pending.server.host, port: pending.server.port } : undefined,
     )
   }, [accountBusy, providerAuthStatus, session?.user.providerId])
-
-  // Resume the Play that opened the Discord gate only after the verified
-  // unlock has rendered. The resumed path still runs the normal sign-in,
-  // provider exchange and managed-build preflight gates.
-  useEffect(() => {
-    const pending = discordResumeRef.current
-    if (!pending || discordBusy) return
-    if (!isDiscordGateVerified(discordGateVerifications, pending.gate)) return
-    discordResumeRef.current = null
-    void startBuildRef.current?.(pending.build, pending.join, pending.options)
-  }, [discordBusy, discordGateVerifications])
 
   // The provider sync clears its DownloadState in a finally block. Wait for
   // that render before launching, otherwise startBuild would still see the
@@ -4530,15 +4421,8 @@ export default function App() {
     // send a genuinely broken install to Auto-Fix instead of starting it.
     if (!(await preLaunchAutoFix(build))) return
 
-    // Discord-only seasons use the same first step as a launcher install:
-    // verify the community (or detect its already-installed launcher) before
-    // the card offers Install Season. This is deliberately before the external
-    // handoff, because opening Discord is Step 1, not the season launch.
-    if (activeDiscordSetupLocked && activeDiscordGate) {
-      setDiscordPrompt({ build, gate: activeDiscordGate })
-      setDiscordError(null)
-      return
-    }
+    // No Discord verification step exists: a community season goes straight to
+    // its own launcher, which main discovers/adopts and opens for sign-in.
 
     // External companions own their own install and matchmaking. A launcher
     // that declares a runtime must be installed before the season download;
@@ -4586,7 +4470,6 @@ export default function App() {
   }, [
     activeBuild,
     activeDiscordGate,
-    activeDiscordSetupLocked,
     activeRuntime,
     autoGlobalBackend,
     downloads,
@@ -5519,7 +5402,6 @@ export default function App() {
                   }
                 }}
                 discordGate={null}
-                discordGateVerified
                 launcherDetected={activeLauncher?.installed === true}
                 account={account}
                 sourceKeys={sourceKeys}
@@ -5628,21 +5510,6 @@ export default function App() {
         error={accountError}
         onClose={handleAccountCancel}
         onContinue={() => void handleAccountContinue()}
-      />
-
-      <DiscordGateModal
-        gate={discordPrompt?.gate ?? null}
-        busy={discordBusy}
-        error={discordError}
-        onClose={handleDiscordCancel}
-        onCopyInvite={() => void handleCopyDiscordInvite()}
-        onVerify={() => void handleDiscordVerify()}
-        verified={
-          discordPrompt
-            ? isDiscordGateVerified(discordGateVerifications, discordPrompt.gate)
-            : false
-        }
-        onLauncherImported={handleCommunityLauncherImported}
       />
 
       <ToastStack toasts={toasts} onDismiss={dismissToast} />

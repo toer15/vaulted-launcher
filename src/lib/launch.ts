@@ -326,6 +326,16 @@ export interface LauncherBridge {
   onCompanionGameStarted?(callback: (payload: { providerId: string; pid: number }) => void): () => void
   /** the launcher opened but Fortnite never started (firewall prompt, closed, …) */
   onCompanionGameTimeout?(callback: (payload: { providerId: string; message: string }) => void): () => void
+  /** main handed this downloaded build to the community launcher's library */
+  onCommunityBuildLinked?(callback: (payload: {
+    providerId: string
+    linked: boolean
+    added: boolean
+    already: boolean
+    supported: boolean
+    reason: string
+    title: string
+  }) => void): () => void
   /** main's in-session heartbeat could not keep the account session alive */
   onProviderSessionExpired?(callback: (payload: {
     providerId: string
@@ -875,6 +885,20 @@ export function subscribeCompanionGameTimeout(
   callback: (payload: { providerId: string; message: string }) => void,
 ): () => void {
   return window.arc?.onCompanionGameTimeout?.(callback) ?? (() => {})
+}
+
+export function subscribeCommunityBuildLinked(
+  callback: (payload: {
+    providerId: string
+    linked: boolean
+    added: boolean
+    already: boolean
+    supported: boolean
+    reason: string
+    title: string
+  }) => void,
+): () => void {
+  return window.arc?.onCommunityBuildLinked?.(callback) ?? (() => {})
 }
 
 export async function stopProviderLauncher(providerId: string): Promise<boolean> {

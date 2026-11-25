@@ -917,13 +917,24 @@ function testOnlineRoutes() {
   assert.match(automation, /GetClassName/, 'the automation must target the Flutter view')
   assert.match(automation, /FLUTTERVIEW/, 'mouse messages must go to FLUTTERVIEW')
   assert.match(automation, /PostMessage\(\$view, 0x0201/, 'Play must be a hidden message click')
-  for (const banned of ['SetCursorPos', 'mouse_event', 'SetForegroundWindow', 'SetWindowPos($h, [IntPtr]::new(-1)']) {
+  for (const banned of ['SetCursorPos', 'mouse_event', 'SetWindowPos($h, [IntPtr]::new(-1)']) {
     assert.equal(
       automation.includes(banned),
       false,
       `companion automation must not use visible input: ${banned}`,
     )
   }
+  // The hidden Play click must never take focus. Only the explicit community
+  // launch (showScript) may foreground the launcher for its one-time sign-in.
+  const clickBody = automation.slice(
+    automation.indexOf('function clickScript('),
+    automation.indexOf('async function hideCompanionLauncher('),
+  )
+  assert.equal(
+    clickBody.includes('SetForegroundWindow'),
+    false,
+    'the hidden Play click must not steal foreground',
+  )
   assert.match(read('electron/providerRuntime.cjs'), /\n  installedExecutables,\n/)
   assert.match(handoff, /alreadyRunning: true/)
   assert.match(handoff, /forceInstall: true/)
@@ -1779,7 +1790,16 @@ function testCommunityLauncherUnlock() {
     'main must expose the community launcher import',
   )
   assert.match(MAIN, /startImportedCommunityLauncher/, 'the imported launcher must have a start path')
-  assert.match(MAIN, /hidden: true/, 'an imported community launcher runs hidden')
+  assert.match(
+    MAIN,
+    /void showCompanionLauncher\(child\.pid\)/,
+    'an imported community launcher opens visibly for its one-time sign-in',
+  )
+  assert.match(
+    MAIN,
+    /function watchCommunityGameStart\(/,
+    'it is hidden only after the real game process starts',
+  )
   assert.match(
     launcher,
     /stagePortableLauncher/,

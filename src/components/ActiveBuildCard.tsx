@@ -762,7 +762,7 @@ export function ActiveBuildCard({
             : 'Downloading the build…',
     ready:
       communityHosted
-        ? `Ready — Start runs ${season.label} (v${build.version}) through ${communityHostLabel || 'the community launcher'}, hidden while Fortnite plays.`
+        ? `Ready — Start opens ${communityHostLabel || 'the community launcher'} and hands it this downloaded build; press Play there and VAULTED hides it when Fortnite starts.`
         : // Discord-only communities have no launcher app: Start joins one of
           // their live public servers with VAULTED's own direct launch.
           discordSetupEligible

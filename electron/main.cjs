@@ -44,6 +44,7 @@ const { writeSavedBuild } = require('./rebootLauncher.cjs')
 const {
   clickCompanionPlayButton,
   hideCompanionLauncher,
+  showCompanionLauncher,
 } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { detectBuildVersion } = require('./buildVersion.cjs')
@@ -61,6 +62,11 @@ const {
 const { planProviderOverlay, selectProviderArchiveSource } = require('./providerArchive.cjs')
 const { inviteCode, verifyDiscordCommunity } = require('./discordGate.cjs')
 const { startHiddenWindowWatcher } = require('./hiddenWindows.cjs')
+const {
+  allocateLauncherDebugPort,
+  launcherBridgeEnv,
+  linkBuildIntoLauncher,
+} = require('./communityBridge.cjs')
 const {
   GAME_POLL_MS,
   createCompanionSessionState,
@@ -2889,6 +2895,136 @@ function beginCompanionGameWatch({ providerId, launcherPid, launcherNames = [], 
   return { waiting: true }
 }
 
+/**
+ * A community launcher is not a background companion: its window is the
+ * player's sign-in and Play UI, so it must stay visible until Fortnite really
+ * starts. Hiding it first made the launcher unreachable, which is why Play
+ * never opened the season. Once the client process exists the launcher is
+ * hidden for the rest of the session, like every other companion.
+ */
+const COMMUNITY_GAME_TIMEOUT_MS = 10 * 60_000
+
+/**
+ * Anticheat-hosted community clients (Omen launches Fortnite through oAC.exe)
+ * never expose FortniteClient-Win64-Shipping.exe as the game process. The
+ * client still writes its normal log, so a log written after this launch is a
+ * reliable "Fortnite really started" signal that a failed anticheat launch
+ * (oAC exits before the game initialises) cannot fake.
+ */
+function fortniteLogStartedSince(startedAt) {
+  const base = process.env.LOCALAPPDATA
+  if (!base) return false
+  try {
+    const stat = fs.statSync(path.join(base, 'FortniteGame', 'Saved', 'Logs', 'FortniteGame.log'))
+    return stat.mtimeMs >= startedAt - 5_000
+  } catch {
+    return false
+  }
+}
+
+function watchCommunityGameStart({
+  providerId,
+  launcherPid,
+  launcherNames = [],
+  gameExecutable,
+  gameFolder = '',
+}) {
+  const id = String(providerId || '').trim().toLowerCase()
+  const pid = Number(launcherPid)
+  if (!id || !Number.isInteger(pid) || pid <= 0) return null
+  const token = Symbol(id)
+  companionGameWaits.set(id, token)
+  void (async () => {
+    try {
+      const startedAt = Date.now()
+      const deadline = startedAt + COMMUNITY_GAME_TIMEOUT_MS
+      let gamePid = null
+      while (Date.now() < deadline) {
+        if (companionGameWaits.get(id) !== token) return
+        const pids = await processPidsByImage([CLIENT_EXE])
+        if (pids.length > 0) {
+          const owned = gameExecutable ? await executablePids(gameExecutable) : []
+          gamePid = owned[0] || pids[0]
+          break
+        }
+        if (gameFolder && fortniteLogStartedSince(startedAt)) {
+          // The client is running inside the launcher's anticheat process. The
+          // launcher itself is the stable handle VAULTED can track and hide.
+          gamePid = pid
+          break
+        }
+        await delay(1_500)
+      }
+      if (companionGameWaits.get(id) !== token) return
+      companionGameWaits.delete(id)
+      if (!gamePid) {
+        send('arc:companion-game-timeout', {
+          providerId: id,
+          message:
+            'The community launcher is still open. Sign in and press Play in its own window; VAULTED hides it as soon as Fortnite starts.',
+        })
+        return
+      }
+      // The launcher window has done its job; keep it running but off-screen.
+      const running = await processPidsByImage(launcherNames)
+      const target = running[0] || pid
+      if (processAlive(target)) {
+        await hideCompanionLauncher(target)
+        startCompanionWindowHider(id, target)
+      }
+      attachCompanionGameProcess(id, gamePid)
+      send('arc:companion-game-started', { providerId: id, pid: gamePid })
+    } catch (error) {
+      if (companionGameWaits.get(id) === token) {
+        companionGameWaits.delete(id)
+        send('arc:companion-game-timeout', {
+          providerId: id,
+          message: error instanceof Error ? error.message : 'Fortnite did not start.',
+        })
+      }
+    }
+  })()
+  return { waiting: true }
+}
+
+/**
+ * A community launcher that dies before Fortnite starts would otherwise leave
+ * the card on "Starting…" forever. Report it as a real failure, while ignoring
+ * a bootstrapper that hands off to an already-running single instance and any
+ * deliberate Stop (which removes the tracked launcher before killing it).
+ */
+function watchCommunityLauncherExit(providerId, child, launcherNames = []) {
+  const id = String(providerId || '').trim().toLowerCase()
+  if (!id || !child?.pid) return
+  child.once('exit', (code) => {
+    void (async () => {
+      await delay(2_500)
+      if (providerLaunchers.get(id)?.pid !== child.pid) return
+      const running = await processPidsByImage(launcherNames)
+      if (running.length > 0) {
+        providerLaunchers.set(id, { pid: running[0], startedAt: Date.now() })
+        return
+      }
+      const probe = await fortniteClientProbe()
+      if (probe.running) return
+      providerLaunchers.delete(id)
+      companionGameWaits.delete(id)
+      stopCompanionWindowHider(id)
+      const monitor = companionMonitors.get(id)
+      if (monitor) {
+        if (monitor.timer) clearInterval(monitor.timer)
+        companionMonitors.delete(id)
+      }
+      send('arc:provider-launcher-exited', {
+        providerId: id,
+        pid: child.pid,
+        reason: 'launcher-exited',
+        exitCode: Number.isInteger(code) ? code : null,
+      })
+    })()
+  })
+}
+
 function startCompanionSessionMonitor(providerId, executable) {
   const id = String(providerId || '').trim().toLowerCase()
   if (!id) return null
@@ -3159,8 +3295,10 @@ async function startImportedCommunityLauncher(providerId, launchOptions = {}) {
   if (existing) return { pid: existing.pid, executable, alreadyRunning: true }
   const folder =
     typeof launchOptions?.folder === 'string' ? launchOptions.folder.trim() : ''
-  const names = [path.basename(executable, path.extname(executable))]
-  startHiddenWindowWatcher(names, { seconds: 21_600, exitWhenGone: true })
+  // Give the launcher's own UI a loopback DevTools port so VAULTED can add the
+  // downloaded build to its library through the library API it already uses.
+  // Launchers that are not WebView2 ignore the variable.
+  const bridgePort = await allocateLauncherDebugPort()
   const child = spawn(executable, [], {
     detached: true,
     stdio: 'ignore',
@@ -3169,18 +3307,97 @@ async function startImportedCommunityLauncher(providerId, launchOptions = {}) {
     // next to its own .exe. The season folder is offered through the same
     // VAULTED_BUILD_FOLDER convention the injected client receives.
     cwd: path.dirname(executable),
-    env: {
+    env: launcherBridgeEnv(bridgePort, {
       ...process.env,
       VAULTED_PROVIDER_ID: id,
       VAULTED_COMMUNITY_LAUNCHER: '1',
       ...(folder ? { VAULTED_BUILD_FOLDER: folder, VAULTED_GAME_DIR: folder } : {}),
-    },
+    }),
   })
   child.unref()
   registerProviderLauncher(id, child)
-  startCompanionWindowHider(id, child.pid)
+  const launcherNames = [path.basename(executable, path.extname(executable))]
+  watchCommunityLauncherExit(id, child, launcherNames)
+  // Visible on purpose: this is where the player signs in to the community
+  // and presses its own Play button. It is hidden only once Fortnite runs.
+  void showCompanionLauncher(child.pid)
   startCompanionSessionMonitor(id, executable)
-  return { pid: child.pid ?? null, executable }
+  if (bridgePort && folder) {
+    void linkCommunityBuildInBackground(id, bridgePort, communityBuildJunction(folder))
+  }
+  return { pid: child.pid ?? null, executable, visible: true, bridge: Boolean(bridgePort) }
+}
+
+/**
+ * A space-free, VAULTED-owned path for the launcher's library. Several
+ * community launchers build unquoted command lines for their anticheat, so a
+ * folder called "VAULTED Launcher" can break their launch even though the
+ * build itself is complete. A directory junction keeps one copy on disk and
+ * gives the launcher a clean path such as
+ * %LOCALAPPDATA%\VAULTED\community-launchers\builds\ch1-s3.
+ */
+function communityBuildJunction(folder) {
+  const target = path.resolve(folder)
+  const base = process.env.LOCALAPPDATA
+    ? path.join(process.env.LOCALAPPDATA, 'VAULTED', 'community-launchers', 'builds')
+    : ''
+  if (!base) return target
+  const link = path.join(base, path.basename(target))
+  try {
+    fs.mkdirSync(base, { recursive: true })
+    let existing = null
+    try {
+      existing = fs.lstatSync(link)
+    } catch {
+      existing = null
+    }
+    if (existing) {
+      if (existing.isSymbolicLink()) {
+        const current = fs.readlinkSync(link)
+        if (path.resolve(current) === target) return link
+        fs.rmSync(link, { recursive: true, force: true })
+      } else {
+        return target
+      }
+    }
+    fs.symlinkSync(target, link, 'junction')
+    return link
+  } catch (error) {
+    console.warn(
+      `[VAULTED] could not create the launcher build junction: ${
+        error instanceof Error ? error.message : error
+      }`,
+    )
+    return target
+  }
+}
+
+/**
+ * Add the season folder to the launcher's own library after it opens, then let
+ * the renderer show whether the handoff worked. Best effort: a launcher that
+ * exposes no library API simply keeps the manual Import Build path.
+ */
+async function linkCommunityBuildInBackground(providerId, port, folder) {
+  const result = await linkBuildIntoLauncher({ port, folder }).catch((error) => ({
+    supported: false,
+    linked: false,
+    reason: 'bridge-failed',
+    detail: error instanceof Error ? error.message : String(error),
+  }))
+  try {
+    send('arc:community-build-linked', {
+      providerId,
+      linked: result.linked === true,
+      added: result.added === true,
+      already: result.already === true,
+      supported: result.supported === true,
+      reason: result.reason || '',
+      title: result.title || '',
+    })
+  } catch {
+    /* the window may already be gone */
+  }
+  return result
 }
 
 /**
@@ -6152,19 +6369,33 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         if (discovered) imported = await startImportedCommunityLauncher(id, launchOptions)
       }
       if (imported?.executable) {
+        const waiting = Boolean(imported.pid)
+        if (waiting) {
+          watchCommunityGameStart({
+            providerId: id,
+            launcherPid: imported.pid,
+            launcherNames: [
+              path.basename(imported.executable, path.extname(imported.executable)),
+            ],
+            gameExecutable:
+              buildExecutable || (buildFolder ? findPrimaryExecutable(buildFolder) : ''),
+            gameFolder: buildFolder,
+          })
+        }
         return {
           opened: true,
           path: imported.executable,
           pid: imported.pid ?? null,
           tracked: true,
-          hidden: true,
+          visible: true,
+          waitingForGame: waiting,
         }
       }
       return {
         opened: false,
         directLaunch: true,
         community: true,
-        error: `${profile.label} needs its launcher once. Its Discord #download channel has it — install it there and VAULTED detects it, then runs it hidden off-screen for the whole session.`,
+        error: `${profile.label} needs its launcher once. Install it from its Discord #download channel and VAULTED detects it, opens it for the one-time sign-in, then runs it hidden while Fortnite plays.`,
       }
     }
 

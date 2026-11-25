@@ -192,12 +192,52 @@ assert.match(
   'the direct-launch branch runs auto-discovery before asking for the file',
 )
 assert.match(main, /communityLauncherExecutable\(id, communityLauncherRoot\(\)\)/)
-assert.match(main, /community: true/, 'a Discord season without its launcher opens Steps 1-2')
-assert.match(main, /windowsHide: true/, 'the imported launcher never shows a window')
+assert.match(main, /community: true/, 'a Discord season without its launcher reports the missing launcher')
+assert.match(
+  main,
+  /void showCompanionLauncher\(child\.pid\)/,
+  'the community launcher opens visibly for its one-time sign-in',
+)
+assert.match(
+  main,
+  /launcherBridgeEnv\(bridgePort/,
+  'the launcher is started with the local library bridge',
+)
+assert.match(
+  main,
+  /linkCommunityBuildInBackground\(id, bridgePort, communityBuildJunction\(folder\)\)/,
+  'the downloaded folder is handed to the launcher library after it opens',
+)
+assert.match(
+  main,
+  /fs\.symlinkSync\(target, link, 'junction'\)/,
+  'the launcher receives a space-free junction to the same build',
+)
+assert.match(
+  read('electron/communityBridge.cjs'),
+  /parsed\.linked === true\) return parsed/,
+  'the bridge retries while the launcher is still restoring its library and session',
+)
+
+assert.match(
+  main,
+  /function watchCommunityGameStart\(/,
+  'main must watch for Fortnite instead of hiding the sign-in window',
+)
+assert.match(
+  main,
+  /waitingForGame: waiting/,
+  'Play must stay on Starting… until the real client process exists',
+)
 assert.doesNotMatch(main, /spawn\([^)]*shell:\s*true/, 'community launchers never run through a shell')
 
 const preload = read('electron/preload.cjs')
 assert.match(preload, /communityLauncher: \{/)
+assert.match(
+  preload,
+  /onCommunityBuildLinked: \(callback\) => subscribe\('arc:community-build-linked'/,
+  'the renderer is told when the build reached the launcher library',
+)
 assert.match(preload, /contextBridge, ipcRenderer, webUtils/)
 assert.match(preload, /pathForFile/)
 
@@ -317,11 +357,25 @@ assert.match(
 )
 
 assert.match(launchSource, /communityUnlocked/)
-assert.match(launchSource, /openProviderLauncher\(/)
-assert.match(launchSource, /onLauncherImported=\{handleCommunityLauncherImported\}/)
 assert.match(
   launchSource,
-  /The community launcher stays hidden off-screen while Fortnite runs/,
+  /Sign in to \$\{provider\.label\}, then press Play/,
+  'a community launch must tell the player to sign in and press Play',
+)
+assert.match(
+  launchSource,
+  /subscribeCommunityBuildLinked\(/,
+  'the card must react when the launcher library accepts the build',
+)
+assert.equal(
+  /<DiscordGateModal/.test(launchSource),
+  false,
+  'the Discord verification modal is never rendered',
+)
+assert.equal(
+  /activeDiscordSetupLocked/.test(launchSource),
+  false,
+  'no verification lock may block Play',
 )
 
 // --- 8. A portable launcher is linked in place, never re-run as a setup ----
@@ -498,10 +552,10 @@ async function checkDiscordHostedLaunch() {
     /await startOnlineProvider\(build, discordHostedProvider\)\s*\n\s*return/,
     'Play must hand the season to its community launcher and stop',
   )
-  assert.match(
-    app.slice(hostedAt, hostedAt + 900),
-    /isDiscordGateVerified\(discordGateVerifications, discordHostedProvider\.discordGate!\)/,
-    'only a verified Step 1 unlocks the 24/7 route',
+  assert.equal(
+    /isDiscordGateVerified\(discordGateVerifications, discordHostedProvider\.discordGate!\)/.test(app),
+    false,
+    'Play must not require Discord verification anymore',
   )
 
   const store = fs.mkdtempSync(path.join(os.tmpdir(), 'vaulted-adopt-'))
