@@ -138,6 +138,16 @@ export function onlineIsPlayable(mode: SeasonPlayMode | null | undefined): boole
   )
 }
 
+/**
+ * True when the season has any configured online route, even if it is down or
+ * locked behind a build mismatch. The Online library tab is the inventory of
+ * online seasons, not only the ones playable this second.
+ */
+export function onlineHasRoute(mode: SeasonPlayMode | null | undefined): boolean {
+  if (!mode || mode.archived) return false
+  return mode.availability !== 'unsupported' || onlineIsPlayable(mode)
+}
+
 /** True when the probe has finished and no online route was found. */
 export function onlineIsUnavailable(mode: SeasonPlayMode | null | undefined): boolean {
   if (!mode || mode.archived || onlineIsAvailable(mode)) return false

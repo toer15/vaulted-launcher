@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { FolderPlus, HardDrive, Plus, Radio, Wifi } from 'lucide-react'
 import { BuildList } from './BuildList'
 import { cx } from '../lib/cx'
-import { onlineIsPlayable, onlinePlayerCount, type SeasonPlayMode } from '../lib/playMode'
+import { onlineHasRoute, onlinePlayerCount, type SeasonPlayMode } from '../lib/playMode'
 import type { Build, DownloadState } from '../types'
 
 type LibraryFilter = 'all' | 'online' | 'installed' | 'active'
@@ -45,12 +45,12 @@ export function LibraryRail({
     () => builds.filter((build) => installed[build.id] === true),
     [builds, installed],
   )
-  // Every season a player can actually enter right now: a live backend, a
-  // joinable directory lobby, or a verified launcher-backed external route.
-  // This is deliberately broader than Active Players, which needs a reported
-  // player count and hides a working launcher with no player sample.
+  // Every season with a configured online route, including one whose host is
+  // temporarily down or whose hosted build is still locked. This is the full
+  // online library, deliberately broader than Active Players, which needs a
+  // reported player count and hides working launchers with no player sample.
   const onlineBuilds = useMemo(
-    () => builds.filter((build) => onlineIsPlayable(playModes[build.id])),
+    () => builds.filter((build) => onlineHasRoute(playModes[build.id])),
     [builds, playModes],
   )
   const activeBuilds = useMemo(
@@ -121,7 +121,7 @@ export function LibraryRail({
         <button
           type="button"
           aria-pressed={filter === 'online'}
-          aria-label={`Online available (${onlineBuilds.length})`}
+          aria-label={`Online seasons (${onlineBuilds.length})`}
           onClick={() => setFilter('online')}
           className={tabClass(filter === 'online', true)}
         >

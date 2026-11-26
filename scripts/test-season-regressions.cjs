@@ -1186,6 +1186,12 @@ function testOnlineRoutes() {
   const appHub = read('src/App.tsx')
   const playModeSource = read('src/lib/playMode.ts')
   assert.match(playModeSource, /export function onlineIsPlayable\(/)
+  assert.match(playModeSource, /export function onlineHasRoute\(/)
+  assert.match(
+    playModeSource,
+    /mode\.availability !== 'unsupported' \|\| onlineIsPlayable\(mode\)/,
+    'the Online tab must count configured routes, not only live ones',
+  )
   assert.match(playModeSource, /onlineIsLive\(mode\) \|\|/)
   assert.match(
     playModeSource,
@@ -1492,12 +1498,13 @@ function testCardStates() {
   assert.match(card, /communityLockedMessage\(communityLockedLabel\)/)
   assert.match(read('src/components/BuildList.tsx'), /communityRouteLocked/)
 
-  // The library can be reduced to only seasons a player can enter right now,
-  // including launcher-backed routes without a player-count sample.
+  // The library can be reduced to every configured online season, including
+  // launcher-backed routes without a player-count sample and routes whose host
+  // is currently locked.
   const rail = read('src/components/LibraryRail.tsx')
   assert.match(rail, /type LibraryFilter = 'all' \| 'online' \| 'installed' \| 'active'/)
-  assert.match(rail, /builds\.filter\(\(build\) => onlineIsPlayable\(playModes\[build\.id\]\)\)/)
-  assert.match(rail, /aria-label={`Online available \(\$\{onlineBuilds\.length\}\)`}/)
+  assert.match(rail, /builds\.filter\(\(build\) => onlineHasRoute\(playModes\[build\.id\]\)\)/)
+  assert.match(rail, /aria-label={`Online seasons \(\$\{onlineBuilds\.length\}\)`}/)
   assert.match(rail, /filter === 'online' && visibleBuilds\.length === 0/)
 }
 
