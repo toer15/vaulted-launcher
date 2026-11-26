@@ -48,6 +48,7 @@ const {
   showCompanionLauncherOffscreen,
   showCompanionLauncherPopup,
   startCompanionLauncherFastener,
+  warmCompanionLauncherWindow,
 } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
 const { detectBuildVersion } = require('./buildVersion.cjs')
@@ -2988,7 +2989,19 @@ function beginCompanionAutoPlay({
     // hide PowerShell can land after the reveal and leave Eon invisible.
     await hideCompanionLauncher(pid)
     let revealed = false
+    let warmed = false
     let importAttempts = 0
+    const revealLauncher = async (options = {}) => {
+      if (!warmed) {
+        warmed = await warmCompanionLauncherWindow(pid, {
+          width: 1200,
+          height: 800,
+          attempts: 8,
+          waitMs: 350,
+        })
+      }
+      return showCompanionLauncher(pid, options)
+    }
     const deadline = Date.now() + COMPANION_PLAY_TIMEOUT_MS
     while (Date.now() < deadline) {
       if (companionPlayRuns.get(id) !== token) return
@@ -3001,6 +3014,7 @@ function beginCompanionAutoPlay({
         const current = await processPidsByImage(launcherNames)
         if (current.length > 0) {
           pid = current[0]
+          warmed = false
           startCompanionWindowHider(id, pid)
         }
       }
@@ -3033,8 +3047,7 @@ function beginCompanionAutoPlay({
           // hide (early spawn hider or download hider) can land just after the
           // first reveal; re-showing each pass makes that harmless. Re-entering
           // the off-screen UIA click here would hide it again instead.
-          revealed =
-            (await showCompanionLauncher(pid, { attempts: 8, waitMs: 500 })) || revealed
+          revealed = (await revealLauncher({ attempts: 8, waitMs: 500 })) || revealed
           await delay(2_500)
           continue
         }
@@ -3048,7 +3061,7 @@ function beginCompanionAutoPlay({
           return
         }
         if (click.reason === 'needs-sign-in' && !revealed) {
-          revealed = await showCompanionLauncher(pid, { attempts: 10, waitMs: 500 })
+          revealed = await revealLauncher({ attempts: 10, waitMs: 500 })
           await delay(2_500)
           continue
         }
@@ -3064,7 +3077,7 @@ function beginCompanionAutoPlay({
           return
         }
         if (!revealed) {
-          revealed = await showCompanionLauncher(pid, { attempts: 10, waitMs: 500 })
+          revealed = await revealLauncher({ attempts: 10, waitMs: 500 })
         }
         if (result.detail === 'no-bridge' || result.detail === 'generic-play-button') return
         await delay(2_500)
@@ -3072,7 +3085,7 @@ function beginCompanionAutoPlay({
       }
       if (result?.status === 'needs-import') importAttempts += 1
       if (!revealed) {
-        revealed = await showCompanionLauncher(pid, { attempts: 10, waitMs: 500 })
+        revealed = await revealLauncher({ attempts: 10, waitMs: 500 })
       }
       // Keep trying while the player signs in or updates the launcher. The
       // moment the launcher accepts the build, VAULTED hides it again.
@@ -7626,7 +7639,10 @@ async function openProviderLauncherEntry(providerId, options = {}) {
           location: buildFolder,
         })
       }
-      const args = launchArguments(runtimeMetadata, version) || []
+      // Sign-in must open the launcher's own account page. Passing a launch
+      // action (Retrac's `-action_after=launch_build…` is one) skips that page
+      // and leaves a blank launch window behind, which reads as a black popup.
+      const args = signInOnly ? [] : launchArguments(runtimeMetadata, version) || []
       const repairRuntime = async () => {
         const repaired = await ensureProviderRuntime(id, runtimeMetadata, {
           root: runtimeRoot,
@@ -7652,15 +7668,26 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         // small popup owned by VAULTED, so it returns to the app when closed.
         if (signInOnly && started.pid) {
           stopCompanionWindowHider(id)
-          // Start the fastener before waiting for the window: compiling its
-          // native guard takes a moment, so this way the drag block is ready
-          // the instant the launcher appears instead of a second later.
+          // The launcher was started hidden, so its WebView has not painted
+          // yet. Warm it off-screen once, then let the fastener and popup move
+          // the already-rendered page into place instead of revealing black.
+          await delay(400)
+          await warmCompanionLauncherWindow(started.pid, {
+            width: 560,
+            height: 760,
+            attempts: 12,
+            waitMs: 350,
+          })
+          // Start the fastener before the popup: compiling its native guard
+          // takes a moment, so the drag block is ready the instant the window
+          // moves on screen.
           startCompanionLauncherFastener(started.pid, process.pid)
           result.visible = await showCompanionLauncherPopup(started.pid, process.pid, {
             attempts: 12,
             waitMs: 500,
           })
           if (!result.visible) {
+            await warmCompanionLauncherWindow(started.pid, { attempts: 4, waitMs: 500 })
             result.visible = await showCompanionLauncher(started.pid, {
               attempts: 4,
               waitMs: 500,

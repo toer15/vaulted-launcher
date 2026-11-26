@@ -51,6 +51,7 @@ public class VaultedHiddenWindow {
   [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int index, int value);
   [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr h, int index, IntPtr value);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool RedrawWindow(IntPtr h, IntPtr r, IntPtr hrgn, uint flags);
 }
 "@
 function Find-VaultedTopWindow([int]$targetPid) {
@@ -127,6 +128,32 @@ $top = Find-VaultedTopWindow ${Math.max(1, Math.floor(Number(pid) || 0))}
 if ($top -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
 Hide-VaultedTopWindow $top
 'HIDDEN'
+`
+}
+
+function warmScript(pid, width, height, settleMs) {
+  const safePid = Math.max(1, Math.floor(Number(pid) || 0))
+  const safeWidth = Math.max(380, Math.min(1600, Math.floor(Number(width) || 1200)))
+  const safeHeight = Math.max(420, Math.min(1200, Math.floor(Number(height) || 800)))
+  const settle = Math.max(600, Math.min(4000, Math.floor(Number(settleMs) || 1800)))
+  return `
+${WINDOW_TYPES}
+$p = Get-Process -Id ${safePid} -ErrorAction SilentlyContinue
+if (-not $p) { 'NO_PROCESS'; exit 1 }
+$top = Find-VaultedTopWindow ${safePid}
+if ($top -eq [IntPtr]::Zero) { 'NO_WINDOW'; exit 2 }
+# A window hidden before its WebView painted stays black when first revealed.
+# Show it off every monitor, give the renderer time to build its compositor,
+# then force a real resize and repaint before the player sees it.
+[void][VaultedHiddenWindow]::ShowWindow($top, 4)
+[void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, -20000, -20000, ${safeWidth}, ${safeHeight}, 0x0010 -bor 0x0040)
+Start-Sleep -Milliseconds ${settle}
+[void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, -20000, -20000, ${safeWidth + 1}, ${safeHeight + 1}, 0x0010 -bor 0x0040)
+Start-Sleep -Milliseconds 250
+[void][VaultedHiddenWindow]::SetWindowPos($top, [IntPtr]::Zero, -20000, -20000, ${safeWidth}, ${safeHeight}, 0x0010 -bor 0x0040)
+[void][VaultedHiddenWindow]::RedrawWindow($top, [IntPtr]::Zero, [IntPtr]::Zero, 0x0001 -bor 0x0004 -bor 0x0080 -bor 0x0100 -bor 0x0400)
+Start-Sleep -Milliseconds 250
+'WARMED'
 `
 }
 
@@ -416,6 +443,27 @@ Send-VaultedClick $view $x $y
 `
 }
 
+/**
+ * Let a launcher that was started hidden initialize its WebView while it is
+ * still off every monitor. Without this the first reveal is an all-black
+ * window with only the native title bar.
+ */
+async function warmCompanionLauncherWindow(pid, options = {}) {
+  if (process.platform !== 'win32') return false
+  const attempts = Number.isFinite(options.attempts) ? options.attempts : 10
+  const waitMs = Number.isFinite(options.waitMs) ? options.waitMs : 350
+  const width = Number(options.width) || 1200
+  const height = Number(options.height) || 800
+  const settleMs = Number(options.settleMs) || 1800
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const { output } = await runPowerShell(warmScript(pid, width, height, settleMs), 12_000)
+    if (output === 'WARMED') return true
+    if (output === 'NO_PROCESS') return false
+    await delay(waitMs)
+  }
+  return false
+}
+
 async function hideCompanionLauncher(pid) {
   if (process.platform !== 'win32') return false
   const { output } = await runPowerShell(hideScript(pid), 10_000)
@@ -536,6 +584,7 @@ module.exports = {
   showCompanionLauncherOffscreen,
   showCompanionLauncherPopup,
   startCompanionLauncherFastener,
+  warmCompanionLauncherWindow,
   delay,
   runPowerShell,
 }
