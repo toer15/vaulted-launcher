@@ -35,10 +35,14 @@ interface ManifestSeasonSource {
   version?: string
 }
 
+function manifestBuildVersion(key: string): string {
+  const source = (defaultBuilds as { seasons: Record<string, ManifestSeasonSource> }).seasons[key]
+  return source?.buildVersion || source?.version || ''
+}
+
 function catalogueBuild(entry: SeasonCatalogueEntry): Build {
   const key = artKeyFor(entry.season) ?? `ch${entry.season.chapter}-s${entry.season.season}`
-  const source = (defaultBuilds as { seasons: Record<string, ManifestSeasonSource> }).seasons[key]
-  return buildForSeason(entry.season, source?.buildVersion || source?.version || '', key)
+  return buildForSeason(entry.season, manifestBuildVersion(key), key)
 }
 
 const seasonKey = (season: { chapter: number; season: number }) => `${season.chapter}:${season.season}`
@@ -106,7 +110,16 @@ export function ensureAllSeasons(builds: Build[]): Build[] {
     }
   }
 
-  return SEASON_CATALOGUE.map(
-    (entry) => bySeason.get(seasonKey(entry.season)) ?? catalogueBuild(entry),
-  )
+  return SEASON_CATALOGUE.map((entry) => {
+    const key = seasonKey(entry.season)
+    const current = bySeason.get(key) ?? catalogueBuild(entry)
+    // A placeholder has no files on disk, so an older saved library must not
+    // keep showing the build version the previous release shipped. Installed
+    // and hand-linked builds keep their real version and folder.
+    const version = manifestBuildVersion(artKeyFor(entry.season) ?? '')
+    if (current.placeholder === true && version && current.version !== version) {
+      return { ...current, version }
+    }
+    return current
+  })
 }

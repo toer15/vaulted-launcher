@@ -1187,8 +1187,18 @@ function testOnlineRoutes() {
   assert.match(playModeSource, /export function onlineHasRoute\(/)
   assert.match(
     playModeSource,
-    /mode\.availability !== 'unsupported' \|\| onlineIsPlayable\(mode\)/,
-    'the Online tab must count configured routes, not only live ones',
+    /mode\.availability !== 'unsupported' && mode\.availability !== 'directory'/,
+    'the Online tab must not count a directory-only row as an online route',
+  )
+  assert.match(
+    playModeSource,
+    /configuredRoute \|\| onlineIsPlayable\(mode\)/,
+    'the Online tab must still count configured routes and playable routes',
+  )
+  assert.match(
+    playModeSource,
+    /hasLiveStatus\s*\?\s*'directory'/,
+    'a directory may only become an availability route when it reports live players or servers',
   )
   assert.match(playModeSource, /onlineIsLive\(mode\) \|\|/)
   assert.match(
@@ -1504,6 +1514,17 @@ function testCardStates() {
   assert.match(rail, /builds\.filter\(\(build\) => onlineHasRoute\(playModes\[build\.id\]\)\)/)
   assert.match(rail, /aria-label={`Online seasons \(\$\{onlineBuilds\.length\}\)`}/)
   assert.match(rail, /filter === 'online' && visibleBuilds\.length === 0/)
+
+  // The saved library can outlive a manifest update. Placeholders are blank
+  // slots, so they must follow the current bundled build version; installed and
+  // hand-linked builds keep their real version and folder.
+  const sampleBuilds = read('src/lib/sampleBuilds.ts')
+  assert.match(sampleBuilds, /function manifestBuildVersion\(/, 'the manifest version lookup must exist')
+  assert.match(
+    sampleBuilds,
+    /current\.placeholder === true && version && current\.version !== version/,
+    'stale saved placeholders must refresh from the bundled manifest',
+  )
 }
 
 function testHestiaAddsChapter1Season2Route() {

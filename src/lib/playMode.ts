@@ -145,7 +145,12 @@ export function onlineIsPlayable(mode: SeasonPlayMode | null | undefined): boole
  */
 export function onlineHasRoute(mode: SeasonPlayMode | null | undefined): boolean {
   if (!mode || mode.archived) return false
-  return mode.availability !== 'unsupported' || onlineIsPlayable(mode)
+  // A directory row without a live sample only says a project lists the
+  // season; it is not a route. Keep it out of the Online library until the
+  // directory (or another source) proves there is something to join.
+  const configuredRoute =
+    mode.availability !== 'unsupported' && mode.availability !== 'directory'
+  return configuredRoute || onlineIsPlayable(mode)
 }
 
 /** True when the probe has finished and no online route was found. */
@@ -850,7 +855,7 @@ export function playModesForBuilds(
       const availability =
         existing.availability === 'global' || existing.availability === 'launcher'
           ? existing.availability
-          : directoryLabels.length > 0
+          : hasLiveStatus
             ? 'directory'
             : existing.availability
       modes[build.id] = {
