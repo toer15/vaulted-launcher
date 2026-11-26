@@ -4914,10 +4914,12 @@ function testArchive(archivePath, controller) {
   })
 }
 
-// Archive.org is the main source and caps useful concurrency around a dozen
-// sockets. A small chunk queue keeps every socket busy and prevents one slow
-// tail request from holding up the last gigabytes of a build.
-const MAX_DOWNLOAD_CONNECTIONS = 16
+// Archive.org is the main source and benefits from a deep chunk queue. A small
+// chunk queue keeps every socket busy and prevents one slow tail request from
+// holding up the last gigabytes of a build. Measured: 24 sockets saturate the
+// mirror; 32+ triggers throttling and is slower, so keep the production cap at
+// the measured sweet spot.
+const MAX_DOWNLOAD_CONNECTIONS = 24
 const MIN_PARALLEL_BYTES = 2 * 1024 * 1024
 const DOWNLOAD_CHUNK_BYTES = 8 * 1024 * 1024
 const DOWNLOAD_LARGE_CHUNK_BYTES = 16 * 1024 * 1024

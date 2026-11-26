@@ -143,7 +143,7 @@ async function writeAt(handle, buffer, position) {
 
 /**
  * Connections scale with the archive size: small files stay simple, and
- * multi-gigabyte builds use the full 16-socket pool. `VAULTED_DOWNLOAD_CONNECTIONS`
+ * multi-gigabyte builds use the full 24-socket pool. `VAULTED_DOWNLOAD_CONNECTIONS`
  * overrides the pool for testing or unusual links.
  */
 function connectionCount(total, override) {
@@ -154,10 +154,11 @@ function connectionCount(total, override) {
   if (!(total > 0)) return 8
   if (total < MIN_PARALLEL_BYTES) return 1
   if (total < 8 * 1024 * 1024) return 2
-  if (total < 64 * 1024 * 1024) return 6
-  if (total < 256 * 1024 * 1024) return 12
-  if (total < 2 * 1024 * 1024 * 1024) return 14
-  return 16
+  if (total < 32 * 1024 * 1024) return 6
+  if (total < 64 * 1024 * 1024) return 12
+  // Archive.org scales to roughly two dozen parallel requests per client.
+  // Beyond that it starts throttling and total throughput drops.
+  return 24
 }
 
 /** Split a file into resume-friendly chunks, not one range per socket. */

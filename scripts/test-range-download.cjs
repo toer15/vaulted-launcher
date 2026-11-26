@@ -127,10 +127,11 @@ function fail(message) {
     if (!probe.supported || probe.total !== SIZE) fail('range probe did not read the archive size')
 
     const single = await measure(port, 1)
-    const parallel = await measure(port, 12)
+    const parallel = await measure(port, 24)
     if (single.hash !== expected || parallel.hash !== expected) fail('downloaded bytes did not match')
     if (engine.connectionCount(48 * 1024 ** 2) < 6) fail('mid-size archives should use several connections')
-    if (engine.connectionCount(3 * 1024 ** 3) !== 16) fail('gigabyte archives should use the full 16-socket pool')
+    if (engine.connectionCount(3 * 1024 ** 3) !== 24) fail('gigabyte archives should use the full 24-socket pool')
+    if (engine.connectionCount(64 * 1024 ** 2) !== 24) fail('large archives should use the full 24-socket pool')
     if (engine.connectionCount(SIZE, 4) !== 4) fail('connection override was ignored')
     if (parallel.megabytesPerSecond < single.megabytesPerSecond * 0.4) {
       fail('parallel download was unexpectedly slower than a single stream')
