@@ -4779,7 +4779,7 @@ export default function App() {
     if (autoGlobalBackend && (autoGlobalBackend.mode === 'external' || autoGlobalBackend.external)) {
       // Every online season needs its real Fortnite build on this PC before any
       // launcher opens. The provider runtime, its DLLs and the launcher are
-      // staged alongside that archive, never instead of it.
+      // staged first; the launcher then downloads the season itself.
       if (!installed[build.id]) {
         if (activeRuntime?.required && !activeRuntime.installed) {
           await handleInstallRuntime()
