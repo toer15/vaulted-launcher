@@ -294,7 +294,7 @@ async function downloadRanges(options) {
   // Adaptive concurrency: mirrors such as archive.org throttle or reject bursts
   // of sockets, which shows up as a long stalling tail. The pool shrinks when a
   // host pushes back and creeps back up as requests succeed.
-  const throttle = { limit: connections, active: 0, retryAfterMs: 0 }
+  const throttle = { limit: connections, active: 0, retryAfterMs: 0, lastBackoffAt: 0 }
   const acquire = async () => {
     while (throttle.active >= throttle.limit) {
       if (signal?.aborted || workers.signal.aborted) throw abortError()
@@ -306,7 +306,13 @@ async function downloadRanges(options) {
     throttle.active = Math.max(0, throttle.active - 1)
   }
   const backOff = (status, retryAfter) => {
-    throttle.limit = Math.max(2, Math.floor(throttle.limit * 0.6))
+    // A burst of ranges can all receive 503 at once. Count that burst as one
+    // backoff instead of letting every response collapse the pool to 2 sockets.
+    const now = Date.now()
+    if (now - throttle.lastBackoffAt >= 500) {
+      throttle.lastBackoffAt = now
+      throttle.limit = Math.max(2, Math.floor(throttle.limit * 0.6))
+    }
     const headerSeconds = Number(retryAfter)
     throttle.retryAfterMs = Number.isFinite(headerSeconds) && headerSeconds > 0 ? headerSeconds * 1000 : 800
   }
