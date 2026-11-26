@@ -208,6 +208,8 @@ export interface LauncherAuthStatus {
   verifiable: boolean
   /** VAULTED registered this launcher account and remembers it across restarts */
   recorded?: boolean
+  /** where the answer came from: the launcher's store, its live window, or VAULTED's record */
+  source?: 'disk' | 'page' | 'registry' | ''
 }
 
 /** Result of opening a season's other launcher after its build was installed. */

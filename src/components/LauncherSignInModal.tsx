@@ -112,13 +112,9 @@ export function LauncherSignInModal({
                   : 'Use the launcher window that opens'}
             </p>
             <p className="mt-1 text-[10.5px] leading-relaxed text-fog">
-              {signedIn === false
-                ? verifiable
-                  ? `Sign in at ${launcherLabel}. VAULTED closes it and returns here automatically.`
-                  : `Sign in at ${launcherLabel}, then close its window. VAULTED comes back here automatically.`
-                : verifiable
-                  ? `VAULTED reads ${launcherLabel}'s saved session only; it never sees your password.`
-                  : `VAULTED cannot read ${launcherLabel}'s account storage, so it returns when you close the sign-in window.`}
+              {verifiable
+                ? `VAULTED reads ${launcherLabel}'s saved session only; it never sees your password, and it closes the window the moment you are in.`
+                : `Finish signing in at ${launcherLabel}, then close its window. VAULTED comes back here automatically.`}
             </p>
           </div>
 
@@ -168,14 +164,6 @@ export function LauncherSignInModal({
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={busy}
-            className="mt-1 w-full rounded-lg px-2 py-1 text-[10.5px] font-semibold text-fog transition-colors duration-200 hover:text-mist disabled:cursor-wait disabled:opacity-50"
-          >
-            Cancel
-          </button>
         </div>
       </div>
     </div>,

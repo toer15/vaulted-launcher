@@ -82,6 +82,10 @@ const {
   prepareEonConfig,
   readEonConfig,
 } = require('./companionPlay.cjs')
+const {
+  readLauncherSession,
+  readLauncherSessionOnPage,
+} = require('./launcherSession.cjs')
 const rangeDownload = require('./rangeDownloader.cjs')
 const {
   ensureProviderRuntime,
@@ -4210,11 +4214,15 @@ function recordLauncherAccount(providerId, payload = {}) {
 }
 
 /**
- * Launcher-owned account state before a season download. Only Eon exposes a
- * readable saved session (Settings.ini); other launchers have no common token
- * store, so their registered record is what VAULTED remembers.
+ * Launcher-owned account state before a season download.
+ *
+ * The answer belongs to one provider id and comes from that launcher's own
+ * saved session first (Eon's Settings.ini, Omen's .auth, Hestia/Retrac/Stellar
+ * Local Storage tokens). When the launcher is open, its own session API is
+ * asked too. Only a launcher with neither a readable store nor a live API is
+ * remembered from the completed sign-in window.
  */
-function launcherAuthStatus(providerId) {
+async function launcherAuthStatus(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
   const provider = providerCatalog().find((entry) => entry.id === id)
   if (!provider) return null
@@ -4223,23 +4231,54 @@ function launcherAuthStatus(providerId) {
   if (!hasLauncher) {
     return { providerId: id, label, hasLauncher: false, signedIn: null, verifiable: false }
   }
+
   const recorded = readLauncherAccounts()[id]
-  if (id === 'eon') {
-    const config = readEonConfig()
-    // Eon is the one launcher with a readable saved session. Mirror it into the
-    // account record so every path sees the same registered launcher.
-    if (config.signedIn === true) {
-      if (!recorded) recordLauncherAccount(id, { label, verifiable: true })
-    } else if (recorded) {
-      recordLauncherAccount(id, { signedIn: false })
+  const saved = await readLauncherSession(id)
+  let signedIn = saved.known ? saved.signedIn : null
+  let verifiable = saved.known === true
+  let source = saved.known ? saved.source || 'disk' : ''
+
+  // A launcher that is already open answers for itself even when its store is
+  // encrypted or not yet flushed. This is the same process VAULTED started for
+  // the sign-in window, so the port belongs to this provider alone.
+  if (signedIn !== true) {
+    const open = providerLaunchers.get(id)
+    const prepared = companionPrepareSessions.get(id)
+    const port = Number(open?.bridgePort) || Number(prepared?.port) || 0
+    if (port) {
+      const live = await readLauncherSessionOnPage(id, port)
+      if (live.known) {
+        signedIn = live.signedIn
+        verifiable = true
+        source = 'page'
+      }
     }
+  }
+
+  if (signedIn === true) {
+    if (!recorded || recorded.verifiable !== verifiable) {
+      recordLauncherAccount(id, { label, verifiable })
+    }
+    return {
+      providerId: id,
+      label: recorded?.label || label,
+      hasLauncher: true,
+      signedIn: true,
+      verifiable,
+      recorded: true,
+      source,
+    }
+  }
+  if (signedIn === false) {
+    if (recorded) recordLauncherAccount(id, { signedIn: false })
     return {
       providerId: id,
       label,
       hasLauncher: true,
-      signedIn: config.signedIn === true,
+      signedIn: false,
       verifiable: true,
-      recorded: config.signedIn === true,
+      recorded: false,
+      source,
     }
   }
   if (recorded) {
@@ -4250,9 +4289,18 @@ function launcherAuthStatus(providerId) {
       signedIn: true,
       verifiable: false,
       recorded: true,
+      source: 'registry',
     }
   }
-  return { providerId: id, label, hasLauncher: true, signedIn: null, verifiable: false, recorded: false }
+  return {
+    providerId: id,
+    label,
+    hasLauncher: true,
+    signedIn: null,
+    verifiable: false,
+    recorded: false,
+    source: '',
+  }
 }
 
 /** Public runtime state for the season card; no URLs or filesystem internals. */

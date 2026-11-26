@@ -3019,9 +3019,35 @@ export default function App() {
       try {
         if (status) {
           setLauncherAuthStatuses((prev) => ({ ...prev, [prompt.providerId]: status }))
+          if (status.signedIn === true) {
+            // Unlock the card immediately; main has already written the
+            // provider-keyed account record when it verified the session.
+            launcherConfirmedRef.current.add(prompt.providerId)
+            setLauncherConfirmedIds((prev) =>
+              prev.includes(prompt.providerId) ? prev : [...prev, prompt.providerId],
+            )
+            if (status.recorded !== true) {
+              void recordLauncherAccount(prompt.providerId, {
+                label: prompt.label,
+                verifiable: status.verifiable === true,
+              })
+            }
+          } else if (status.signedIn === null && prompt.signedIn === null) {
+            // No readable store answered for this launcher. Register the
+            // completed sign-in window for this exact provider instead of
+            // pretending VAULTED verified a token it never saw.
+            launcherConfirmedRef.current.add(prompt.providerId)
+            setLauncherConfirmedIds((prev) =>
+              prev.includes(prompt.providerId) ? prev : [...prev, prompt.providerId],
+            )
+            void recordLauncherAccount(prompt.providerId, {
+              label: prompt.label,
+              verifiable: false,
+            })
+          }
         } else if (prompt.signedIn === null) {
-          // No common token store exists for this launcher. Register the player's
-          // completed sign-in for this PC instead of pretending VAULTED read it.
+          // The launcher window closed and no store could be read. The closed
+          // sign-in window is the confirmation for this provider only.
           launcherConfirmedRef.current.add(prompt.providerId)
           setLauncherConfirmedIds((prev) =>
             prev.includes(prompt.providerId) ? prev : [...prev, prompt.providerId],
@@ -3048,20 +3074,25 @@ export default function App() {
           /* focus is best-effort */
         }
       } finally {
-        launcherSignInCompletingRef.current = false
         setLauncherSignInBusy(false)
       }
     },
     [],
   )
 
-  // Eon writes its saved account to Settings.ini as soon as the login finishes.
-  // Watch that file while its window is open so the player does not have to
-  // return to VAULTED: the launcher closes itself and VAULTED comes back
-  // automatically.
+  // The completion lock is released only after the popup is gone, so a late
+  // launcher-exit event cannot record the same sign-in twice.
+  useEffect(() => {
+    if (!launcherSignIn) launcherSignInCompletingRef.current = false
+  }, [launcherSignIn])
+
+  // Every launcher writes its own account somewhere: Eon's Settings.ini, Omen's
+  // .auth, a Local Storage token for the WebView2 projects, or its live session
+  // API. Poll that exact provider while its window is open so the player never
+  // has to return to VAULTED or press a continue button.
   useEffect(() => {
     const prompt = launcherSignIn
-    if (!prompt?.verifiable || !launcherSignInOpened || launcherSignInBusy) return
+    if (!prompt || !launcherSignInOpened || launcherSignInBusy) return
     let cancelled = false
     let timer = 0
     const poll = async () => {
@@ -3073,31 +3104,47 @@ export default function App() {
         /* keep polling while the launcher window is open */
       }
       if (cancelled) return
+      if (status) {
+        setLauncherAuthStatuses((prev) => ({ ...prev, [prompt.providerId]: status }))
+      }
       if (status?.signedIn === true) {
         void finishLauncherSignIn(prompt, status, true)
         return
       }
-      timer = window.setTimeout(poll, 2000)
+      timer = window.setTimeout(poll, 1500)
     }
-    timer = window.setTimeout(poll, 1500)
+    timer = window.setTimeout(poll, 1200)
     return () => {
       cancelled = true
       window.clearTimeout(timer)
     }
   }, [finishLauncherSignIn, launcherSignIn, launcherSignInBusy, launcherSignInOpened])
 
-  // Launchers with no readable token store cannot be verified from disk, so
-  // their sign-in window closing is the signal that the player is done. VAULTED
-  // then dismisses the popup itself and restores the card's button, with no
-  // extra confirmation click.
+  // If the player closes the sign-in window themselves, re-read that launcher's
+  // saved session once and close the popup automatically. A verified session is
+  // recorded; a signed-out store is left signed out instead of being faked.
   useEffect(() => {
     const prompt = launcherSignIn
-    if (!prompt || prompt.verifiable || !launcherSignInOpened) return
-    return subscribeProviderLauncherExit((payload) => {
+    if (!prompt || !launcherSignInOpened) return
+    let cancelled = false
+    const unsubscribe = subscribeProviderLauncherExit((payload) => {
       if (payload.providerId !== prompt.providerId) return
       if (launcherSignInCompletingRef.current) return
-      void finishLauncherSignIn(prompt, null, true)
+      void (async () => {
+        let status: LauncherAuthStatus | null = null
+        try {
+          status = await checkLauncherAuth(prompt.providerId)
+        } catch {
+          status = null
+        }
+        if (cancelled) return
+        void finishLauncherSignIn(prompt, status, true)
+      })()
     })
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
   }, [finishLauncherSignIn, launcherSignIn, launcherSignInOpened])
 
   /** One-click repair to the exact live provider build, then Play. */
