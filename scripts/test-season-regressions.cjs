@@ -1567,18 +1567,18 @@ function testInstallSeasonRequiresExplicitClick() {
   assert.match(MAIN, /AppActivate\(\$\{process\.pid\}\)/, 'Windows focus must activate the real window')
   assert.match(
     MAIN,
-    /showCompanionLauncherPopup\(started\.pid, process\.pid/,
-    'the launcher sign-in window must open as a small VAULTED-owned popup',
+    /warmCompanionLauncherWindow\(signInPid[\s\S]{0,600}?showCompanionLauncher\(signInPid/,
+    'the launcher sign-in must open the actual launcher app at full size',
   )
-  assert.match(
+  assert.doesNotMatch(
     MAIN,
-    /startCompanionLauncherFastener\(started\.pid, process\.pid\)/,
-    'the sign-in popup must stay centred and fastened to VAULTED',
+    /showCompanionLauncherPopup\(started\.pid/,
+    'the sign-in must not force the launcher into the small owned popup',
   )
-  assert.match(
-    read('electron/companionAutomation.cjs'),
-    /SetWindowLongPtr\(\$top, -8, \$owner\)/,
-    'the sign-in popup must be owned by the VAULTED window so it stays attached',
+  assert.doesNotMatch(
+    MAIN,
+    /startCompanionLauncherFastener\(started\.pid/,
+    'the sign-in app window must stay its own normal window',
   )
 }
 

@@ -43,11 +43,10 @@ const { isOptionalVerifyIssue, removeLooseFiles, scanLooseFiles } = require('./a
 const { writeSavedBuild } = require('./rebootLauncher.cjs')
 const {
   clickCompanionPlayButton,
+  findCompanionWindowPid,
   hideCompanionLauncher,
   showCompanionLauncher,
   showCompanionLauncherOffscreen,
-  showCompanionLauncherPopup,
-  startCompanionLauncherFastener,
   warmCompanionLauncherWindow,
 } = require('./companionAutomation.cjs')
 const { fetchProviderLiveStatuses } = require('./providerStatus.cjs')
@@ -7330,9 +7329,13 @@ async function openProviderLauncherEntry(providerId, options = {}) {
             ? [preferredPid]
             : await runningLauncherPids(names)
         if (pids.length === 0) return null
+        // Era and other multi-process launchers publish helpers before the UI
+        // process. Reveal and track the PID that actually owns the window.
+        const windowPid = await findCompanionWindowPid(pids)
+        const pid = windowPid || pids[0]
         const prior = providerLaunchers.get(id)
         providerLaunchers.set(id, {
-          pid: pids[0],
+          pid,
           startedAt: Date.now(),
           bridgePort: prior?.bridgePort || 0,
           folder: prior?.folder || buildFolder,
@@ -7344,7 +7347,7 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         return {
           opened: true,
           path: current,
-          pid: pids[0],
+          pid,
           tracked: true,
           alreadyRunning: true,
           bridgePort: prior?.bridgePort || 0,
@@ -7664,35 +7667,40 @@ async function openProviderLauncherEntry(providerId, options = {}) {
       const finishLaunch = async (started) => {
         if (!started?.opened) return started
         const result = { ...started, args, version, savedBuild }
-        // Pre-download launcher sign-in: show the launcher's own login as a
-        // small popup owned by VAULTED, so it returns to the app when closed.
+        // Pre-download launcher sign-in: open the launcher's real app window,
+        // then close only that launcher once its session appears.
         if (signInOnly && started.pid) {
           stopCompanionWindowHider(id)
           // The launcher was started hidden, so its WebView has not painted
-          // yet. Warm it off-screen once, then let the fastener and popup move
-          // the already-rendered page into place instead of revealing black.
+          // yet. Warm it off-screen, then open its real app window at full size
+          // instead of forcing it into VAULTED's small owned popup. The renderer
+          // polls this exact launcher's session and closes only the launcher
+          // when the account is signed in; VAULTED itself stays open.
           await delay(400)
-          await warmCompanionLauncherWindow(started.pid, {
-            width: 560,
-            height: 760,
+          let signInPid = started.pid
+          await warmCompanionLauncherWindow(signInPid, {
+            width: 1200,
+            height: 800,
             attempts: 12,
             waitMs: 350,
           })
-          // Start the fastener before the popup: compiling its native guard
-          // takes a moment, so the drag block is ready the instant the window
-          // moves on screen.
-          startCompanionLauncherFastener(started.pid, process.pid)
-          result.visible = await showCompanionLauncherPopup(started.pid, process.pid, {
+          result.visible = await showCompanionLauncher(signInPid, {
             attempts: 12,
             waitMs: 500,
           })
-          if (!result.visible) {
-            await warmCompanionLauncherWindow(started.pid, { attempts: 4, waitMs: 500 })
-            result.visible = await showCompanionLauncher(started.pid, {
-              attempts: 4,
-              waitMs: 500,
-            })
+          if (!result.visible && launcherNames.length > 0) {
+            const running = await processPidsByImage(launcherNames)
+            const windowPid = await findCompanionWindowPid(running)
+            if (windowPid && windowPid !== signInPid) {
+              signInPid = windowPid
+              await warmCompanionLauncherWindow(signInPid, { attempts: 6, waitMs: 350 })
+              result.visible = await showCompanionLauncher(signInPid, {
+                attempts: 6,
+                waitMs: 500,
+              })
+            }
           }
+          if (result.visible) result.pid = signInPid
         }
         if (started.pid && buildFolder) {
           const gameExecutable =

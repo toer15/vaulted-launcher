@@ -464,6 +464,36 @@ async function warmCompanionLauncherWindow(pid, options = {}) {
   return false
 }
 
+/**
+ * A launcher such as Era owns several helper processes; only one owns the real
+ * top-level window. Pick that PID so a sign-in popup is not sent to a helper
+ * that has no window to reveal.
+ */
+async function findCompanionWindowPid(pids) {
+  if (process.platform !== 'win32') return 0
+  const clean = [...new Set((Array.isArray(pids) ? pids : [pids]).map((value) => Math.floor(Number(value) || 0)))].filter(
+    (value) => value > 0,
+  )
+  if (clean.length === 0) return 0
+  const script = `
+${WINDOW_TYPES}
+$bestPid = 0
+$bestArea = 0
+foreach ($id in @(${clean.join(',')})) {
+  $top = Find-VaultedTopWindow $id
+  if ($top -eq [IntPtr]::Zero) { continue }
+  $r = New-Object VaultedHiddenWindow+RECT
+  [void][VaultedHiddenWindow]::GetWindowRect($top, [ref]$r)
+  $area = ($r.R - $r.L) * ($r.B - $r.T)
+  if ($area -gt $bestArea) { $bestArea = $area; $bestPid = $id }
+}
+$bestPid
+`
+  const { output } = await runPowerShell(script, 8_000)
+  const pid = Number(String(output || '').trim())
+  return Number.isInteger(pid) && pid > 0 ? pid : 0
+}
+
 async function hideCompanionLauncher(pid) {
   if (process.platform !== 'win32') return false
   const { output } = await runPowerShell(hideScript(pid), 10_000)
@@ -585,6 +615,7 @@ module.exports = {
   showCompanionLauncherPopup,
   startCompanionLauncherFastener,
   warmCompanionLauncherWindow,
+  findCompanionWindowPid,
   delay,
   runPowerShell,
 }
