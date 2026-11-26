@@ -1,6 +1,6 @@
 {
   "_format": "version = newest released launcher version, url = its download page/installer, notes = optional short changelog.",
-  "version": "1.0.34",
-  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.34/VAULTED-Launcher-1.0.34-Setup.exe",
-  "notes": "The hidden game server and local matchmaking now read the playlist selected in Fortnite and host that exact mode instead of always defaulting to Solos. Switching modes while the launcher is open restarts the hidden host before a session is assigned. Includes the modern EOS login and D3D11 launch fixes."
+  "version": "1.0.259",
+  "url": "https://github.com/toer15/vaulted-launcher/releases/download/v1.0.259/VAULTED-Launcher-1.0.259-Setup.exe",
+  "notes": "Launcher sign-in is now a compact in-app popup with automatic saved-session detection and a Settings launcher scan. Adds verified Chapter OG, EVO, Venom and Project VEX routes, refreshes stale library placeholders, keeps directory-only listings out of Online, and raises large season downloads to a measured 24-connection pool with burst-aware backoff."
 }
