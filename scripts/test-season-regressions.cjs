@@ -402,12 +402,20 @@ function testWorkingSeasons() {
   assert.equal(eraOfficial.liveSeason?.path, 'data.season.number')
   assert.equal(eraOfficial.liveSeason?.seasonPrefix, 'ch1-s')
   assert.equal(eraOfficial.liveSeason?.equals, undefined, 'Era must follow, not pin a season')
-  for (let number = 1; number <= 9; number += 1) {
+  for (const number of [2, 3, 4, 5, 6, 7]) {
     assert.equal(
       routeIds(season(`ch1-s${number}`)).includes('era-official'),
       true,
-      `ch1-s${number} must carry Era so a rotation can follow it`,
+      `ch1-s${number} must carry Era behind its playable route`,
     )
+  }
+  // Era is on Season 6 today. Seasons 1, 8 and 9 have no other verified host,
+  // so an Era-only route would put a permanently locked card on the Online
+  // tab; they stay in All Seasons without an online route until Era rotates to
+  // them or a matching community hosts them.
+  for (const number of [1, 8, 9]) {
+    assert.equal(season(`ch1-s${number}`).onlineProvider, undefined)
+    assert.equal(season(`ch1-s${number}`).onlineProviders, undefined)
   }
   // A dedicated community's route must stay the primary one; Era is attached
   // behind it so following a rotation never demotes SunSet or ARC.
@@ -618,39 +626,28 @@ function testWorkingSeasons() {
   assert.equal(servedCh1s3.downloadUrl, ch1s3.downloadUrl)
   assert.equal(servedCh1s3.sizeBytes, ch1s3.sizeBytes)
 
-  // ARC (Season 4: v4.5) and VYNX (Season 11) are real hosted communities, but
-  // each runs a build this catalog does not install: ch1-s4 ships
-  // 4.10-CL-4053532 and ch2-s1 ships 11.00-CL-9562734. A launcher's backend and
-  // its redirect only accept its own build, so those cards must stay locked
-  // until the exact build ships and a launch against that launcher is verified.
-  for (const [seasonId, providerId, guildId, invite, launcherBuild] of [
-    ['ch1-s4', 'arc', '1538872114537562163', 'https://discord.gg/arcogfn', '4.5'],
-    ['ch2-s1', 'vynx-official', '1366960510699831306', 'https://discord.gg/vynxzy', 'Chapter 2 Season 1'],
+  // ARC (Season 4: v4.5), SunSet (Season 5: 5.10) and VYNX (Season 11: 11.31)
+  // now install the exact archive each live community runs. Their invites are
+  // pinned and verified, so each card downloads and launches without the old
+  // build-mismatch lock.
+  for (const [seasonId, providerId, guildId, invite, version, archiveToken] of [
+    ['ch1-s4', 'arc', '1538872114537562163', 'https://discord.gg/arcogfn', '4.5', '4.5-CL-4159770'],
+    ['ch1-s5', 'sunset', '1202689889468944444', 'https://discord.gg/HRrjapjcCR', '5.10', '5.10-CL-4240749'],
+    ['ch2-s1', 'vynx-official', '1366960510699831306', 'https://discord.gg/vynxzy', '11.31', '11.31-CL-10800459'],
   ]) {
     const value = season(seasonId)
+    assert.equal(value.version, version, `${seasonId} must install the live build`)
+    assert.equal(value.buildVersion, version)
+    assert.ok(value.downloadUrl.includes(archiveToken), `${seasonId} archive must match its build`)
+    assert.ok(value.sizeBytes > 0, `${seasonId} needs the archive size`)
     assert.equal(value.onlineProvider?.id, providerId, `${seasonId} still names ${providerId}`)
     assert.equal(value.onlineProviders?.[0]?.id, providerId)
     const provider = providerCatalog().find((entry) => entry.id === providerId)
     assert.equal(provider?.discordGate?.guildId, guildId, `${providerId} guild must stay pinned`)
     assert.equal(provider?.discordGate?.inviteUrl, invite, `${providerId} invite must stay pinned`)
-    assert.equal(
-      provider?.communityVerified,
-      false,
-      `${providerId} runs ${launcherBuild}, which the ${seasonId} install (${value.version}) does not match`,
-    )
+    assert.equal(provider?.communityVerified, true, `${providerId} must unlock its matched build`)
     assert.equal(provider?.directLaunch, true, `${providerId} keeps its community launcher route`)
     assert.equal(provider?.runtime, undefined, `${providerId} ships no installer VAULTED runs`)
-  }
-  // Locked means no ONLINE · DISCORD: the verified early return requires a
-  // community whose build matches, and these two are route-only.
-  for (const id of ['ch1-s4', 'ch2-s1']) {
-    assert.equal(
-      providerCatalog().some((entry) =>
-        routeIds(season(id)).includes(entry.id) && entry.communityVerified === true,
-      ),
-      false,
-      `${id} must not advertise a verified community while its build mismatches`,
-    )
   }
 
   // Rewind runs Chapter 5 Season 1 (28.30) as well as 24.20: its invite states
@@ -702,8 +699,8 @@ function testWorkingSeasons() {
     )
   }
 
-  // 4.x builds predate Tellurium's hooks and stay on Cobalt.
-  assert.equal(providerUsesLegacyRedirect('4.10', 'ch1-s4'), false)
+  // ARC's 4.5 build uses Tellurium; only 3.x and older stay on Cobalt.
+  assert.equal(providerUsesLegacyRedirect('4.5', 'ch1-s4'), false)
   assert.match(providerRuntime(providerProfile('reboot'), { legacy: true }).dll, /Cobalt\.dll$/)
 }
 
@@ -1318,8 +1315,8 @@ function testDiscordOnlyDirectLaunch() {
   )
 
   // A verified, installed Discord-only season runs the ordinary VAULTED direct
-  // path: the injector plus the redirect DLL selected for the build (Cobalt for
-  // 4.10) and the live public server as its join target.
+  // path: the injector plus the redirect DLL selected for ARC's 4.5 build and
+  // the live public server as its join target.
   assert.equal(season('ch1-s4').onlineProvider.id, 'arc')
   assert.ok(
     routeIds(season('ch1-s4')).includes('era-official'),
@@ -1510,14 +1507,16 @@ function testCardStates() {
 }
 
 function testHestiaAddsChapter1Season2Route() {
-  // Project Hestia hosts Chapter 1 Season 2 (1.11) from its own launcher. It is
-  // an extra option next to SunSet, whose dedicated primary stays untouched.
+  // Project Hestia hosts Chapter 1 Season 2 (1.11) from its own launcher, with
+  // Era attached as the rotation fallback. SunSet now advertises only the 5.10
+  // Season 5 build, so it must not unlock this 1.11 card.
   const builds = JSON.parse(read('src/assets/builds.json'))
   const season = builds.seasons['ch1-s2']
   assert.equal(season.version, '1.11')
   const ids = (season.onlineProviders || []).map((provider) => provider.id)
   assert.ok(ids.includes('hestia-official'), 'ch1-s2 must offer Project Hestia')
-  assert.ok(ids.includes('sunset'), 'ch1-s2 must keep the SunSet community route')
+  assert.ok(ids.includes('era-official'), 'ch1-s2 must keep Era as the fallback')
+  assert.equal(ids.includes('sunset'), false, 'SunSet no longer hosts the 1.11 build')
   assert.equal(
     season.onlineProvider.id,
     'hestia-official',
@@ -1928,13 +1927,13 @@ async function testSeasonRotationGuard() {
 }
 
 async function testDiscordOnlyNeverCountsOnline() {
-  // The exact Ch1 S3 regression: SunSet is a live Discord community with no
-  // public game-server endpoint and no companion launcher. Its invite must not
-  // be fetched as a health endpoint and must never produce an online sample.
+  // A Discord-only project with no public game-server endpoint and no
+  // companion launcher must never be probed as a live server. Crystal is still
+  // unverified, unlike the matched ARC / SunSet / VYNX routes.
   let fetched = 0
-  const sunset = providerCatalog().find((entry) => entry.id === 'sunset')
-  assert.ok(sunset, 'SunSet must remain in the catalog for the unavailable card')
-  const status = await probeProviderStatus(sunset, {
+  const crystal = providerCatalog().find((entry) => entry.id === 'crystal')
+  assert.ok(crystal, 'Crystal must remain in the catalog for its Discord gate')
+  const status = await probeProviderStatus(crystal, {
     fetchImpl: async () => {
       fetched += 1
       return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })
@@ -1956,8 +1955,8 @@ async function testDiscordOnlyNeverCountsOnline() {
     'online availability must require a live backend, a launcher-backed project or a verified community',
   )
   // Playability is wider than availability: a community catalog-verified by
-  // hand is a real hosted route through the two-step launcher import, while
-  // SunSet (unverified here) keeps its invite out of both flags.
+  // hand is a real hosted route through the two-step launcher import, while an
+  // unverified gate keeps its invite out of both flags.
   assert.match(
     playMode,
     /mode\.externalAvailable === true \|\|\r?\n\s*mode\.communityAvailable === true/,
@@ -1970,9 +1969,9 @@ async function testDiscordOnlyNeverCountsOnline() {
     'the renderer must not hard-code a community as verified',
   )
   assert.equal(
-    providerCatalog().find((entry) => entry.id === 'sunset')?.communityVerified,
+    providerCatalog().find((entry) => entry.id === 'crystal')?.communityVerified,
     false,
-    'an unverified community gate must keep ONLINE UNAVAILABLE',
+    'an unverified community gate must stay locked',
   )
   assert.match(
     read('src/components/BuildList.tsx'),
@@ -2005,22 +2004,26 @@ async function testDiscordOnlyNeverCountsOnline() {
   assert.equal(report.counts.LAUNCHER, 0, 'offline mode must not report a launcher as verified')
   assert.equal(
     report.counts.COMMUNITY,
-    7,
-    'only the build-matched communities are playable (Rewind ×2, Glow, Origins, Omen, Chapter OG/EVO, VEX)',
+    10,
+    'every build-matched community is playable (Rewind ×2, Glow, Origins, Omen, Chapter OG/EVO, VEX, ARC, SunSet, VYNX)',
   )
-  for (const id of ['ch4-s2', 'ch4-s4', 'ch3-s1', 'ch5-s1', 'ch1-s3', 'ch2-s2', 'ch1-s7']) {
+  for (const id of [
+    'ch4-s2',
+    'ch4-s4',
+    'ch3-s1',
+    'ch5-s1',
+    'ch1-s3',
+    'ch2-s2',
+    'ch1-s7',
+    'ch1-s4',
+    'ch1-s5',
+    'ch2-s1',
+  ]) {
     assert.equal(
       report.seasons.find((row) => row.id === id)?.state,
       'COMMUNITY',
       `${id} must be reported as a verified community route`,
     )
-  }
-  // Real communities whose launcher runs a different build stay locked, even
-  // though their route and Discord gate are configured.
-  for (const id of ['ch1-s4', 'ch2-s1']) {
-    const row = report.seasons.find((entry) => entry.id === id)
-    assert.equal(row?.state, 'UNAVAILABLE', `${id} must stay locked while its build mismatches`)
-    assert.equal(row?.wired, false, `${id} must not report itself as wired while locked`)
   }
   for (const id of ['ch2-s6', 'ch3-s2']) {
     const row = report.seasons.find((entry) => entry.id === id)

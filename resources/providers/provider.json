@@ -397,7 +397,7 @@
         "ch1-s4"
       ],
       "statusUrl": "https://discord.gg/arcogfn",
-      "communityVerified": false
+      "communityVerified": true
     },
     {
       "id": "retrac-official",
@@ -608,12 +608,10 @@
         "label": "SunSet Studios Discord"
       },
       "seasons": [
-        "ch1-s2",
-        "ch1-s3",
-        "ch1-s4",
         "ch1-s5"
       ],
-      "statusUrl": "https://discord.gg/HRrjapjcCR"
+      "statusUrl": "https://discord.gg/HRrjapjcCR",
+      "communityVerified": true
     },
     {
       "id": "blue-og",
@@ -1095,7 +1093,7 @@
         "ch2-s1"
       ],
       "statusUrl": "https://discord.gg/vynxzy",
-      "communityVerified": false
+      "communityVerified": true
     },
     {
       "id": "vex-official",

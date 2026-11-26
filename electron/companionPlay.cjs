@@ -35,11 +35,15 @@ const CLIENT_RELATIVE = path.join(
 )
 
 const KNOWN_BUILD_NAMES = {
+  '4.5': 'Chapter 1 Season 4',
+  '5.10': 'Chapter 1 Season 5',
+  '8.51': 'Chapter 1 Season 8',
   '14.60': 'Chapter 2 Season 4',
   '15.50': 'Chapter 2 Season 5',
   '17.50': 'Chapter 2 Season 7',
   '10.40': 'Season X',
   '11.00': 'Chapter 2 Season 1',
+  '11.31': 'Chapter 2 Season 1',
 }
 
 /** Providers with a dedicated adapter. Unknown communities use the generic

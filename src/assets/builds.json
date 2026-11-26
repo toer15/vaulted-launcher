@@ -24,19 +24,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 6591289197,
-      "onlineProvider": {
-        "id": "era-official",
-        "name": "Project Era",
-        "label": "Era"
-      },
-      "onlineProviders": [
-        {
-          "id": "era-official",
-          "name": "Project Era",
-          "label": "Era"
-        }
-      ]
+      "sizeBytes": 6591289197
     },
     "ch1-s2": {
       "id": "ch1-s2",
@@ -71,11 +59,6 @@
           "id": "hestia-official",
           "name": "Project Hestia",
           "label": "Hestia"
-        },
-        {
-          "id": "sunset",
-          "name": "SunSet Studios",
-          "label": "SunSet"
         },
         {
           "id": "era-official",
@@ -131,13 +114,13 @@
       "title": "Chapter 1 Season 4",
       "chapter": 1,
       "season": 4,
-      "buildVersion": "4.10",
-      "sizeGB": 11.43,
-      "downloadUrl": "https://archive.org/download/Fortnite-4.10-CL-4053532.zip/4.10-CL-4053532.zip",
+      "buildVersion": "4.5",
+      "sizeGB": 8.53,
+      "downloadUrl": "https://archive.org/download/fn-v4-archive/builds/4.5-CL-4159770.7z",
       "runtimeProfile": "legacy",
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s4",
-      "url": "https://archive.org/download/Fortnite-4.10-CL-4053532.zip/4.10-CL-4053532.zip",
-      "version": "4.10",
+      "url": "https://archive.org/download/fn-v4-archive/builds/4.5-CL-4159770.7z",
+      "version": "4.5",
       "servers": [
         {
           "name": "Reboot",
@@ -148,7 +131,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 11427640644,
+      "sizeBytes": 8531667311,
       "onlineProvider": {
         "id": "arc",
         "name": "ARC",
@@ -172,13 +155,13 @@
       "title": "Chapter 1 Season 5",
       "chapter": 1,
       "season": 5,
-      "buildVersion": "5.41",
-      "sizeGB": 13.28,
-      "downloadUrl": "https://archive.org/download/Fortnite-5.41-CL-4363240.zip/5.41-CL-4363240.zip",
+      "buildVersion": "5.10",
+      "sizeGB": 9.39,
+      "downloadUrl": "https://archive.org/download/fn-v5-archive/5.10-CL-4240749.7z",
       "runtimeProfile": "legacy",
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s5",
-      "url": "https://archive.org/download/Fortnite-5.41-CL-4363240.zip/5.41-CL-4363240.zip",
-      "version": "5.41",
+      "url": "https://archive.org/download/fn-v5-archive/5.10-CL-4240749.7z",
+      "version": "5.10",
       "servers": [
         {
           "name": "Reboot",
@@ -189,7 +172,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 13283153744,
+      "sizeBytes": 9389736609,
       "onlineProvider": {
         "id": "sunset",
         "name": "SunSet Studios",
@@ -291,13 +274,13 @@
       "title": "Chapter 1 Season 8",
       "chapter": 1,
       "season": 8,
-      "buildVersion": "8.40",
-      "sizeGB": 23.09,
-      "downloadUrl": "https://archive.org/download/Fortnite-8.40-CL-6005771.zip/8.40-CL-6005771.zip",
+      "buildVersion": "8.51",
+      "sizeGB": 23.71,
+      "downloadUrl": "https://archive.org/download/fortnite-release-8.51-cl-6165369/%2B%2BFortnite%2BRelease-8.51-CL-6165369.zip",
       "runtimeProfile": "legacy",
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch1-s8",
-      "url": "https://archive.org/download/Fortnite-8.40-CL-6005771.zip/8.40-CL-6005771.zip",
-      "version": "8.40",
+      "url": "https://archive.org/download/fortnite-release-8.51-cl-6165369/%2B%2BFortnite%2BRelease-8.51-CL-6165369.zip",
+      "version": "8.51",
       "servers": [
         {
           "name": "Reboot",
@@ -308,19 +291,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 23087753024,
-      "onlineProvider": {
-        "id": "era-official",
-        "name": "Project Era",
-        "label": "Era"
-      },
-      "onlineProviders": [
-        {
-          "id": "era-official",
-          "name": "Project Era",
-          "label": "Era"
-        }
-      ]
+      "sizeBytes": 23706379837
     },
     "ch1-s9": {
       "id": "ch1-s9",
@@ -344,19 +315,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 18553831172,
-      "onlineProvider": {
-        "id": "era-official",
-        "name": "Project Era",
-        "label": "Era"
-      },
-      "onlineProviders": [
-        {
-          "id": "era-official",
-          "name": "Project Era",
-          "label": "Era"
-        }
-      ]
+      "sizeBytes": 18553831172
     },
     "ch1-s10": {
       "id": "ch1-s10",
@@ -399,13 +358,13 @@
       "title": "Chapter 2 Season 1",
       "chapter": 2,
       "season": 1,
-      "buildVersion": "11.00",
-      "sizeGB": 25.24,
-      "downloadUrl": "https://archive.org/download/Fortnite-11.00-CL-9562734.7z/11.00-CL-9562734.7z",
+      "buildVersion": "11.31",
+      "sizeGB": 28.67,
+      "downloadUrl": "https://archive.org/download/fn-v11-archive/builds/11.31-CL-10800459.7z",
       "runtimeProfile": "modern",
       "defaultInstallDir": "{AppDefaultBuildsDir}\\ch2-s1",
-      "url": "https://archive.org/download/Fortnite-11.00-CL-9562734.7z/11.00-CL-9562734.7z",
-      "version": "11.00",
+      "url": "https://archive.org/download/fn-v11-archive/builds/11.31-CL-10800459.7z",
+      "version": "11.31",
       "servers": [
         {
           "name": "Reboot",
@@ -416,7 +375,7 @@
           "url": "https://builds.cbn.lol/"
         }
       ],
-      "sizeBytes": 25244361073,
+      "sizeBytes": 28666306237,
       "onlineProvider": {
         "id": "vynx-official",
         "name": "Project VYNX",
