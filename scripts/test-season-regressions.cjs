@@ -418,6 +418,7 @@ function testWorkingSeasons() {
     'ch1-s3': 'omen-official',
     'ch1-s4': 'arc',
     'ch1-s5': 'sunset',
+    'ch1-s7': 'vex-official',
   })) {
     assert.equal(
       season(seasonId).onlineProvider?.id,
@@ -1534,6 +1535,44 @@ function testHestiaAddsChapter1Season2Route() {
   )
 }
 
+function testVexAddsChapter1Season7Route() {
+  // Project VEX is FortForge's Chapter 1 Season 7 project. Its vanity invite
+  // resolves to the live Vex guild, whose public description names Season 7.
+  // It ships no installer of its own, so VAULTED adopts its launcher from
+  // Downloads and keeps Era behind it as the rotating official fallback.
+  const builds = JSON.parse(read('src/assets/builds.json'))
+  const season = builds.seasons['ch1-s7']
+  assert.equal(season.version, '7.40')
+  assert.match(season.downloadUrl, /7\.40-CL-5046157/)
+  assert.deepEqual(
+    (season.onlineProviders || []).map((provider) => provider.id),
+    ['vex-official', 'era-official'],
+    'ch1-s7 must lead with VEX and keep Era behind it',
+  )
+  assert.equal(season.onlineProvider?.id, 'vex-official')
+
+  const providers = JSON.parse(read('resources/providers/provider.json')).providers
+  const vex = providers.find((provider) => provider.id === 'vex-official')
+  assert.ok(vex, 'Project VEX must be in the provider catalog')
+  assert.equal(vex.mode, 'external')
+  assert.equal(vex.launchKind, 'discord')
+  assert.equal(vex.runtime, undefined, 'VEX must not ship an unverified installer')
+  assert.equal(vex.communityVerified, true)
+  assert.deepEqual(vex.seasons, ['ch1-s7'])
+  assert.equal(vex.discordGate?.inviteUrl, 'https://discord.gg/vexfn')
+  assert.equal(vex.discordGate?.guildId, '1547784550606831728')
+
+  const entry = providerCatalog().find((provider) => provider.id === 'vex-official')
+  assert.equal(entry?.directLaunch, true, 'VEX must use the Discord-only hidden launch path')
+  assert.equal(entry?.communityVerified, true)
+  assert.equal(
+    /(?:^|[/:@])(?:127\.0\.0\.1|localhost|\[::1\])(?:[/:]|$)/i.test(entry.backendUrl || ''),
+    false,
+    'VEX must be hosted online, never loopback/local',
+  )
+  assert.equal(providerRuntimeMetadata('vex-official'), null)
+}
+
 function testInstallSeasonRequiresExplicitClick() {
   // A season is 6-30 GB: selecting a card, pressing Start or resuming a launch
   // must never start that download. Only the Install Season button may.
@@ -1966,10 +2005,10 @@ async function testDiscordOnlyNeverCountsOnline() {
   assert.equal(report.counts.LAUNCHER, 0, 'offline mode must not report a launcher as verified')
   assert.equal(
     report.counts.COMMUNITY,
-    6,
-    'only the build-matched communities are playable (Rewind ×2, Glow, Origins, Omen, Chapter OG/EVO)',
+    7,
+    'only the build-matched communities are playable (Rewind ×2, Glow, Origins, Omen, Chapter OG/EVO, VEX)',
   )
-  for (const id of ['ch4-s2', 'ch4-s4', 'ch3-s1', 'ch5-s1', 'ch1-s3', 'ch2-s2']) {
+  for (const id of ['ch4-s2', 'ch4-s4', 'ch3-s1', 'ch5-s1', 'ch1-s3', 'ch2-s2', 'ch1-s7']) {
     assert.equal(
       report.seasons.find((row) => row.id === id)?.state,
       'COMMUNITY',
@@ -2368,6 +2407,7 @@ async function run() {
   testProviderIsolation()
   testCardStates()
   testHestiaAddsChapter1Season2Route()
+  testVexAddsChapter1Season7Route()
   testInstallSeasonRequiresExplicitClick()
       testCompanionDownloadHandoff()
     testCompanionPlayWiring()

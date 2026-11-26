@@ -269,11 +269,16 @@
       ],
       "sizeBytes": 15211195887,
       "onlineProvider": {
-        "id": "era-official",
-        "name": "Project Era",
-        "label": "Era"
+        "id": "vex-official",
+        "name": "Project VEX",
+        "label": "VEX"
       },
       "onlineProviders": [
+        {
+          "id": "vex-official",
+          "name": "Project VEX",
+          "label": "VEX"
+        },
         {
           "id": "era-official",
           "name": "Project Era",

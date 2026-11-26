@@ -1096,6 +1096,34 @@
       ],
       "statusUrl": "https://discord.gg/vynxzy",
       "communityVerified": false
+    },
+    {
+      "id": "vex-official",
+      "name": "Project VEX",
+      "label": "VEX",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/vexfn",
+      "launchUrl": "https://discord.gg/vexfn",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "vexfn",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/vexfn",
+        "guildId": "1547784550606831728",
+        "label": "Project VEX Discord"
+      },
+      "seasons": [
+        "ch1-s7"
+      ],
+      "statusUrl": "https://discord.gg/vexfn",
+      "communityVerified": true
     }
   ]
 }
