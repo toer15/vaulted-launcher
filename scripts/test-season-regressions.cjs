@@ -1602,13 +1602,19 @@ function testInstallSeasonRequiresExplicitClick() {
     /options\.explicit !== true && !installed\[build\.id\] && !downloads\[build\.id\]/,
     'the download request must require an explicit install',
   )
-  // Install Season stays the only explicit download entry point, and a
-  // community season downloads its own client archive inside VAULTED instead
-  // of sending the player to a browser.
+  // Install Season hands the season to its wired launcher; VAULTED no longer
+  // downloads a client archive for any season.
   assert.match(
     app,
-    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,4000}?requestDownload\(build, \{ explicit: true \}\)/,
-    'Install Season must be the only explicit download entry point',
+    /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,4000}?requestDownload\(build, \{ explicit: true, providerId \}\)/,
+    'Install Season must be the only explicit launcher download entry point',
+  )
+  assert.match(app, /const beginLauncherInstall = useCallback\(/, 'season installs must go through the launcher handoff')
+  assert.match(app, /installSeasonInLauncher\(/, 'the launcher handoff must call the desktop bridge')
+  assert.equal(
+    /const handleInstallSeason = useCallback\([\s\S]{0,4000}?beginDownload\(/.test(app),
+    false,
+    'Install Season must never start an archive download',
   )
   assert.match(
     app,
@@ -1835,7 +1841,7 @@ function testCompanionDownloadHandoff() {
   assert.ok(prepareAt > 0, 'main must own the companion download handoff')
   const prepareBody = MAIN.slice(
     prepareAt,
-    MAIN.indexOf(' * Bind the exact game PID', prepareAt),
+    MAIN.indexOf('async function launcherInstall(', prepareAt),
   )
   assert.match(prepareBody, /windowsHide: true/)
   assert.match(prepareBody, /VAULTED_BUILD_FOLDER: safeFolder/)
@@ -1843,18 +1849,23 @@ function testCompanionDownloadHandoff() {
   assert.match(prepareBody, /companionPrepareSessions\.set\(id/)
   assert.match(
     prepareBody,
-    /startImportedCommunityLauncher\(id, \{\s*folder: safeFolder,\s*hidden: true/,
-    'a Discord launcher must keep its library bridge while it prepares hidden',
+    /startImportedCommunityLauncher\(id, \{\s*folder: safeFolder,\s*hidden: !visible/,
+    'the launcher handoff must be able to show its own download window',
+  )
+  assert.match(
+    prepareBody,
+    /if \(visible\)[\s\S]{0,220}?showCompanionLauncher/,
+    'a season install must reveal the launcher that owns the download',
+  )
+  assert.match(
+    prepareBody,
+    /startCompanionWindowHider\(id, child\.pid\)/,
+    'a background prepare handoff must still hide the launcher',
   )
   assert.doesNotMatch(
     prepareBody,
     /startHiddenWindowWatcher/,
     'the 6-hour watcher would hide the launcher again when Play reveals it',
-  )
-  assert.doesNotMatch(
-    prepareBody,
-    /showCompanionLauncher/,
-    'the prepare launcher must stay off-screen until Play',
   )
   assert.match(
     MAIN,
@@ -1884,8 +1895,8 @@ function testCompanionDownloadHandoff() {
   )
   assert.match(
     read('src/components/ActiveBuildCard.tsx'),
-    /Opening the companion launcher in the background/,
-    'the card must explain the background prepare step',
+    /Opening the season launcher so it can download its own build/,
+    'the card must explain the launcher-owned download step',
   )
 }
 

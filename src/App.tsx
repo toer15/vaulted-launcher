@@ -51,6 +51,7 @@ import {
   getBuildSize,
   hasNativeBridge,
   installProviderRuntime,
+  installSeasonInLauncher,
   launchBuild,
   launchOnlineProvider,
   openBuildFolder,
@@ -62,7 +63,6 @@ import {
   sameBuildVersion,
   scanInstalledBuilds,
   scanLauncherAccounts,
-  startDownload,
   syncProviderBuild,
   subscribeBuildExit,
   subscribeCommunityBuildLinked,
@@ -2563,175 +2563,6 @@ export default function App() {
     }
   }, [pushToast, rememberInstalledBuild, seasonManifest])
 
-  const beginDownload = useCallback(
-    async (
-      build: Build,
-      url: string,
-      sha256?: string,
-      fallbackUrl?: string,
-      options: {
-        repair?: boolean
-        launchAfter?: boolean
-        forceProviderId?: string
-        preferredFolder?: string
-        buildVersion?: string
-        providerId?: string
-        seasonId?: string
-        buildId?: string
-        validateProvider?: boolean
-      } = {},
-    ) => {
-      const key = artKeyFor(build.season) ?? build.id
-      pendingProviderLaunchRef.current = null
-      pausedDownloadIds.current.delete(build.id)
-      autoVerifiedIds.current.delete(build.id)
-      setVerifyJobs((prev) => {
-        const next = { ...prev }
-        delete next[build.id]
-        return next
-      })
-      setLaunchFailure((current) => (current?.id === build.id ? null : current))
-      setDownloads((prev) => ({
-        ...prev,
-        [build.id]: {
-          ...prev[build.id],
-          percent: prev[build.id]?.percent ?? 0,
-          phase: 'downloading',
-          etaSeconds: null,
-          speedBytesPerSecond: null,
-          url,
-          fallbackUrl,
-          sha256: sha256 ?? null,
-          providerBuild: undefined,
-          repair: options.repair === true,
-          launchAfter: options.launchAfter === true,
-          forceProviderId: options.forceProviderId,
-          preferredFolder: options.preferredFolder,
-          buildVersion: options.buildVersion,
-          providerId: options.providerId,
-          seasonId: options.seasonId,
-          buildId: options.buildId,
-          validateProvider: options.validateProvider,
-        },
-      }))
-      setPhase('idle')
-      if (options.launchAfter) setLaunchStage(`Updating ${build.season.label} to the live build…`)
-
-      try {
-        const result = await startDownload(build.id, key, url, sha256, fallbackUrl, {
-          repair: options.repair,
-          preferredFolder: options.preferredFolder,
-          providerId: options.providerId,
-          seasonId: options.seasonId,
-          buildId: options.buildId,
-          validateProvider: options.validateProvider,
-        })
-        setInstalled((prev) => ({ ...prev, [build.id]: Boolean(result.executable) }))
-
-        if (result.executable) {
-          const executable = result.executable
-          const parsed = buildFromPath(result.folder, build.id)
-          const downloaded: Build = {
-            ...build,
-            executable,
-            path: result.folder,
-            folderName: parsed.folderName,
-            version:
-              options.buildVersion ??
-              (parsed.version !== 'unknown' ? parsed.version : build.version),
-            season: parsed.season.known ? parsed.season : build.season,
-            placeholder: false,
-          }
-          setBuilds((prev) =>
-            prev.map((item) =>
-              item.id === build.id ? { ...downloaded, addedAt: item.addedAt } : item,
-            ),
-          )
-          rememberInstalledBuild(downloaded, result.folder)
-          const companionNote = companionDownloadNote(result.companion)
-          if (result.runtimeInstalled && options.providerId) {
-            setRuntimeStatuses((prev) => ({
-              ...prev,
-              [options.providerId!]: {
-                providerId: options.providerId!,
-                required: true,
-                label: prev[options.providerId!]?.label || 'Companion Launcher',
-                installed: true,
-              },
-            }))
-          }
-          if (options.launchAfter && !result.runtimeError) {
-            pendingProviderLaunchRef.current = {
-              build: downloaded,
-              forceProviderId: options.forceProviderId,
-            }
-          }
-          if (result.runtimeError) {
-            pushToast({
-              tone: 'info',
-              title: 'Build downloaded — runtime needs attention',
-              description: [result.runtimeError, companionNote].filter(Boolean).join(' '),
-            })
-          } else {
-            pushToast({
-              tone: 'success',
-              title: options.launchAfter
-                ? `Updated to the live ${downloaded.version} build`
-                : 'Download complete',
-              description: options.launchAfter
-                ? `${build.season.label} now matches the live build — signing in and launching…`
-                : result.runtimeVersion
-                  ? `${build.season.label} and its official launcher ${result.runtimeVersion} are ready — press Play.`
-                  : `${build.season.label} is ready — press Play.`,
-            })
-            if (companionNote) {
-              pushToast({
-                tone: 'info',
-                title: 'Companion launcher preparing',
-                description: companionNote,
-                ttlMs: 20_000,
-              })
-            }
-          }
-        } else {
-          pushToast({
-            tone: 'info',
-            title: 'Download finished — files kept',
-            description:
-              result.reason === 'mobile'
-                ? `This source contains a mobile build (iOS/Android), not a Windows client. The download was kept at ${result.filePath}.`
-                : `The archive was downloaded and unpacked, but no Windows client was found. Nothing was deleted — the files are in ${result.folder}.`,
-          })
-        }
-      } catch (error) {
-        setLaunchStage(null)
-        if (pausedDownloadIds.current.has(build.id)) {
-          // Pause already aborted this request on purpose; keep the entry so
-          // the primary button becomes Continue download.
-          return
-        }
-        const message = nativeMessage(error instanceof Error ? error.message : 'The build could not be downloaded.')
-        if (/abort|cancel/i.test(message)) {
-          pushToast({ tone: 'info', title: 'Download cancelled', description: build.season.label })
-        } else {
-          pushToast({ tone: 'error', title: 'Download failed', description: message })
-        }
-      } finally {
-        const paused = pausedDownloadIds.current.delete(build.id)
-        setDownloads((prev) => {
-          const next = { ...prev }
-          if (paused && next[build.id]) {
-            next[build.id] = { ...next[build.id], phase: 'paused', etaSeconds: null }
-          } else {
-            delete next[build.id]
-          }
-          return next
-        })
-      }
-    },
-    [pushToast, rememberInstalledBuild],
-  )
-
   const beginProviderSync = useCallback(
     async (
       build: Build,
@@ -2866,8 +2697,120 @@ export default function App() {
     [pushToast, rememberInstalledBuild],
   )
 
+  /**
+   * Hand a season to its wired launcher. The launcher owns the download; this
+   * only adopts the folder once its client appears. No archive is fetched.
+   */
+  const beginLauncherInstall = useCallback(
+    async (
+      build: Build,
+      providerId: string,
+      options: { launchAfter?: boolean } = {},
+    ) => {
+      const key = artKeyFor(build.season) ?? build.id
+      const source = seasonManifest[key]
+      if (!window.arc?.launcherInstall) {
+        pushToast({
+          tone: 'error',
+          title: 'Launcher installs need the desktop app',
+          description: 'Run "npm run app".',
+        })
+        return
+      }
+      pendingProviderLaunchRef.current = null
+      pausedDownloadIds.current.delete(build.id)
+      setVerifyJobs((prev) => {
+        const next = { ...prev }
+        delete next[build.id]
+        return next
+      })
+      setLaunchFailure((current) => (current?.id === build.id ? null : current))
+      setDownloads((prev) => ({
+        ...prev,
+        [build.id]: {
+          percent: null,
+          phase: 'launcher',
+          etaSeconds: null,
+          speedBytesPerSecond: null,
+          url: 'launcher',
+          providerId,
+          seasonId: key,
+        },
+      }))
+      setPhase('idle')
+      try {
+        const result = await installSeasonInLauncher({
+          id: build.id,
+          key,
+          providerId,
+          seasonId: key,
+          version: source?.buildVersion || build.version,
+          sizeBytes: source?.sizeBytes,
+        })
+        if (result.executable) {
+          const parsed = buildFromPath(result.folder, build.id)
+          const downloaded: Build = {
+            ...build,
+            executable: result.executable,
+            path: result.folder,
+            folderName: parsed.folderName,
+            version:
+              source?.buildVersion ||
+              (parsed.version !== 'unknown' ? parsed.version : build.version),
+            season: parsed.season.known ? parsed.season : build.season,
+            placeholder: false,
+          }
+          setBuilds((prev) =>
+            prev.map((item) =>
+              item.id === build.id ? { ...downloaded, addedAt: item.addedAt } : item,
+            ),
+          )
+          setInstalled((prev) => ({ ...prev, [build.id]: true }))
+          requestedDiskSizes.current.delete(result.folder)
+          setActiveId(build.id)
+          rememberInstalledBuild(downloaded, result.folder)
+          pushToast({
+            tone: 'success',
+            title: 'Launcher download complete',
+            description: `${build.season.label} was downloaded by ${result.label} and is ready to play.`,
+          })
+          if (options.launchAfter) {
+            pendingProviderLaunchRef.current = { build: downloaded, forceProviderId: providerId }
+          }
+          return
+        }
+        if (result.signInRequired) {
+          pushToast({
+            tone: 'info',
+            title: `Sign in to ${result.label}`,
+            description: `Finish the sign-in in ${result.label}, then press Download Season again.`,
+          })
+          return
+        }
+        pushToast({
+          tone: 'info',
+          title: `${result.label} opened`,
+          description: `Download ${build.season.label} in ${result.label}. VAULTED is watching the selected folder and will add it when the client finishes.`,
+          ttlMs: 30_000,
+        })
+      } catch (error) {
+        const message = nativeMessage(
+          error instanceof Error ? error.message : 'The launcher could not start the download.',
+        )
+        pushToast({ tone: 'error', title: 'Launcher download failed', description: message })
+      } finally {
+        setDownloads((prev) => {
+          const next = { ...prev }
+          delete next[build.id]
+          return next
+        })
+      }
+    },
+    [pushToast, rememberInstalledBuild, seasonManifest],
+  )
+
   const requestDownload = useCallback(
-    (build: Build, options: { launchAfter?: boolean; explicit?: boolean } = {}) => {
+    (build: Build, options: { launchAfter?: boolean; explicit?: boolean; providerId?: string } = {}) => {
       const launchAfter = options.launchAfter === true
       if (!canDownloadBuilds()) {
         pushToast({ tone: 'error', title: 'Downloads need the desktop app', description: 'Run "npm run app".' })
@@ -2903,21 +2846,6 @@ export default function App() {
         void beginProviderSync(build, { ...paused.providerBuild, launchAfter })
         return
       }
-      if (paused?.url) {
-        void beginDownload(build, paused.url, paused.sha256 ?? undefined, paused.fallbackUrl, {
-          repair: paused.repair,
-          launchAfter: launchAfter || paused.launchAfter === true,
-          forceProviderId: paused.forceProviderId,
-          preferredFolder: paused.preferredFolder,
-          buildVersion: paused.buildVersion,
-          providerId: paused.providerId,
-          seasonId: paused.seasonId,
-          buildId: paused.buildId,
-          validateProvider: paused.validateProvider,
-        })
-        return
-      }
-
       const key = artKeyFor(build.season)
       if (!key) {
         pushToast({
@@ -2928,40 +2856,37 @@ export default function App() {
         return
       }
 
-      const source = seasonManifest[key]
-      if (source?.downloadUrl) {
-        void beginDownload(build, source.downloadUrl, source.sha256, source.fallbackDownloadUrl, {
-          // A provider-mapped season may have an old nested client on disk;
-          // its bundled archive is the exact repair source, not a second copy.
-          launchAfter,
-          repair: Boolean(source.providerBuild),
-          preferredFolder: source.providerBuild ? source.buildVersion || undefined : undefined,
-          buildVersion: source.providerBuild ? source.buildVersion || undefined : undefined,
-          providerId: source.providerBuild?.providerId || build.onlineProvider?.id,
-          seasonId: source.providerBuild?.seasonId || key,
-          buildId: source.providerBuild?.buildId,
-          validateProvider: Boolean(source.providerBuild?.buildId),
+      // A season install is a launcher download, never a VAULTED archive.
+      // The provider's own window owns its account, build picker and transfer;
+      // main watches the target folder and adopts the finished client.
+      const providerId = options.providerId || build.onlineProvider?.id || ''
+      const provider = providerCatalog.find((entry) => entry.id === providerId)
+      if (!providerId || !provider) {
+        pushToast({
+          tone: 'error',
+          title: 'No launcher for this season',
+          description: `${build.season.label} has no wired launcher. VAULTED no longer downloads season archives.`,
         })
         return
       }
-      if (source?.providerBuild) {
-        void beginProviderSync(build, { ...source.providerBuild, launchAfter })
-        return
-      }
-      pushToast({
-        tone: 'error',
-        title: 'No source for this season yet',
-        description: 'Add its archive to builds.json, then Refresh sources in Settings.',
-      })
+      void beginLauncherInstall(build, providerId, { launchAfter })
     },
-    [beginDownload, beginProviderSync, downloads, installed, playModes, pushToast, seasonManifest],
+    [
+      beginLauncherInstall,
+      beginProviderSync,
+      downloads,
+      installed,
+      playModes,
+      providerCatalog,
+      pushToast,
+    ],
   )
 
   /**
    * The only entry point allowed to start a multi-gigabyte season install.
-   * Discord-hosted seasons download their community's own client archive here,
-   * exactly like every other season: VAULTED never sends the player to a
-   * browser to fetch the build and never runs a local server.
+   * Every season is handed to its wired launcher, which owns its account and
+   * download. VAULTED never fetches a season archive and never runs a local
+   * server; it only adopts the folder the launcher produces.
    */
   const handleInstallSeason = useCallback(() => {
     const build = activeBuild
@@ -2971,14 +2896,16 @@ export default function App() {
       activeCompanionProvider ??
       providerCatalog.find((entry) => entry.id === providerId) ??
       null
-    // Only an actual launcher app owns a launcher account. Direct-launch
-    // communities have no window to sign in to.
-    const hasLauncher =
-      Boolean(provider) &&
-      provider?.directLaunch !== true &&
-      Boolean(provider?.runtime || provider?.launcher)
+    // A community launcher may be discovered from Downloads instead of
+    // shipping runtime metadata. Direct-launch communities have no window to
+    // sign in to and are not launcher downloads.
+    const hasLauncher = Boolean(provider) && provider?.directLaunch !== true
     if (!providerId || !provider || !hasLauncher) {
-      requestDownload(build, { explicit: true })
+      pushToast({
+        tone: 'error',
+        title: 'No launcher for this season',
+        description: `${build.season.label} has no wired launcher. VAULTED no longer downloads season archives.`,
+      })
       return
     }
     void (async () => {
@@ -2989,7 +2916,7 @@ export default function App() {
           status.signedIn === true ||
           (status.signedIn === null && launcherConfirmedRef.current.has(providerId))
         ) {
-          requestDownload(build, { explicit: true })
+          requestDownload(build, { explicit: true, providerId })
           return
         }
         setLauncherAuthStatuses((prev) => ({ ...prev, [providerId]: status }))
@@ -3004,11 +2931,11 @@ export default function App() {
         })
       } catch {
         // A launcher-status read must never block a download. If the bridge is
-        // unavailable, keep the existing download path working.
-        requestDownload(build, { explicit: true })
+        // unavailable, hand off to the launcher and let it own the sign-in.
+        requestDownload(build, { explicit: true, providerId })
       }
     })()
-  }, [activeBuild, activeCompanionProvider, providerCatalog, requestDownload])
+  }, [activeBuild, activeCompanionProvider, providerCatalog, pushToast, requestDownload])
 
   /** Open the launcher account popup from the card's Sign in button. */
   const openLauncherSignIn = useCallback(() => {
@@ -3221,31 +3148,36 @@ export default function App() {
       })
       return
     }
-    // Prefer VAULTED's existing archive downloader for the provider's exact
-    // public build. The repair flag lets it replace a season that is already
-    // installed, and the preferred folder keeps an old nested 6.31 client from
-    // being detected after the 6.21 archive is unpacked beside it.
-    if (source?.downloadUrl) {
-      void beginDownload(build, source.downloadUrl, source.sha256, source.fallbackDownloadUrl, {
-        repair: true,
+    // A live build is updated by its launcher, not by a VAULTED archive. Native
+    // providers with a chunk manifest still use their signed sync path.
+    const provider = providerCatalog.find((entry) => entry.id === providerId) ?? null
+    const hasLauncher = Boolean(provider) && provider?.directLaunch !== true
+    if (hasLauncher && provider) {
+      void beginLauncherInstall(build, provider.id, { launchAfter: true })
+      return
+    }
+    if (source?.providerBuild) {
+      void beginProviderSync(build, {
+        ...source.providerBuild,
+        buildId: activeBuildIssue?.buildId || source.providerBuild.buildId,
         launchAfter: true,
-        forceProviderId: providerId,
-        preferredFolder: source.buildVersion || undefined,
-        buildVersion: source.buildVersion || undefined,
-        providerId,
-        seasonId,
-        buildId: activeBuildIssue?.buildId || source.providerBuild?.buildId,
-        validateProvider: Boolean(activeBuildIssue?.buildId || source.providerBuild?.buildId),
       })
       return
     }
-    void beginProviderSync(build, {
-      providerId,
-      seasonId,
-      buildId: activeBuildIssue?.buildId || source?.providerBuild?.buildId,
-      launchAfter: true,
+    pushToast({
+      tone: 'error',
+      title: 'No launcher for this season',
+      description: `${build.season.label} has no wired launcher to update it.`,
     })
-  }, [activeBuild, activeBuildIssue, beginDownload, beginProviderSync, pushToast, seasonManifest])
+  }, [
+    activeBuild,
+    activeBuildIssue,
+    beginLauncherInstall,
+    beginProviderSync,
+    providerCatalog,
+    pushToast,
+    seasonManifest,
+  ])
 
   /**
    * Replace an installed folder that holds another Fortnite build. `repair`
@@ -3255,24 +3187,19 @@ export default function App() {
   const handleReinstallSeason = useCallback(() => {
     const build = activeBuild
     if (!build) return
-    const seasonId = artKeyFor(build.season) ?? build.id
-    const source = seasonManifest[seasonId]
-    if (!source?.downloadUrl) {
+    const providerId = build.onlineProvider?.id || ''
+    const provider = providerCatalog.find((entry) => entry.id === providerId) ?? null
+    const hasLauncher = Boolean(provider) && provider?.directLaunch !== true
+    if (!providerId || !provider || !hasLauncher) {
       pushToast({
         tone: 'error',
-        title: 'No download source for this reinstall',
-        description: `VAULTED has no archive for ${build.season.label}.`,
+        title: 'No launcher for this reinstall',
+        description: `${build.season.label} has no wired launcher. VAULTED no longer reinstalls from an archive.`,
       })
       return
     }
-    void beginDownload(build, source.downloadUrl, source.sha256, source.fallbackDownloadUrl, {
-      repair: true,
-      preferredFolder: source.buildVersion || undefined,
-      buildVersion: source.buildVersion || undefined,
-      seasonId,
-      providerId: build.onlineProvider?.id,
-    })
-  }, [activeBuild, beginDownload, pushToast, seasonManifest])
+    void beginLauncherInstall(build, providerId)
+  }, [activeBuild, beginLauncherInstall, providerCatalog, pushToast])
 
   /**
    * Retrac owns its signed Alea client and launcher. Every Retrac handoff,
@@ -4593,18 +4520,9 @@ export default function App() {
         if (!synced) throw new Error('The online build could not be repaired.')
         return
       }
-      if (source?.downloadUrl) {
-        await beginDownload(build, source.downloadUrl, source.sha256, source.fallbackDownloadUrl, {
-          repair: true,
-          launchAfter: false,
-          preferredFolder: source.buildVersion || undefined,
-          buildVersion: source.buildVersion || undefined,
-          providerId: provider?.id,
-          seasonId,
-          buildId: source.providerBuild?.buildId,
-        })
-        return
-      }
+      // Auto-fix repairs native provider manifests only. A launcher-owned
+      // season is reinstalled by its launcher; VAULTED no longer feeds it an
+      // archive just to repair a file.
       if (source?.providerBuild) {
         const synced = await beginProviderSync(build, {
           ...source.providerBuild,
@@ -4614,9 +4532,11 @@ export default function App() {
         if (!synced) throw new Error('The live build could not be repaired.')
         return
       }
-      throw new Error('This season has no downloadable build source to repair from.')
+      throw new Error(
+        'This season is launcher-owned. Reinstall it in its launcher to repair it.',
+      )
     },
-    [beginDownload, beginProviderSync, providerCatalog, seasonManifest],
+    [beginProviderSync, providerCatalog, seasonManifest],
   )
 
   const fixAutoFixSeason = useCallback(
@@ -4716,7 +4636,6 @@ export default function App() {
     [
       adoptAutoFixRecovery,
       autoFixTargetFor,
-      beginDownload,
       builds,
       patchAutoFixEntry,
       providerCatalog,

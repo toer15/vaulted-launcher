@@ -252,6 +252,20 @@ export interface CompanionDownloadResult {
   error?: string
 }
 
+/** Result of a launcher-owned season install. */
+export interface LauncherInstallResult {
+  providerId: string
+  label: string
+  folder: string
+  executable: string | null
+  started: boolean
+  /** the launcher is open but has not produced a client yet */
+  pending?: boolean
+  signInRequired?: boolean
+  reason?: string
+  companion?: CompanionDownloadResult
+}
+
 export interface ProviderSyncResult {
   folder: string
   executable: string
@@ -334,6 +348,14 @@ export interface LauncherBridge {
     version: string
     archivePath: string
   }): Promise<{ ok: boolean; executable: string; root: string; archive: string }>
+  launcherInstall?(payload: {
+    id: string
+    key: string
+    providerId: string
+    seasonId?: string
+    version?: string
+    sizeBytes?: number
+  }): Promise<LauncherInstallResult>
   downloadBuild?(payload: {
     id: string
     key: string
@@ -873,6 +895,28 @@ export async function startCompanionDownload(
   if (!window.arc?.startCompanionDownload) return null
   try {
     return await window.arc.startCompanionDownload(providerId, folder)
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+/**
+ * Hand a season install to its wired launcher and adopt the resulting build.
+ * This never asks VAULTED to fetch the season archive.
+ */
+export async function installSeasonInLauncher(payload: {
+  id: string
+  key: string
+  providerId: string
+  seasonId?: string
+  version?: string
+  sizeBytes?: number
+}): Promise<LauncherInstallResult> {
+  if (!window.arc?.launcherInstall) {
+    throw new Error('Launcher installs need the desktop app — run "npm run app".')
+  }
+  try {
+    return await window.arc.launcherInstall(payload)
   } catch (error) {
     throw cleanIpcError(error)
   }

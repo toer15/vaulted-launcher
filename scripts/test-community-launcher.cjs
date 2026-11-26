@@ -302,9 +302,8 @@ assert.match(
 )
 
 // --- 7b. Discord seasons are linked end to end, with no verify screen ------
-// Start must never be gated on a Discord verification, Download must fetch the
-// community's own client archive inside VAULTED (never a browser tab), and an
-// installed launcher must be adopted for the hidden handoff.
+// Start must never be gated on a Discord verification; Download must hand the
+// season to its wired launcher, never fetch a client archive in VAULTED.
 const launchSource = read('src/App.tsx')
 const mainSource = read('electron/main.cjs')
 const builds = JSON.parse(read('src/assets/builds.json'))
@@ -316,8 +315,8 @@ assert.match(
 )
 assert.match(
   launchSource,
-  /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,4000}?requestDownload\(build, \{ explicit: true \}\)/,
-  'Download must start VAULTED own download, never a browser handoff',
+  /const handleInstallSeason = useCallback\(\(\) => \{[\s\S]{0,4000}?requestDownload\(build, \{ explicit: true, providerId \}\)/,
+  'Download must hand off to the wired launcher, never fetch an archive',
 )
 assert.equal(
   /handleInstallSeason[\s\S]{0,400}openDiscordInvite/.test(launchSource),

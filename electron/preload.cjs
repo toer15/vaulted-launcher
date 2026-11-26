@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('arc', {
   importSeasonArchive: (payload) => ipcRenderer.invoke('arc:import-season-archive', payload),
   openDiscordInvite: (url) => ipcRenderer.invoke('arc:open-discord-invite', url),
   downloadBuild: (payload) => ipcRenderer.invoke('arc:download-build', payload),
+  launcherInstall: (payload) => ipcRenderer.invoke('arc:launcher-install', payload),
   syncProviderBuild: (payload) => ipcRenderer.invoke('arc:sync-provider-build', payload),
   // Start the season's other launcher after VAULTED installed its build, so
   // the project's own prepare/download begins automatically.

@@ -3390,6 +3390,10 @@ async function startCompanionDownload(providerId, folder, options = {}) {
   const label = profile.runtime?.label || profile.launcher?.label || `${profile.label} launcher`
   const safeFolder = typeof folder === 'string' && folder.trim() ? folder.trim() : ''
   const report = typeof options.report === 'function' ? options.report : () => {}
+  // A season install is handed to the launcher's own visible window. The
+  // launcher owns its sign-in, build picker and download; VAULTED only watches
+  // the target folder so it can adopt the finished build.
+  const visible = options.visible === true
   const runtimeMetadata = providerRuntimeMetadata(id)
   let executable = ''
   let installedNow = false
@@ -3487,7 +3491,7 @@ async function startCompanionDownload(providerId, folder, options = {}) {
     try {
       const started = await startImportedCommunityLauncher(id, {
         folder: safeFolder,
-        hidden: true,
+        hidden: !visible,
       })
       if (!started?.executable) {
         return {
@@ -3547,7 +3551,12 @@ async function startCompanionDownload(providerId, folder, options = {}) {
         '',
       launcherNames,
     })
-    startCompanionWindowHider(id, existing.pid)
+    if (visible) {
+      stopCompanionWindowHider(id)
+      void showCompanionLauncher(existing.pid)
+    } else {
+      startCompanionWindowHider(id, existing.pid)
+    }
     const needsSignIn = id === 'eon' && eonSetup?.signedIn === false
     return {
       ...result,
@@ -3581,7 +3590,12 @@ async function startCompanionDownload(providerId, folder, options = {}) {
           '',
         launcherNames,
       })
-      startCompanionWindowHider(id, pid)
+      if (visible) {
+        stopCompanionWindowHider(id)
+        void showCompanionLauncher(pid)
+      } else {
+        startCompanionWindowHider(id, pid)
+      }
       const needsSignIn = eonSetup?.signedIn === false
       return {
         ...result,
@@ -3622,7 +3636,17 @@ async function startCompanionDownload(providerId, folder, options = {}) {
     )
     child.unref()
     registerProviderLauncher(id, child, { bridgePort, folder: safeFolder })
-    startCompanionWindowHider(id, child.pid)
+    if (visible) {
+      stopCompanionWindowHider(id)
+      // Show the launcher only after its page is alive, so the player sees the
+      // build picker instead of a blank frame.
+      void (async () => {
+        await warmCompanionLauncherWindow(child.pid).catch(() => false)
+        await showCompanionLauncher(child.pid).catch(() => false)
+      })()
+    } else {
+      startCompanionWindowHider(id, child.pid)
+    }
     startCompanionSessionMonitor(id, executable)
     watchCommunityLauncherExit(id, child, launcherNames)
     companionPrepareSessions.set(id, {
@@ -3650,6 +3674,160 @@ async function startCompanionDownload(providerId, folder, options = {}) {
       reason: 'spawn-failed',
       error: error instanceof Error ? error.message : String(error),
     }
+  }
+}
+
+/**
+ * Hand a season install to the wired launcher, then adopt the folder it
+ * produces. This deliberately never fetches an archive: the launcher owns its
+ * account, build picker and download. The visible window is the fallback when a
+ * launcher needs the player to press its own Download button; a launcher that
+ * starts downloading immediately reports into the normal progress card.
+ */
+async function launcherInstall(payload = {}) {
+  const id = String(payload?.id || '').trim()
+  const providerId = String(payload?.providerId || '').trim().toLowerCase()
+  if (!id || !providerId) {
+    throw new Error('This season is not mapped to a launcher.')
+  }
+  if (downloads.has(id)) {
+    throw new Error('This season is already downloading.')
+  }
+
+  const key = path.basename(String(payload?.key || id)) || id
+  const targetDir = path.join(buildsRoot(), key)
+  await fs.promises.mkdir(targetDir, { recursive: true })
+
+  const expected = Number(payload?.sizeBytes)
+  const total = Number.isFinite(expected) && expected > 0 ? expected : 0
+  const controller = new AbortController()
+  downloads.set(id, controller)
+
+  let previousBytes = 0
+  let previousAt = Date.now()
+  let lastProgressAt = 0
+  let quietSince = Date.now()
+  let lastReceived = 0
+
+  const progress = (received, phase) => {
+    const now = Date.now()
+    if (now - lastProgressAt < 900 && phase !== 'launcher') return
+    lastProgressAt = now
+    const elapsed = Math.max(1, now - previousAt) / 1000
+    const bytesPerSecond =
+      received > previousBytes ? Math.round((received - previousBytes) / elapsed) : null
+    previousBytes = received
+    previousAt = now
+    send('arc:download-progress', {
+      id,
+      received,
+      total,
+      percent: total > 0 ? Math.min(100, (received / total) * 100) : null,
+      etaSeconds:
+        bytesPerSecond && total > received
+          ? Math.round((total - received) / bytesPerSecond)
+          : null,
+      bytesPerSecond,
+      url: 'launcher',
+      phase,
+    })
+  }
+
+  try {
+    progress(0, 'launcher')
+    const companion = await startCompanionDownload(providerId, targetDir, {
+      // The launcher window must be usable: its own download button and
+      // sign-in are part of the install.
+      visible: true,
+      version: String(payload?.version || ''),
+    })
+    if (!companion) {
+      throw new Error('This season has no launcher handoff configured.')
+    }
+    if (!companion.started) {
+      throw new Error(companion.error || `${companion.label} could not be opened.`)
+    }
+
+    // A launcher that needs an account cannot download yet. Return now so the
+    // card can show the sign-in gate instead of polling an idle folder.
+    if (companion.signInRequired) {
+      return {
+        providerId,
+        label: companion.label,
+        folder: targetDir,
+        executable: null,
+        started: true,
+        pending: true,
+        signInRequired: true,
+        companion,
+        reason: 'launcher-sign-in',
+      }
+    }
+
+    for (;;) {
+      if (controller.signal.aborted) throw abortError()
+      const executable = findExecutable(targetDir)
+      if (executable) {
+        progress(total || (await folderSize(targetDir)) || 0, 'downloading')
+        return {
+          providerId,
+          label: companion.label,
+          folder: targetDir,
+          executable,
+          started: true,
+          pending: false,
+          companion,
+        }
+      }
+
+      // The normal folder-size cache is for rendered cards; this loop is
+      // watching a folder another process is actively growing.
+      folderSizeCache.delete(path.resolve(targetDir))
+      let received = 0
+      try {
+        received = (await folderSize(targetDir)) || 0
+      } catch {
+        /* the launcher may briefly lock a directory while it moves files */
+      }
+      if (received > lastReceived) {
+        lastReceived = received
+        quietSince = Date.now()
+      }
+      progress(received, received > 0 ? 'downloading' : 'launcher')
+
+      // No launcher is required to auto-start its download. Keep the visible
+      // window open and let the player finish there; do not pretend VAULTED is
+      // still transferring bytes by leaving a fake progress card up forever.
+      if (received === 0 && Date.now() - quietSince > 90_000) {
+        return {
+          providerId,
+          label: companion.label,
+          folder: targetDir,
+          executable: null,
+          started: true,
+          pending: true,
+          companion,
+          reason: 'launcher-pending',
+        }
+      }
+      // A download that stopped growing for this long is no longer a live
+      // transfer. Keep the launcher open, but release the download card.
+      if (received > 0 && Date.now() - quietSince > 20 * 60_000) {
+        return {
+          providerId,
+          label: companion.label,
+          folder: targetDir,
+          executable: null,
+          started: true,
+          pending: true,
+          companion,
+          reason: 'launcher-pending',
+        }
+      }
+      await delay(4000)
+    }
+  } finally {
+    downloads.delete(id)
   }
 }
 
@@ -3823,6 +4001,12 @@ async function startImportedCommunityLauncher(providerId, launchOptions = {}) {
   }
   const existing = providerLaunchers.get(id)
   if (existing) {
+    // A launcher left hidden by an earlier prepare step must be revealed when
+    // this call is the player's season-install handoff.
+    if (launchOptions?.hidden !== true) {
+      stopCompanionWindowHider(id)
+      void showCompanionLauncher(existing.pid)
+    }
     return { pid: existing.pid, executable, alreadyRunning: true }
   }
   const folder =
@@ -8641,6 +8825,11 @@ function registerIpc() {
   ipcMain.handle('arc:provider-runtime-status', (_event, providerId) =>
     providerRuntimeStatus(providerId),
   )
+
+  // A season install is handed to the wired launcher. VAULTED creates the
+  // target folder, shows the launcher, and adopts the build once the launcher
+  // has downloaded it; no archive is fetched by VAULTED.
+  ipcMain.handle('arc:launcher-install', (_event, payload) => launcherInstall(payload))
 
   // The end of VAULTED's own season download for an online-only season: open
   // that season's other launcher off-screen so its prepare/download starts.
