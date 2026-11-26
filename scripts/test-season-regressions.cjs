@@ -469,6 +469,24 @@ function testWorkingSeasons() {
   assert.equal(providerProfile('stellar').auth, 'deeplink')
   assert.equal(providerProfile('ezfn').auth, 'embedded_web')
 
+  // Two more live communities host the same 12.41 build. They are alternates
+  // to EZFN, not replacements: each pins the guild behind its invite and
+  // launches directly into that project's server with no installer.
+  for (const [id, guildId, invite] of [
+    ['chapter-og', '1236746454232600776', 'https://discord.gg/project-chapter-og-1236746454232600776'],
+    ['evo', '1226780728277205073', 'https://discord.gg/Evolvegg'],
+  ]) {
+    const provider = providerCatalog().find((entry) => entry.id === id)
+    assert.ok(provider, `${id} is missing from the provider catalog`)
+    assert.equal(provider.communityVerified, true, `${id} hosts the 12.41 build`)
+    assert.equal(provider.directLaunch, true, `${id} launches directly`)
+    assert.equal(provider.runtime, undefined, `${id} ships no installer VAULTED runs`)
+    assert.equal(provider.discordGate?.guildId, guildId, `${id} guild must stay pinned`)
+    assert.equal(provider.discordGate?.inviteUrl, invite, `${id} invite must stay pinned`)
+    assert.ok(provider.supportedSeasons.includes('ch2-s2'), `${id} must cover ch2-s2`)
+    assert.ok(routeIds(ch2s2).includes(id), `ch2-s2 must list ${id}`)
+  }
+
   // Retrac keeps its 14.60 official launcher route.
   const retrac = season('ch2-s4')
   assert.equal(retrac.version, '14.60')
@@ -529,6 +547,21 @@ function testWorkingSeasons() {
   const origins = providerCatalog().find((entry) => entry.id === 'origins-official')
   assert.equal(origins?.discordGate?.guildId, '1500960775743733942', 'Origins guild must stay pinned')
   assert.equal(origins?.runtime, undefined, 'Origins ships no installer VAULTED runs')
+
+  // Project Venom runs Chapter 4 Season 4 on 26.30, the exact build the card
+  // installs, alongside Glow.
+  const ch4s4 = season('ch4-s4')
+  assert.equal(ch4s4.version, '26.30')
+  assert.equal(ch4s4.onlineProvider?.id, 'glow', 'Glow must stay the primary Ch4 S4 route')
+  const venom = providerCatalog().find((entry) => entry.id === 'venom')
+  assert.ok(venom, 'Project Venom is missing from the provider catalog')
+  assert.equal(venom.communityVerified, true, 'Venom hosts the 26.30 build')
+  assert.equal(venom.directLaunch, true, 'Venom launches directly')
+  assert.equal(venom.runtime, undefined, 'Venom ships no installer VAULTED runs')
+  assert.equal(venom.discordGate?.guildId, '1555650268505313370', 'Venom guild must stay pinned')
+  assert.equal(venom.discordGate?.inviteUrl, 'https://discord.gg/projectvenom', 'Venom invite must stay pinned')
+  assert.ok(venom.supportedSeasons.includes('ch4-s4'), 'Venom must cover ch4-s4')
+  assert.ok(routeIds(ch4s4).includes('venom'), 'ch4-s4 must list Venom')
 
   // Project Omen hosts Chapter 1 Season 3 on 3.6 (CL-4019403). The card
   // installs that exact build from Omen's own archive, the same file its
@@ -1212,6 +1245,9 @@ function testDiscordOnlyDirectLaunch() {
     'origins-official',
     'omen-official',
     'vynx-official',
+    'chapter-og',
+    'evo',
+    'venom',
   ]
   for (const id of directIds) {
     const entry = catalog.find((provider) => provider.id === id)
@@ -1906,10 +1942,10 @@ async function testDiscordOnlyNeverCountsOnline() {
   assert.equal(report.counts.LAUNCHER, 0, 'offline mode must not report a launcher as verified')
   assert.equal(
     report.counts.COMMUNITY,
-    5,
-    'only the build-matched communities are playable (Rewind ×2, Glow, Origins, Omen)',
+    6,
+    'only the build-matched communities are playable (Rewind ×2, Glow, Origins, Omen, Chapter OG/EVO)',
   )
-  for (const id of ['ch4-s2', 'ch4-s4', 'ch3-s1', 'ch5-s1', 'ch1-s3']) {
+  for (const id of ['ch4-s2', 'ch4-s4', 'ch3-s1', 'ch5-s1', 'ch1-s3', 'ch2-s2']) {
     assert.equal(
       report.seasons.find((row) => row.id === id)?.state,
       'COMMUNITY',

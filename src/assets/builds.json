@@ -493,6 +493,16 @@
           "id": "horizon",
           "name": "Horizon",
           "label": "Horizon"
+        },
+        {
+          "id": "chapter-og",
+          "name": "Project Chapter OG",
+          "label": "Chapter OG"
+        },
+        {
+          "id": "evo",
+          "name": "Project EVO",
+          "label": "EVO"
         }
       ]
     },
@@ -915,6 +925,11 @@
           "id": "glow",
           "name": "Glow",
           "label": "Glow"
+        },
+        {
+          "id": "venom",
+          "name": "Project Venom",
+          "label": "Venom"
         }
       ]
     },

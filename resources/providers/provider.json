@@ -671,6 +671,90 @@
       "communityVerified": true
     },
     {
+      "id": "chapter-og",
+      "name": "Project Chapter OG",
+      "label": "Chapter OG",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/project-chapter-og-1236746454232600776",
+      "launchUrl": "https://discord.gg/project-chapter-og-1236746454232600776",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "project-chapter-og-1236746454232600776",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/project-chapter-og-1236746454232600776",
+        "guildId": "1236746454232600776",
+        "label": "Project Chapter OG Discord"
+      },
+      "seasons": [
+        "ch2-s2"
+      ],
+      "statusUrl": "https://discord.gg/project-chapter-og-1236746454232600776",
+      "communityVerified": true
+    },
+    {
+      "id": "evo",
+      "name": "Project EVO",
+      "label": "EVO",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/Evolvegg",
+      "launchUrl": "https://discord.gg/Evolvegg",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "Evolvegg",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/Evolvegg",
+        "guildId": "1226780728277205073",
+        "label": "Project EVO Discord"
+      },
+      "seasons": [
+        "ch2-s2"
+      ],
+      "statusUrl": "https://discord.gg/Evolvegg",
+      "communityVerified": true
+    },
+    {
+      "id": "venom",
+      "name": "Project Venom",
+      "label": "Venom",
+      "mode": "external",
+      "launchKind": "discord",
+      "backendUrl": "https://discord.com/",
+      "website": "https://discord.gg/projectvenom",
+      "launchUrl": "https://discord.gg/projectvenom",
+      "auth": "none",
+      "external": true,
+      "global": true,
+      "population": {
+        "kind": "discord",
+        "invite": "projectvenom",
+        "label": "Discord"
+      },
+      "discordGate": {
+        "inviteUrl": "https://discord.gg/projectvenom",
+        "guildId": "1555650268505313370",
+        "label": "Project Venom Discord"
+      },
+      "seasons": [
+        "ch4-s4"
+      ],
+      "statusUrl": "https://discord.gg/projectvenom",
+      "communityVerified": true
+    },
+    {
       "id": "reboot-official",
       "name": "Project Reboot",
       "label": "Reboot",

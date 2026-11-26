@@ -21,6 +21,9 @@ const expected = {
   eon: 'ch2-s7',
   hydro: 'ch2-s5',
   interloop: 'ch2-s2',
+  'chapter-og': 'ch2-s2',
+  evo: 'ch2-s2',
+  venom: 'ch4-s4',
 }
 
 const catalog = providerCatalog()
@@ -181,7 +184,7 @@ async function main() {
   assert.match(read('src/lib/discordGates.ts'), /vaulted\.discordGateOpened\.v1/)
 
   console.log(
-    'Discord gate checks passed: 6 community invites, guild identity, two-state Open/Verify button, and invite link safety',
+    'Discord gate checks passed: every community invite, guild identity, two-state Open/Verify button, and invite link safety',
   )
 }
 
