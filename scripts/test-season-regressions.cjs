@@ -1567,7 +1567,7 @@ function testInstallSeasonRequiresExplicitClick() {
   assert.match(MAIN, /AppActivate\(\$\{process\.pid\}\)/, 'Windows focus must activate the real window')
   assert.match(
     MAIN,
-    /warmCompanionLauncherWindow\(signInPid[\s\S]{0,600}?showCompanionLauncher\(signInPid/,
+    /revealCompanionSignInWindow\(started\.pid, launcherNames\)/,
     'the launcher sign-in must open the actual launcher app at full size',
   )
   assert.doesNotMatch(
@@ -1579,6 +1579,73 @@ function testInstallSeasonRequiresExplicitClick() {
     MAIN,
     /startCompanionLauncherFastener\(started\.pid/,
     'the sign-in app window must stay its own normal window',
+  )
+}
+
+function testLauncherSignInReveal() {
+  // Sign-in must reveal the launcher's own window even when VAULTED adopted a
+  // copy that was already running (possibly minimized). One helper owns that
+  // reveal: it re-resolves the window owner and only accepts a visible,
+  // restored window, instead of trusting the first PID scan.
+  const automation = read('electron/companionAutomation.cjs')
+  const revealAt = MAIN.indexOf('async function revealCompanionSignInWindow(')
+  assert.ok(revealAt > 0, 'sign-in must own one reveal helper')
+  const revealBody = MAIN.slice(
+    revealAt,
+    MAIN.indexOf('async function openProviderLauncherEntry(', revealAt),
+  )
+  assert.match(revealBody, /findCompanionWindowPid\(candidates\)/, 'the reveal must re-resolve the window owner')
+  assert.match(revealBody, /warmCompanionLauncherWindow\(pid/, 'the reveal must warm the adopted window')
+  assert.match(revealBody, /showCompanionLauncher\(pid/, 'the reveal must show the real app window')
+  assert.match(revealBody, /visible: false, pid/, 'a failed reveal must be reported, not assumed')
+  assert.match(automation, /IsIconic/, 'the reveal must detect a minimized launcher')
+  assert.match(
+    automation,
+    /IsIconic\(\$top\)[\s\S]{0,200}?NOT_VISIBLE/,
+    'a minimized launcher must not count as revealed',
+  )
+  assert.match(
+    automation,
+    /ShowWindow\(\$top, 9\)[\s\S]{0,900}?SetWindowPos/,
+    'warming an adopted launcher must restore it before positioning',
+  )
+
+  const openAt = MAIN.indexOf('async function openProviderLauncherEntry(')
+  const handoff = MAIN.slice(
+    openAt,
+    MAIN.indexOf('async function launchOnlineProvider(', openAt),
+  )
+  // The background prepare session is already running when Sign in adopts it;
+  // that path used to return without ever showing the launcher window.
+  const preparedAt = handoff.indexOf('companionPrepareSessions.get(id)')
+  const preparedBody = handoff.slice(
+    preparedAt,
+    handoff.indexOf('const gameRunning', preparedAt),
+  )
+  const signInAt = preparedBody.indexOf('if (signInOnly)')
+  const playAt = preparedBody.indexOf('beginCompanionAutoPlay(')
+  assert.ok(signInAt > 0, 'the prepare adopt path must handle sign-in')
+  assert.ok(playAt > signInAt, 'sign-in must return before the Play automation')
+  assert.match(
+    preparedBody.slice(signInAt, playAt),
+    /revealCompanionSignInWindow\(preparedPid/,
+    'an adopted prepare session must reveal its real window for sign-in',
+  )
+  assert.match(
+    handoff,
+    /await delay\(400\)[\s\S]{0,600}?const revealed = await revealCompanionSignInWindow\(started\.pid, launcherNames\)/,
+    'an adopted launcher must reveal its real window for sign-in',
+  )
+  assert.ok(
+    (handoff.match(/revealCompanionSignInWindow\(started\.pid, launcherNames\)/g) || []).length >= 2,
+    'both the runtime and community launcher adopt paths must reveal the window',
+  )
+
+  // The tiny owned popup and its fastener are gone for good.
+  assert.doesNotMatch(
+    automation,
+    /showCompanionLauncherPopup|startCompanionLauncherFastener|fastenerScript|popupScript|VaultedFastener/,
+    'the small owned popup and fastener must stay removed',
   )
 }
 
@@ -2244,6 +2311,7 @@ async function run() {
   testInstallSeasonRequiresExplicitClick()
       testCompanionDownloadHandoff()
     testCompanionPlayWiring()
+    testLauncherSignInReveal()
     await testSeasonRotationGuard()
   await testDiscordOnlyNeverCountsOnline()
   testOnlineBadgeColors()

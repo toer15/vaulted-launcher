@@ -7295,6 +7295,50 @@ function spawnExternalLauncher(executable, args, options = {}) {
   })
 }
 
+/**
+ * Show a launcher's own app window for sign-in, including when VAULTED only
+ * adopted one the player already had open. That launcher can be minimized in
+ * the taskbar, and a bootstrapper can hand its window to another process after
+ * the first scan, so keep resolving the PID that really owns the window and
+ * retry until Windows reports a visible, restored window. Returns that PID so
+ * the renderer polls and later closes the launcher it actually showed.
+ */
+async function revealCompanionSignInWindow(pids, names = [], options = {}) {
+  const attempts = Number.isFinite(options.attempts) ? Math.max(1, options.attempts) : 8
+  const namesToScan = (Array.isArray(names) ? names : [names]).filter(
+    (value) => typeof value === 'string' && value.trim(),
+  )
+  const seeds = [
+    ...new Set(
+      (Array.isArray(pids) ? pids : [pids])
+        .map((value) => Math.floor(Number(value) || 0))
+        .filter((value) => value > 0),
+    ),
+  ]
+  let pid = seeds[0] || 0
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const running = namesToScan.length > 0 ? await processPidsByImage(namesToScan) : []
+    const candidates = [...new Set([pid, ...seeds, ...running].filter((value) => value > 0))]
+    const windowPid = candidates.length > 0 ? await findCompanionWindowPid(candidates) : 0
+    if (windowPid > 0) pid = windowPid
+    if (pid > 0) {
+      // Warm first: a launcher started hidden has not painted yet, and a
+      // minimized one needs its compositor resumed before it can be revealed.
+      const warmed = await warmCompanionLauncherWindow(pid, {
+        width: 1200,
+        height: 800,
+        attempts: 2,
+        waitMs: 250,
+      })
+      if (warmed && (await showCompanionLauncher(pid, { attempts: 2, waitMs: 300 }))) {
+        return { visible: true, pid }
+      }
+    }
+    if (attempt < attempts - 1) await delay(500)
+  }
+  return { visible: false, pid }
+}
+
 async function openProviderLauncherEntry(providerId, options = {}) {
     const id = typeof providerId === 'string' ? providerId.trim().toLowerCase() : ''
     if (isBannedProvider(id)) return { opened: false, error: BANNED_PROVIDER_REASON }
@@ -7473,6 +7517,32 @@ async function openProviderLauncherEntry(providerId, options = {}) {
           pid: preparedPid,
           folder: preparedFolder,
         })
+        // Sign-in can adopt the launcher VAULTED started for a download. That
+        // process is still hidden, so reveal its real window and return;
+        // pressing Play here would start the game instead of an account page.
+        if (signInOnly) {
+          const revealed = await revealCompanionSignInWindow(preparedPid, preparedNames)
+          const revealedPid = revealed.pid > 0 ? revealed.pid : preparedPid
+          companionPrepareSessions.set(id, {
+            ...prepared,
+            pid: revealedPid,
+            folder: preparedFolder,
+          })
+          if (!revealed.visible) {
+            return {
+              opened: false,
+              error: `${profile.label} is running but its sign-in window could not be shown. Close ${profile.label} and try again.`,
+            }
+          }
+          return {
+            opened: true,
+            path: prepared.executable,
+            pid: revealedPid,
+            tracked: true,
+            visible: true,
+            signIn: true,
+          }
+        }
         const gameExecutable =
           buildExecutable || findPrimaryExecutable(preparedFolder)
         watchCommunityGameStart({
@@ -7671,36 +7741,29 @@ async function openProviderLauncherEntry(providerId, options = {}) {
         // then close only that launcher once its session appears.
         if (signInOnly && started.pid) {
           stopCompanionWindowHider(id)
-          // The launcher was started hidden, so its WebView has not painted
-          // yet. Warm it off-screen, then open its real app window at full size
-          // instead of forcing it into VAULTED's small owned popup. The renderer
-          // polls this exact launcher's session and closes only the launcher
-          // when the account is signed in; VAULTED itself stays open.
+          // The launcher may be newly started hidden (its WebView has not
+          // painted) or one VAULTED adopted because it was already running,
+          // possibly minimized. Always resolve and reveal its real window, then
+          // return before the Play automation below. The renderer polls this
+          // launcher's session and closes only the launcher when the account is
+          // signed in; VAULTED itself stays open.
           await delay(400)
-          let signInPid = started.pid
-          await warmCompanionLauncherWindow(signInPid, {
-            width: 1200,
-            height: 800,
-            attempts: 12,
-            waitMs: 350,
-          })
-          result.visible = await showCompanionLauncher(signInPid, {
-            attempts: 12,
-            waitMs: 500,
-          })
-          if (!result.visible && launcherNames.length > 0) {
-            const running = await processPidsByImage(launcherNames)
-            const windowPid = await findCompanionWindowPid(running)
-            if (windowPid && windowPid !== signInPid) {
-              signInPid = windowPid
-              await warmCompanionLauncherWindow(signInPid, { attempts: 6, waitMs: 350 })
-              result.visible = await showCompanionLauncher(signInPid, {
-                attempts: 6,
-                waitMs: 500,
-              })
+          const revealed = await revealCompanionSignInWindow(started.pid, launcherNames)
+          result.visible = revealed.visible
+          if (revealed.pid > 0) {
+            result.pid = revealed.pid
+            // Track the process that really owns the window so status and
+            // Stop refer to the window the player just signed in with.
+            const tracked = providerLaunchers.get(id)
+            if (tracked) providerLaunchers.set(id, { ...tracked, pid: revealed.pid })
+          }
+          if (!revealed.visible) {
+            return {
+              opened: false,
+              error: `${profile.label} is running but its sign-in window could not be shown. Close ${profile.label} and try again.`,
             }
           }
-          if (result.visible) result.pid = signInPid
+          return result
         }
         if (started.pid && buildFolder) {
           const gameExecutable =
@@ -7768,6 +7831,25 @@ async function openProviderLauncherEntry(providerId, options = {}) {
           )
           if (!started.opened) return started
           const launcherNames = providerWindowNames(launcherMetadata)
+          if (signInOnly && started.pid) {
+            // A community launcher adopted from an earlier run must show its
+            // own account window too; never automate Play for a sign-in.
+            stopCompanionWindowHider(id)
+            const revealed = await revealCompanionSignInWindow(started.pid, launcherNames)
+            if (!revealed.visible) {
+              return {
+                opened: false,
+                error: `${profile.label} is running but its sign-in window could not be shown. Close ${profile.label} and try again.`,
+              }
+            }
+            return {
+              ...started,
+              version: '',
+              visible: true,
+              pid: revealed.pid || started.pid,
+              signIn: true,
+            }
+          }
           if (started.pid && buildFolder) {
             watchCommunityGameStart({
               providerId: id,
