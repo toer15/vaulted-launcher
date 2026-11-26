@@ -212,6 +212,23 @@ export interface LauncherAuthStatus {
   source?: 'disk' | 'page' | 'registry' | ''
 }
 
+/** One row in Settings' Connected Launchers scan. */
+export interface LauncherScanEntry {
+  providerId: string
+  aliases: string[]
+  name: string
+  label: string
+  installed: boolean
+  signedIn: boolean
+  verifiable: boolean
+  source: 'disk' | 'page' | 'registry' | ''
+}
+
+export interface LauncherScanResult {
+  scannedAt: string
+  launchers: LauncherScanEntry[]
+}
+
 /** Result of opening a season's other launcher after its build was installed. */
 export interface CompanionDownloadResult {
   providerId: string
@@ -463,6 +480,8 @@ export interface LauncherBridge {
   providerLauncherDetect?(providerId: string): Promise<ProviderLauncherDetection | null>
   /** Whether the season's own launcher already has a saved account session. */
   launcherAuthStatus?(providerId: string): Promise<LauncherAuthStatus | null>
+  /** Scan every companion launcher's saved session for Settings. */
+  scanLauncherAccounts?(): Promise<LauncherScanResult | null>
   /** Save which launcher this PC is signed into, so a restart still knows. */
   launcherAccountRecord?(
     providerId: string,
@@ -941,6 +960,16 @@ export async function checkLauncherAuth(providerId: string): Promise<LauncherAut
   if (!window.arc?.launcherAuthStatus) return null
   try {
     return await window.arc.launcherAuthStatus(providerId)
+  } catch (error) {
+    throw cleanIpcError(error)
+  }
+}
+
+/** Read every companion launcher's session for Settings' Connected Launchers. */
+export async function scanLauncherAccounts(): Promise<LauncherScanResult | null> {
+  if (!window.arc?.scanLauncherAccounts) return null
+  try {
+    return await window.arc.scanLauncherAccounts()
   } catch (error) {
     throw cleanIpcError(error)
   }

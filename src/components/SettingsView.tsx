@@ -3,13 +3,17 @@ import {
   ArrowLeft,
   ArrowLeftRight,
   Check,
+  CheckCircle2,
+  ChevronRight,
   Cloud,
   CloudDownload,
+  Droplet,
   FolderSearch,
   HardDrive,
   Info,
   Link2,
   Loader2,
+  MinusCircle,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
@@ -17,6 +21,7 @@ import {
 } from 'lucide-react'
 import { cx } from '../lib/cx'
 import { artFor } from '../lib/art'
+import type { LauncherScanResult } from '../lib/launch'
 import { manifestUrl, type BuildManifest } from '../lib/network'
 import type { Build } from '../types'
 
@@ -53,6 +58,70 @@ interface SettingsViewProps {
   onCheckUpdates: () => void
   onDownloadUpdate?: () => void
   onRestartToUpdate?: () => void
+  launcherScan: LauncherScanResult | null
+  launcherScanBusy: boolean
+  onVerifyLaunchers: () => void
+}
+
+/** A compact, original mark for each companion project. */
+const LAUNCHER_MARKS: Record<
+  string,
+  { glyph?: string; color: string; shape?: 'diamond' | 'triangle' | 'drop' }
+> = {
+  'omen-official': { color: '#fb405b', shape: 'diamond' },
+  'era-official': { color: '#a78bfa', shape: 'triangle' },
+  'hestia-official': { glyph: 'H', color: '#3b82f6' },
+  neo: { glyph: 'N', color: '#a3e635' },
+  'retrac-official': { glyph: 'R', color: '#22d3ee' },
+  hydro: { color: '#38bdf8', shape: 'drop' },
+  eon: { glyph: 'E', color: '#fb923c' },
+  'origins-official': { glyph: 'O', color: '#c084fc' },
+  'rewind-official': { glyph: 'R', color: '#fb7185' },
+  glow: { glyph: 'G', color: '#f472b6' },
+  ezfn: { glyph: 'E', color: '#34d399' },
+  stellar: { glyph: 'S', color: '#60a5fa' },
+}
+
+function LauncherMark({ providerId }: { providerId: string }) {
+  const mark = LAUNCHER_MARKS[providerId] || { glyph: '?', color: '#94a3b8' }
+  return (
+    <span className="grid h-11 w-11 shrink-0 place-items-center">
+      {mark.shape === 'diamond' && (
+        <span
+          className="h-6 w-6 rotate-45 rounded-[5px]"
+          style={{
+            background: `linear-gradient(135deg, ${mark.color}, ${mark.color}aa)`,
+            boxShadow: `0 0 20px ${mark.color}55`,
+          }}
+        />
+      )}
+      {mark.shape === 'triangle' && (
+        <span
+          className="h-0 w-0"
+          style={{
+            borderLeft: '13px solid transparent',
+            borderRight: '13px solid transparent',
+            borderBottom: `23px solid ${mark.color}`,
+            filter: `drop-shadow(0 0 8px ${mark.color}66)`,
+          }}
+        />
+      )}
+      {mark.shape === 'drop' && (
+        <Droplet
+          className="h-7 w-7"
+          style={{ color: mark.color, filter: `drop-shadow(0 0 8px ${mark.color}55)` }}
+        />
+      )}
+      {!mark.shape && (
+        <span
+          className="font-display text-[22px] font-black leading-none"
+          style={{ color: mark.color, textShadow: `0 0 18px ${mark.color}55` }}
+        >
+          {mark.glyph}
+        </span>
+      )}
+    </span>
+  )
 }
 
 export function SettingsView({
@@ -88,6 +157,9 @@ export function SettingsView({
   onCheckUpdates,
   onDownloadUpdate,
   onRestartToUpdate,
+  launcherScan,
+  launcherScanBusy,
+  onVerifyLaunchers,
 }: SettingsViewProps) {
   const art = build ? artFor(build.season) : null
   const activeSource = cloudSourceUrl || manifestUrl()
@@ -126,6 +198,97 @@ export function SettingsView({
           <ArrowLeft className="h-3.5 w-3.5" /> Back
         </button>
       </header>
+
+      {/* connected launchers */}
+      <section className="mt-5 overflow-hidden rounded-3xl border border-arc/30 bg-gradient-to-br from-arc/[0.18] via-panel/70 to-black/30 shadow-[0_24px_70px_-40px_rgba(124,140,255,0.55)]">
+        <div className="flex flex-wrap items-center justify-between gap-4 p-5">
+          <div className="flex min-w-0 items-start gap-3.5">
+            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl border border-arc/35 bg-arc/15 text-arc shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_0_28px_-6px_rgba(124,140,255,0.65)]">
+              <Link2 className="h-6 w-6" />
+            </span>
+            <div className="min-w-0">
+              <h2 className="font-display text-[17px] font-bold tracking-tight text-white">
+                Connected Launchers
+              </h2>
+              <p className="mt-0.5 max-w-xl text-[11.5px] leading-relaxed text-fog">
+                Verify which companion launchers you're signed into. This will scan your PC and update
+                the status below.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onVerifyLaunchers}
+            disabled={launcherScanBusy}
+            title="Scan for signed-in launchers and update your status."
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#8b5cf6] to-[#6d28d9] px-5 py-3 text-[12.5px] font-bold text-white shadow-[0_18px_40px_-16px_rgba(109,40,217,0.95)] transition-all duration-200 hover:-translate-y-0.5 hover:brightness-110 active:translate-y-0 active:scale-[0.99] disabled:cursor-wait disabled:opacity-80 disabled:hover:translate-y-0"
+          >
+            {launcherScanBusy ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            {launcherScanBusy ? 'Scanning Launchers…' : 'Verify Signed-In Launchers'}
+          </button>
+        </div>
+
+        <div className="border-t border-line/60 px-5 pb-5 pt-4">
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div>
+              <h3 className="text-[13.5px] font-semibold text-white">Launcher Status</h3>
+              <p className="mt-0.5 text-[11px] text-fog">
+                Here's the sign-in status for your installed launchers.
+              </p>
+            </div>
+            {launcherScan?.scannedAt && (
+              <span className="text-[10px] font-medium text-fog/60">
+                Checked at{' '}
+                {new Date(launcherScan.scannedAt).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </span>
+            )}
+          </div>
+
+          <ul className="mt-3 grid gap-2">
+            {launcherScan ? (
+              launcherScan.launchers.map((entry) => (
+                <li
+                  key={entry.providerId}
+                  className="flex items-center gap-3 rounded-2xl border border-line/70 bg-[#070a12]/70 px-3 py-2.5 transition-colors duration-200 hover:border-arc/30 hover:bg-white/[0.035]"
+                >
+                  <LauncherMark providerId={entry.providerId} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-semibold text-mist">{entry.name}</p>
+                    <p className="text-[11px] text-fog">{entry.label}</p>
+                  </div>
+                  {entry.signedIn ? (
+                    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-400/30 bg-emerald-400/[0.08] px-2.5 py-1 text-[10.5px] font-semibold text-emerald-300">
+                      <CheckCircle2 className="h-3 w-3" /> Signed in
+                    </span>
+                  ) : entry.installed ? (
+                    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-amber-400/25 bg-amber-400/[0.06] px-2.5 py-1 text-[10.5px] font-semibold text-amber-200/90">
+                      <MinusCircle className="h-3 w-3" /> Not signed in
+                    </span>
+                  ) : (
+                    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-slate-400/20 bg-slate-400/[0.07] px-2.5 py-1 text-[10.5px] font-semibold text-slate-300">
+                      <MinusCircle className="h-3 w-3" /> Not installed
+                    </span>
+                  )}
+                  <ChevronRight className="h-4 w-4 shrink-0 text-fog/45" />
+                </li>
+              ))
+            ) : (
+              <li className="rounded-2xl border border-line/70 bg-black/25 px-3 py-6 text-center text-[11.5px] text-fog">
+                {launcherScanBusy
+                  ? 'Scanning installed launchers…'
+                  : 'No scan yet — verify to read each launcher’s saved session.'}
+              </li>
+            )}
+          </ul>
+        </div>
+      </section>
 
       {/* build location */}
       <section className="mt-5 overflow-hidden rounded-2xl border border-line bg-black/25">

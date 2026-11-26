@@ -4303,6 +4303,99 @@ async function launcherAuthStatus(providerId) {
   }
 }
 
+/**
+ * Every companion launcher Settings can report on, in the order the section
+ * lists them. Aliases keep a legacy provider id mapped to the same account.
+ */
+const LAUNCHER_SCAN_TARGETS = Object.freeze([
+  { id: 'omen-official', aliases: ['omen'], name: 'Omen', label: 'Omen Launcher' },
+  { id: 'era-official', aliases: ['era'], name: 'Era', label: 'Era Launcher' },
+  { id: 'hestia-official', aliases: ['hestia'], name: 'Hestia', label: 'Hestia Launcher' },
+  { id: 'neo', aliases: [], name: 'Neo', label: 'Neo Launcher' },
+  { id: 'retrac-official', aliases: ['retrac'], name: 'Retrac', label: 'Retrac Launcher' },
+  { id: 'hydro', aliases: [], name: 'Hydro', label: 'Hydro Launcher' },
+  { id: 'eon', aliases: [], name: 'Eon', label: 'Eon Launcher' },
+  { id: 'origins-official', aliases: [], name: 'Origins', label: 'Origins Launcher' },
+  { id: 'rewind-official', aliases: [], name: 'Rewind', label: 'Rewind Launcher' },
+  { id: 'glow', aliases: [], name: 'Glow', label: 'Glow Launcher' },
+  { id: 'ezfn', aliases: [], name: 'EZFN', label: 'EZFN Launcher' },
+  { id: 'stellar', aliases: [], name: 'Stellar', label: 'Stellar Launcher' },
+])
+
+/**
+ * Settings' one-click launcher scan.
+ *
+ * Reads only each launcher's own saved session store, plus a launcher that is
+ * already running, and records every signed-in account against that provider.
+ * It never opens a launcher window and never contacts a local game server.
+ */
+async function scanLauncherAccounts() {
+  const catalog = providerCatalog()
+  const accounts = readLauncherAccounts()
+  const launchers = []
+  for (const target of LAUNCHER_SCAN_TARGETS) {
+    const provider = catalog.find((entry) => entry.id === target.id) || null
+    const runtime = providerRuntimeMetadata(target.id)
+    const launcherMetadata = provider?.launcher || null
+    const label = runtime?.label || launcherMetadata?.label || target.label
+    const saved = await readLauncherSession(target.id)
+    let signedIn = saved.known ? saved.signedIn === true : null
+    let verifiable = saved.known === true
+    let source = saved.known ? saved.source || 'disk' : ''
+
+    // A launcher that is already open can answer through its own bridge; the
+    // scan still never creates a window for a launcher that is closed.
+    if (signedIn !== true) {
+      const open = providerLaunchers.get(target.id)
+      const port = Number(open?.bridgePort) || 0
+      if (port) {
+        const live = await readLauncherSessionOnPage(target.id, port, { timeoutMs: 1_500 })
+        if (live.known) {
+          signedIn = live.signedIn
+          verifiable = true
+          source = 'page'
+        }
+      }
+    }
+
+    const recorded = accounts[target.id]
+    if (signedIn === null && recorded) {
+      signedIn = true
+      verifiable = false
+      source = 'registry'
+    }
+    if (signedIn === false && recorded && saved.known) {
+      recordLauncherAccount(target.id, { signedIn: false })
+      delete accounts[target.id]
+    }
+
+    const metadata = runtime || launcherMetadata
+    const executable = metadata ? installedExecutable(metadata) : ''
+    // EZFN and Stellar publish no installer metadata; their launcher store is
+    // the only evidence that the app has run on this PC.
+    const installed = metadata ? Boolean(executable) : saved.known
+
+    if (signedIn === true) {
+      recordLauncherAccount(target.id, { label, verifiable })
+      for (const alias of target.aliases) {
+        recordLauncherAccount(alias, { label, verifiable })
+      }
+    }
+
+    launchers.push({
+      providerId: target.id,
+      aliases: target.aliases,
+      name: target.name,
+      label,
+      installed,
+      signedIn: signedIn === true,
+      verifiable,
+      source,
+    })
+  }
+  return { scannedAt: new Date().toISOString(), launchers }
+}
+
 /** Public runtime state for the season card; no URLs or filesystem internals. */
 function providerRuntimeStatus(providerId) {
   const id = String(providerId || '').trim().toLowerCase()
@@ -8443,6 +8536,9 @@ function registerIpc() {
   ipcMain.handle('arc:launcher-auth-status', (_event, providerId) =>
     launcherAuthStatus(providerId),
   )
+
+  // Settings' one-click scan across every installed companion launcher.
+  ipcMain.handle('arc:scan-launcher-accounts', () => scanLauncherAccounts())
 
   // Remember which launcher account this PC finished signing in to, so a
   // restart does not ask for the same sign-in window again.

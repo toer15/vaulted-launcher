@@ -176,6 +176,30 @@ function readOmenStore(files) {
     : { known: false, signedIn: null, source: 'disk' }
 }
 
+/**
+ * Era keeps its encrypted launcher session in session.bin and deletes the
+ * file when the account signs out. Its presence is therefore the account.
+ */
+function readEraStore(file) {
+  let stat = null
+  try {
+    stat = fs.statSync(file)
+  } catch {
+    stat = null
+  }
+  if (stat && stat.isFile() && stat.size > 0) {
+    return { known: true, signedIn: true, source: 'disk', account: 'era' }
+  }
+  try {
+    if (fs.statSync(path.dirname(file)).isDirectory()) {
+      return { known: true, signedIn: false, source: 'disk' }
+    }
+  } catch {
+    /* Era has never run on this PC */
+  }
+  return { known: false, signedIn: null, source: 'disk' }
+}
+
 function readEonStore() {
   try {
     const config = readEonConfig()
@@ -293,11 +317,7 @@ function storeForProvider(providerId) {
     }
   }
   if (id === 'era' || id === 'era-official') {
-    return {
-      kind: 'web',
-      keys: ['era.token', 'era.accessToken', 'era.session', 'token'],
-      roots: [join(ROAMING, 'Era Launcher', 'Local Storage', 'leveldb')],
-    }
+    return { kind: 'era', file: join(ROAMING, 'Era Launcher', 'session.bin') }
   }
   if (id === 'hydro') {
     return {
@@ -325,6 +345,7 @@ async function readLauncherSession(providerId) {
   if (!id) return { known: false, signedIn: null, source: 'disk' }
   const store = storeForProvider(id)
   if (store.kind === 'eon') return readEonStore()
+  if (store.kind === 'era') return readEraStore(store.file)
   if (store.kind === 'omen') return readOmenStore(store.files)
   return readWebTokenStore(store.roots, store.keys, store.authoritativeMissing === true)
 }

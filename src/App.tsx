@@ -61,6 +61,7 @@ import {
   recordLauncherAccount,
   sameBuildVersion,
   scanInstalledBuilds,
+  scanLauncherAccounts,
   startDownload,
   syncProviderBuild,
   subscribeBuildExit,
@@ -76,6 +77,7 @@ import {
   verifyBuildFiles,
   type CompanionDownloadResult,
   type LauncherAuthStatus,
+  type LauncherScanResult,
   type ProviderLauncherDetection,
   type ProviderRuntimeProgress,
   type ProviderRuntimeStatus,
@@ -493,6 +495,9 @@ export default function App() {
     Record<string, LauncherAuthStatus | null>
   >({})
   const [launcherAuthChecked, setLauncherAuthChecked] = useState<string[]>([])
+  const [launcherScan, setLauncherScan] = useState<LauncherScanResult | null>(null)
+  const [launcherScanBusy, setLauncherScanBusy] = useState(false)
+  const launcherScanRequestedRef = useRef(false)
   // Holds the Play that opened the account prompt until the provider session
   // has rendered into app state. The resume then re-enters startBuild instead
   // of bypassing VAULTED's sign-in and managed-build preflight gates.
@@ -1789,6 +1794,56 @@ export default function App() {
       cancelled = true
     }
   }, [activeCompanionProviderId, activeLauncherCandidate, native])
+
+  /**
+   * Settings' one-click scan. Main reads every launcher's saved session and
+   * records the accounts that are signed in; the renderer updates each
+   * provider's gate immediately so matching season cards unlock without
+   * another visit to their sign-in popup.
+   */
+  const verifyLaunchers = useCallback(async () => {
+    if (launcherScanBusy) return
+    setLauncherScanBusy(true)
+    try {
+      const result = await scanLauncherAccounts()
+      if (!result) return
+      setLauncherScan(result)
+      const nextStatuses: Record<string, LauncherAuthStatus> = {}
+      const checked: string[] = []
+      const confirmed: string[] = []
+      for (const entry of result.launchers) {
+        for (const id of [entry.providerId, ...entry.aliases]) {
+          nextStatuses[id] = {
+            providerId: id,
+            label: entry.label,
+            hasLauncher: entry.installed || entry.signedIn,
+            signedIn: entry.signedIn,
+            verifiable: entry.verifiable,
+            recorded: entry.signedIn,
+            source: entry.source,
+          }
+          checked.push(id)
+          if (entry.signedIn) confirmed.push(id)
+        }
+      }
+      setLauncherAuthStatuses((prev) => ({ ...prev, ...nextStatuses }))
+      setLauncherAuthChecked((prev) => [...new Set([...prev, ...checked])])
+      setLauncherConfirmedIds((prev) => [...new Set([...prev, ...confirmed])])
+      for (const id of confirmed) launcherConfirmedRef.current.add(id)
+    } catch {
+      /* Settings keeps the previous list when a scan cannot be read */
+    } finally {
+      setLauncherScanBusy(false)
+    }
+  }, [launcherScanBusy])
+
+  // Populate the Settings section the first time it opens; the Verify button
+  // re-runs the same scan on demand.
+  useEffect(() => {
+    if (view !== 'settings' || !native || launcherScanRequestedRef.current) return
+    launcherScanRequestedRef.current = true
+    void verifyLaunchers()
+  }, [native, verifyLaunchers, view])
 
   // The season card needs the companion launcher state before it can enable
   // Download Season. Main owns the installer and returns only safe metadata.
@@ -5688,6 +5743,9 @@ export default function App() {
               onCheckUpdates={() => void checkForUpdates()}
               onDownloadUpdate={() => void downloadUpdate()}
               onRestartToUpdate={() => void window.arc?.installUpdate?.()}
+              launcherScan={launcherScan}
+              launcherScanBusy={launcherScanBusy}
+              onVerifyLaunchers={() => void verifyLaunchers()}
             />
           ) : view === 'friends' && providerOnly ? (
             <section className="m-auto w-full max-w-xl rounded-3xl border border-amber-400/20 bg-ink/80 p-8 text-center shadow-2xl shadow-black/40">
