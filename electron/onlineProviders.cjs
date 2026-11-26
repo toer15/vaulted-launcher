@@ -654,7 +654,7 @@ function catalogData() {
       auth,
       discordAuth,
       discordGate: parsedDiscordGate
-        ? { providerId: id, ...parsedDiscordGate }
+        ? { providerId: id, communityVerified: entry.communityVerified === true, ...parsedDiscordGate }
         : undefined,
       runtime: runtimeMetadata,
       launcher: launcherMetadata,
@@ -948,11 +948,16 @@ function providerProfile(id) {
     auth: catalogEntry?.auth || (raw?.auth === 'exchangeCode' ? 'exchangeCode' : 'none'),
     discordAuth: catalogEntry?.discordAuth === true,
     discordGate:
-      catalogEntry?.discordGate ||
-      (() => {
-        const gate = parseDiscordGate(raw?.discordGate)
-        return gate ? { providerId: provider.id, ...gate } : undefined
-      })(),
+      (catalogEntry?.discordGate
+        ? {
+            providerId: provider.id,
+            communityVerified: catalogEntry.communityVerified === true,
+            ...catalogEntry.discordGate,
+          }
+        : (() => {
+            const gate = parseDiscordGate(raw?.discordGate)
+            return gate ? { providerId: provider.id, communityVerified: false, ...gate } : undefined
+          })()),
     launchHandshakePending: catalogEntry?.launchHandshakePending === true,
     communityVerified: catalogEntry?.communityVerified === true,
     directLaunch: catalogEntry?.directLaunch === true,

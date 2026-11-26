@@ -29,6 +29,7 @@ import { artKeyFor } from '../lib/art'
 import { cx } from '../lib/cx'
 import { formatDownloadSize, formatSpeed } from '../lib/downloadSize'
 import { lobbyPlayers } from '../lib/friends'
+import { openDiscordInvite } from '../lib/launch'
 import {
   ONLINE_UNAVAILABLE_MESSAGE,
   communityHostedMessage,
@@ -520,6 +521,19 @@ export function ActiveBuildCard({
     String(autoGlobalBackend?.label || playMode?.externalProviderLabel || '').trim() || null
   const communityHosted = playMode?.communityAvailable === true
   const communityHostMessage = communityHosted ? communityHostedMessage(communityHostLabel) : ''
+  // Every verified community mapped to this season gets its own row, even when
+  // the season also has live servers. Without this, alternates such as Chapter
+  // OG and EVO vanished behind the live-server badge on Chapter 2 Season 2.
+  const communityGates = Array.from(
+    new Map(
+      [...(build.discordGates ?? []), ...(discordGate ? [discordGate] : [])]
+        .filter(
+          (gate) =>
+            gate.communityVerified === true && gate.statusOnly !== true && Boolean(gate.inviteUrl),
+        )
+        .map((gate) => [gate.providerId, gate] as const),
+    ).values(),
+  )
   const serverBadge =
     liveServers > 0
       ? `ONLINE · ${liveServers} ${liveServers === 1 ? 'SERVER' : 'SERVERS'}`
@@ -1035,7 +1049,7 @@ export function ActiveBuildCard({
                 </span>
                 <ChevronDown className="h-3.5 w-3.5 shrink-0 text-fog transition-transform duration-200 group-open:rotate-180" />
               </summary>
-              <div className="absolute inset-x-0 z-40 mt-2 max-h-72 overflow-y-auto rounded-xl border border-line bg-[#0b131c] p-1.5 shadow-2xl shadow-black/70">
+              <div className="absolute inset-x-0 bottom-full z-40 mb-2 max-h-72 overflow-y-auto rounded-xl border border-line bg-[#0b131c] p-1.5 shadow-2xl shadow-black/70">
                 <button
                   type="button"
                   onClick={(event) => {
@@ -1060,36 +1074,46 @@ export function ActiveBuildCard({
                     </span>
                   </span>
                 </button>
-                {communityHosted && (
+                {communityGates.length > 0 && (
                   <>
                     <p className="px-2.5 pb-1 pt-2 text-[8.5px] font-bold uppercase tracking-[0.16em] text-fog/60">
-                      Verified community · this season
+                      Discord communities · this season
                     </p>
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        onSelectServer(null)
-                        event.currentTarget.closest('details')?.removeAttribute('open')
-                      }}
-                      className={cx(
-                        'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
-                        !selectedServer ? 'bg-emerald-400/[0.09]' : 'hover:bg-white/[0.05]',
-                      )}
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[11.5px] font-semibold text-mist">
-                          {communityHostLabel || 'Discord community'}
+                    {build.onlineProvider?.label && (
+                      <p className="px-2.5 pb-1 text-[9px] text-fog/70">
+                        Primary route ·{' '}
+                        <span className="font-semibold text-mist/85">
+                          {build.onlineProvider.label}
                         </span>
-                        <span className="mt-0.5 block text-[9.5px] leading-snug text-fog/80">
-                          Verified Discord community · Step 1 &amp; Step 2 import its
-                          launcher, then Start runs it hidden.
+                      </p>
+                    )}
+                    {communityGates.map((gate) => (
+                      <button
+                        key={gate.providerId}
+                        type="button"
+                        title={gate.inviteUrl}
+                        onClick={async (event) => {
+                          const opened = await openDiscordInvite(gate.inviteUrl)
+                          if (opened) {
+                            event.currentTarget.closest('details')?.removeAttribute('open')
+                          }
+                        }}
+                        className="flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-white/[0.05]"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[11.5px] font-semibold text-mist">
+                            {gate.label.replace(/ Discord$/i, '')}
+                          </span>
+                          <span className="mt-0.5 block text-[9.5px] leading-snug text-fog/80">
+                            Discord community · open its pinned server invite.
+                          </span>
                         </span>
-                      </span>
-                      <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-300/35 bg-emerald-400/15 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-[0.06em] text-emerald-200">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_7px_rgba(52,211,153,0.9)]" />
-                        ONLINE · DISCORD
-                      </span>
-                    </button>
+                        <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-[#5865F2]/45 bg-[#5865F2]/15 px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-[0.06em] text-[#c7ccff]">
+                          <MessageCircle className="h-2.5 w-2.5" />
+                          Open Discord
+                        </span>
+                      </button>
+                    ))}
                   </>
                 )}
                 {serverOptions.length > 0 && (

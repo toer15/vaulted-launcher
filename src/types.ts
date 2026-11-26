@@ -54,6 +54,8 @@ export interface DiscordGate {
   guildId?: string
   /** show the community badge without requiring a join before Play */
   statusOnly?: boolean
+  /** this community's hosted build matches the season card */
+  communityVerified?: boolean
 }
 
 /** A locally remembered Discord unlock. The provider id is the stable key. */

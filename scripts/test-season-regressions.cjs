@@ -483,9 +483,23 @@ function testWorkingSeasons() {
     assert.equal(provider.runtime, undefined, `${id} ships no installer VAULTED runs`)
     assert.equal(provider.discordGate?.guildId, guildId, `${id} guild must stay pinned`)
     assert.equal(provider.discordGate?.inviteUrl, invite, `${id} invite must stay pinned`)
+    assert.equal(provider.discordGate?.communityVerified, true, `${id} gate must be marked verified`)
     assert.ok(provider.supportedSeasons.includes('ch2-s2'), `${id} must cover ch2-s2`)
     assert.ok(routeIds(ch2s2).includes(id), `ch2-s2 must list ${id}`)
   }
+  // The card must list every verified community for a season, even when live
+  // servers exist, and each row opens that community's own pinned invite.
+  const communityCard = read('src/components/ActiveBuildCard.tsx')
+  assert.match(communityCard, /const communityGates = Array\.from\(/)
+  assert.match(communityCard, /gate\.communityVerified === true/)
+  assert.match(communityCard, /\{communityGates\.map\(\(gate\) => \(/)
+  assert.match(
+    APP,
+    /gate\.providerId\}\|\$\{gate\.inviteUrl\}\|\$\{gate\.communityVerified === true\}/,
+    'a persisted gate must refresh when its verified flag changes',
+  )
+  assert.match(communityCard, /openDiscordInvite\(gate\.inviteUrl\)/)
+  assert.match(communityCard, /gate\.label\.replace\(\/ Discord\$\/i, ''\)/)
 
   // Retrac keeps its 14.60 official launcher route.
   const retrac = season('ch2-s4')
@@ -560,6 +574,7 @@ function testWorkingSeasons() {
   assert.equal(venom.runtime, undefined, 'Venom ships no installer VAULTED runs')
   assert.equal(venom.discordGate?.guildId, '1555650268505313370', 'Venom guild must stay pinned')
   assert.equal(venom.discordGate?.inviteUrl, 'https://discord.gg/projectvenom', 'Venom invite must stay pinned')
+  assert.equal(venom.discordGate?.communityVerified, true, 'Venom gate must be marked verified')
   assert.ok(venom.supportedSeasons.includes('ch4-s4'), 'Venom must cover ch4-s4')
   assert.ok(routeIds(ch4s4).includes('venom'), 'ch4-s4 must list Venom')
 
@@ -1444,7 +1459,9 @@ function testCardStates() {
   assert.match(card, /communityHostedMessage\(communityHostLabel\)/)
   assert.match(card, /communityHosted\s*\?\s*'ONLINE · DISCORD'/)
   assert.match(card, /serverBadge === 'ONLINE · DISCORD'/, 'the dropdown community pill must be green')
-  assert.match(card, /Verified community · this season/)
+  assert.match(card, /Discord communities · this season/, 'every mapped community must be listed')
+  assert.match(card, /communityGates\.map/, 'alternate communities must render individually')
+  assert.match(card, /openDiscordInvite\(gate\.inviteUrl\)/, 'each row must open its own invite')
 
   // The card's version is the season it maps to; the folder may still hold an
   // older build. Play must read the folder's own marker and refuse a launch

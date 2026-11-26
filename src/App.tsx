@@ -842,8 +842,12 @@ export default function App() {
               .map((gate) => [gate.providerId, gate] as const),
           ).values(),
         )
-        const current = (build.discordGates ?? []).map((gate) => gate.providerId).join('|')
-        const nextIds = gates.map((gate) => gate.providerId).join('|')
+        // A saved gate array from an older build may not carry the verified
+        // flag. Compare the whole signature so the catalog refresh replaces it.
+        const gateKey = (gate: DiscordGate) =>
+          `${gate.providerId}|${gate.inviteUrl}|${gate.communityVerified === true}`
+        const current = (build.discordGates ?? []).map(gateKey).join('|')
+        const nextIds = gates.map(gateKey).join('|')
         if (current === nextIds) return build
         changed = true
         return { ...build, discordGates: gates }
